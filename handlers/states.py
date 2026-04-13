@@ -10,7 +10,8 @@ from core.keyboards import get_yt_format_keyboard
 from services.youtube import download_youtube_video, download_youtube_audio
 from services.instagram import download_instagram
 from services.book import get_dbooks_download_url, download_pdf
-from services.ai import ask_chatbot, perform_ocr
+# ایمپورت‌های جا افتاده اضافه شدند
+from services.ai import ask_chatbot, perform_ocr, text_to_speech, generate_image
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -109,12 +110,6 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     elif step == 'waiting_ai_chat':
-        await update.message.reply_text("⏳ در حال فکر کردن...")
-        answer = await asyncio.to_thread(ask_chatbot, text)
-        await update.message.reply_text(answer)
-        return
-        
-        elif step == 'waiting_ai_chat':
         await update.message.reply_text("⏳ در حال فکر کردن...")
         answer = await asyncio.to_thread(ask_chatbot, text)
         await update.message.reply_text(answer)
