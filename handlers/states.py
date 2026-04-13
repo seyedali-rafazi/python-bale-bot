@@ -159,29 +159,3 @@ async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             
     else:
         await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")
-
-    chat_id = str(update.effective_chat.id)
-    state_data = get_state(chat_id)
-    step = state_data.get('step')
-
-    if step == 'waiting_ai_ocr':
-        # گرفتن عکسی که بالاترین کیفیت را دارد
-        photo = update.message.photo[-1]
-        
-        await update.message.reply_text("⏳ در حال دانلود و پردازش عکس...")
-        
-        # دانلود عکس از سرور تلگرام/بله
-        file = await context.bot.get_file(photo.file_id)
-        file_path = f"temp_ocr_{chat_id}.jpg"
-        await file.download_to_drive(file_path)
-        
-        # پردازش OCR
-        extracted_text = await asyncio.to_thread(perform_ocr, file_path)
-        
-        # حذف فایل موقت
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            
-        await update.message.reply_text(f"✅ **متن استخراج شده:**\n\n{extracted_text}")
-    else:
-        await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")
