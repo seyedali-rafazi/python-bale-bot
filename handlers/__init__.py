@@ -8,7 +8,7 @@ from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
 from .menus import (
     btn_book_help, btn_tr_help, btn_weather_help, 
     btn_yt_req, btn_ig_req, btn_back_action,
-    btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req 
+    btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req,
     btn_ai_tts_req, btn_ai_image_req 
 )
 from .states import process_state_input, process_photo_input 
