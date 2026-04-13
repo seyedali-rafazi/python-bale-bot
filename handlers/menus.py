@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import *
 from core.keyboards import get_main_menu_keyboard
+from core.keyboards import get_ai_menu_keyboard
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from .commands import cmd_start
@@ -31,3 +32,25 @@ async def btn_ig_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, 'waiting_ig_link')
     await update.message.reply_text("📸 لطفاً لینک اینستاگرام را ارسال کنید:", reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True))
+
+async def btn_ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 به بخش هوش مصنوعی خوش آمدید!\nلطفاً یک گزینه را انتخاب کنید 👇", 
+        reply_markup=get_ai_menu_keyboard()
+    )
+
+async def btn_ai_chat_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, 'waiting_ai_chat')
+    await update.message.reply_text(
+        "💬 دستیار هوشمند آماده است!\nسوال یا متن خود را بفرستید:", 
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
+    )
+
+async def btn_ai_ocr_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, 'waiting_ai_ocr')
+    await update.message.reply_text(
+        "🖼 لطفاً عکسی که دارای متن است را ارسال کنید (به صورت Photo):", 
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
+    )

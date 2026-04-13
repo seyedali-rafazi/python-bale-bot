@@ -1,11 +1,15 @@
-# handlers/__init__.py
+# handlers/__init__.py (تغییرات زیر را اعمال کنید)
 
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
 
 from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
-from .menus import btn_book_help, btn_tr_help, btn_weather_help, btn_yt_req, btn_ig_req, btn_back_action
-from .states import process_state_input
+from .menus import (
+    btn_book_help, btn_tr_help, btn_weather_help, 
+    btn_yt_req, btn_ig_req, btn_back_action,
+    btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req 
+)
+from .states import process_state_input, process_photo_input 
 
 def register_all_handlers(application):
     # دستورات پایه
@@ -23,6 +27,12 @@ def register_all_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(f"^{BTN_WEATHER}$"), btn_weather_help))
     application.add_handler(MessageHandler(filters.Regex(f"^{BTN_DL_YOUTUBE}$"), btn_yt_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{BTN_DL_INSTA}$"), btn_ig_req))
+    
+    #  هندلرهای هوش مصنوعی
+    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI}$"), btn_ai_menu))
+    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI_CHAT}$"), btn_ai_chat_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI_OCR}$"), btn_ai_ocr_req))
 
-    # پردازش متون ارسالی کاربر (زمانی که منتظر لینک یا انتخاب کتاب هستیم)
+    # پردازش متون و عکس‌های ارسالی کاربر (State Management)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input))
+    application.add_handler(MessageHandler(filters.PHOTO, process_photo_input)) #  هندلر عکس
