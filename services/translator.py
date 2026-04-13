@@ -1,7 +1,11 @@
 # services/translator.py
 
 from deep_translator import GoogleTranslator
-from config import PROXY
+import os
+from dotenv import load_dotenv
+
+load_dotenv() 
+PROXY = os.getenv("PROXY")
 
 def translate_text(source_lang, target_lang, text):
     try:

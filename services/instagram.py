@@ -2,7 +2,11 @@
 
 import os
 import yt_dlp
-from config import PROXY
+import os
+from dotenv import load_dotenv
+
+load_dotenv() 
+PROXY = os.getenv("PROXY")
 
 def download_instagram(url):
     ydl_opts = {

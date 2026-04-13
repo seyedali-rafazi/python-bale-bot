@@ -2,8 +2,12 @@
 
 import logging
 from telegram.ext import ApplicationBuilder
-from config import BALE_TOKEN
 from handlers import register_all_handlers
+import os
+from dotenv import load_dotenv
+
+load_dotenv() 
+BALE_TOKEN = os.getenv("BALE_TOKEN")
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
