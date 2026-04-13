@@ -3,7 +3,7 @@
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
 
-from . import cmd_start, cmd_book, cmd_tr, cmd_weather
+from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
 from .menus import btn_book_help, btn_tr_help, btn_weather_help, btn_yt_req, btn_ig_req, btn_back_action
 from .states import process_state_input
 
