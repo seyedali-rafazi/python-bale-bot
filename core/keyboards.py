@@ -23,6 +23,7 @@ def get_yt_format_keyboard():
 def get_ai_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_AI_CHAT), KeyboardButton(BTN_AI_OCR)],
+        [KeyboardButton(BTN_AI_TTS), KeyboardButton(BTN_AI_IMAGE)],
         [KeyboardButton(BTN_BACK)]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

@@ -114,6 +114,38 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(answer)
         return
         
+        elif step == 'waiting_ai_chat':
+        await update.message.reply_text("⏳ در حال فکر کردن...")
+        answer = await asyncio.to_thread(ask_chatbot, text)
+        await update.message.reply_text(answer)
+        return
+        
+    elif step == 'waiting_ai_tts':
+        await update.message.reply_text("⏳ در حال تبدیل متن به صدا...")
+        file_path = await asyncio.to_thread(text_to_speech, text, chat_id)
+        if file_path and os.path.exists(file_path):
+            try:
+                with open(file_path, 'rb') as aud:
+                    await context.bot.send_audio(chat_id=chat_id, audio=aud)
+            finally:
+                if os.path.exists(file_path): os.remove(file_path)
+        else:
+            await update.message.reply_text("❌ خطا در تولید صدا.")
+        return
+
+    elif step == 'waiting_ai_image':
+        await update.message.reply_text("⏳ در حال تولید عکس (ممکن است کمی طول بکشد)...")
+        file_path = await asyncio.to_thread(generate_image, text, chat_id)
+        if file_path and os.path.exists(file_path):
+            try:
+                with open(file_path, 'rb') as img:
+                    await context.bot.send_photo(chat_id=chat_id, photo=img)
+            finally:
+                if os.path.exists(file_path): os.remove(file_path)
+        else:
+            await update.message.reply_text("❌ خطا در تولید عکس. لطفاً متن دیگری را امتحان کنید.")
+        return
+
     if not step:
         await update.message.reply_text("لطفاً از منو استفاده کنید.")
 

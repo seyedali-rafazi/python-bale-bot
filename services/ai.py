@@ -49,3 +49,32 @@ def perform_ocr(image_path):
         return "❌ ساختار پاسخ سرور نامعتبر بود."
     except Exception as e:
         return f"❌ خطا در ارتباط با سرور OCR: {e}"
+
+def text_to_speech(text, chat_id):
+    try:
+        # تشخیص زبان (ساده: اگر حروف فارسی داشت، فارسی)
+        lang = 'fa' if any('\u0600' <= c <= '\u06FF' for c in text) else 'en'
+        tts = gTTS(text=text, lang=lang, slow=False)
+        file_path = f"temp_audio_{chat_id}.mp3"
+        tts.save(file_path)
+        return file_path
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
+
+def generate_image(prompt, chat_id):
+    try:
+        # استفاده از API رایگان pollinations
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        
+        response = requests.get(url)
+        if response.status_code == 200:
+            file_path = f"temp_image_{chat_id}.jpg"
+            with open(file_path, 'wb') as f:
+                f.write(response.content)
+            return file_path
+        return None
+    except Exception as e:
+        print(f"Image Gen Error: {e}")
+        return None

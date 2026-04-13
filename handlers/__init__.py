@@ -9,6 +9,7 @@ from .menus import (
     btn_book_help, btn_tr_help, btn_weather_help, 
     btn_yt_req, btn_ig_req, btn_back_action,
     btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req 
+    btn_ai_tts_req, btn_ai_image_req 
 )
 from .states import process_state_input, process_photo_input 
 
@@ -33,6 +34,9 @@ def register_all_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI)}$"), btn_ai_menu))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_CHAT)}$"), btn_ai_chat_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_OCR)}$"), btn_ai_ocr_req))
+
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_TTS)}$"), btn_ai_tts_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_IMAGE)}$"), btn_ai_image_req))
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input))
