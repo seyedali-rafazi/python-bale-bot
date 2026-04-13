@@ -4,6 +4,8 @@ import requests
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
+import urllib.parse 
+from gtts import gTTS
 
 load_dotenv() # خواندن فایل .env
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
