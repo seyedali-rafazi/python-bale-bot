@@ -1,5 +1,6 @@
 # handlers/__init__.py
 
+import re
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
 
@@ -19,19 +20,19 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler('weather', cmd_weather))
 
     # دکمه‌های بازگشت
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_BACK}$"), btn_back_action))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_BACK)}$"), btn_back_action))
 
     # دکمه‌های منوی اصلی
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_BOOK}$"), btn_book_help))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_TRANSLATE}$"), btn_tr_help))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_WEATHER}$"), btn_weather_help))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_DL_YOUTUBE}$"), btn_yt_req))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_DL_INSTA}$"), btn_ig_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_help))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_TRANSLATE)}$"), btn_tr_help))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_help))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req))
     
-    # هندلرهای هوش مصنوعی
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI}$"), btn_ai_menu))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI_CHAT}$"), btn_ai_chat_req))
-    application.add_handler(MessageHandler(filters.Regex(f"^{BTN_AI_OCR}$"), btn_ai_ocr_req))
+    # هندلرهای هوش مصنوعی (پرانتزهای OCR در اینجا مشکل‌ساز بودند که با re.escape حل شد)
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI)}$"), btn_ai_menu))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_CHAT)}$"), btn_ai_chat_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_OCR)}$"), btn_ai_ocr_req))
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input))
