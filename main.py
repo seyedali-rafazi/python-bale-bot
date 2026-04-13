@@ -21,6 +21,7 @@ def main():
         ApplicationBuilder()
         .token(BALE_TOKEN)
         .base_url("https://tapi.bale.ai/bot")
+        .base_file_url("https://tapi.bale.ai/file/bot")
         .build()
     )
 
