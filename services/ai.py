@@ -7,7 +7,7 @@ from config import GEMINI_API_KEY, OCR_SPACE_API_KEY, PROXY
 # تنظیمات Gemini
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-flash-latest')
 except Exception as e:
     print(f"Error configuring Gemini: {e}")
 
