@@ -121,6 +121,47 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     state_data = get_state(chat_id)
+    step = state_data.get('step') if state_data else None
+
+    if step == 'waiting_ai_ocr':
+        await update.message.reply_text("⏳ در حال دانلود و پردازش عکس...")
+        
+        try:
+            # بررسی اینکه کاربر عکس را عادی فرستاده یا به صورت فایل (Document)
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+            elif update.message.document:
+                file_id = update.message.document.file_id
+            else:
+                await update.message.reply_text("❌ فرمت فایل پشتیبانی نمی‌شود.")
+                return
+
+            # دانلود عکس از سرور تلگرام
+            file = await context.bot.get_file(file_id)
+            file_path = f"temp_ocr_{chat_id}.jpg"
+            await file.download_to_drive(file_path)
+            
+            # پردازش OCR
+            extracted_text = await asyncio.to_thread(perform_ocr, file_path)
+            
+            # حذف فایل موقت
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                
+            await update.message.reply_text(f"✅ **متن استخراج شده:**\n\n{extracted_text}")
+            
+            # مهم: پاک کردن وضعیت کاربر تا ربات در حالت OCR گیر نکند
+            set_state(chat_id, '')
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطایی در پردازش عکس رخ داد: {e}")
+            set_state(chat_id, '')
+            
+    else:
+        await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")
+
+    chat_id = str(update.effective_chat.id)
+    state_data = get_state(chat_id)
     step = state_data.get('step')
 
     if step == 'waiting_ai_ocr':
