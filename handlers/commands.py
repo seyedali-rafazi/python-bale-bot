@@ -9,6 +9,8 @@ from core.constants import BTN_BACK
 from services.book import search_books
 from services.translator import translate_text
 from services.weather import get_weather_forecast
+from core.database import add_user
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
