@@ -4,6 +4,10 @@ import os
 import subprocess
 import glob
 import yt_dlp
+from dotenv import load_dotenv
+
+load_dotenv() 
+PROXY = os.getenv("PROXY")
 
 def download_spotify_track(url, chat_id):
     try:
@@ -26,6 +30,7 @@ def search_and_download_music(query, chat_id):
         file_path_template = os.path.join(download_dir, "%(title)s.%(ext)s")
         
         ydl_opts = {
+            'proxy': PROXY,
             'format': 'bestaudio/best',
             'outtmpl': file_path_template,
             'postprocessors': [{
