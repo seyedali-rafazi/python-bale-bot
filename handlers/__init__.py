@@ -11,7 +11,7 @@ from .menus import (
     btn_ai_tts_req, btn_ai_image_req 
 )
 from .states import process_state_input, process_photo_input 
-from ..core.admin import cmd_stats, cmd_setvip
+from core.admin import cmd_stats, cmd_setvip
 
 def register_all_handlers(application):
     # دستورات ادمین
