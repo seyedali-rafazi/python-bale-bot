@@ -5,6 +5,7 @@ from telegram.ext import ApplicationBuilder
 from handlers import register_all_handlers
 import os
 from dotenv import load_dotenv
+from core.database import init_db
 
 load_dotenv() 
 BALE_TOKEN = os.getenv("BALE_TOKEN")
@@ -16,6 +17,9 @@ logging.basicConfig(
 )
 
 def main():
+     # ساخت جداول دیتابیس در هنگام استارت شدن بات 
+    init_db() 
+
     # ساخت اپلیکیشن
     application = (
         ApplicationBuilder()

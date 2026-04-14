@@ -3,7 +3,6 @@
 import re
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
-
 from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
 from .menus import (
     btn_book_help, btn_tr_help, btn_weather_help, 
@@ -12,8 +11,13 @@ from .menus import (
     btn_ai_tts_req, btn_ai_image_req 
 )
 from .states import process_state_input, process_photo_input 
+from ..core.admin import cmd_stats, cmd_setvip
 
 def register_all_handlers(application):
+    # دستورات ادمین
+    application.add_handler(CommandHandler('stats', cmd_stats))
+    application.add_handler(CommandHandler('setvip', cmd_setvip))
+
     # دستورات پایه
     application.add_handler(CommandHandler('start', cmd_start))
     application.add_handler(CommandHandler('book', cmd_book))
