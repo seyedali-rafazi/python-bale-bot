@@ -185,24 +185,53 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         link = text.strip()
         await update.message.reply_text("⏳ در حال دریافت اطلاعات پیام...")
         try:
+            import requests
+            from bs4 import BeautifulSoup
+            import re
+            
             embed_url = link + "?embed=1" 
             res = requests.get(embed_url)
             soup = BeautifulSoup(res.text, 'html.parser')
             
+            # دریافت متن پیام (کپشن)
             msg_div = soup.find('div', class_='tgme_widget_message_text')
-            msg_text = msg_div.text if msg_div else "متنی یافت نشد."
+            msg_text = msg_div.text if msg_div else ""
             
+            # تلاش برای پیدا کردن لینک ویدیو
+            video_url = None
             video_tag = soup.find('video')
-            if video_tag and video_tag.get('src'):
-                video_url = video_tag['src']
+            if video_tag:
+                if video_tag.get('src'):
+                    video_url = video_tag['src']
+                else:
+                    source_tag = video_tag.find('source')
+                    if source_tag and source_tag.get('src'):
+                        video_url = source_tag['src']
+            
+            # تلاش برای پیدا کردن لینک عکس
+            photo_url = None
+            if not video_url:
+                photo_wrap = soup.find('a', class_='tgme_widget_message_photo_wrap')
+                if photo_wrap and photo_wrap.get('style'):
+                    match = re.search(r"background-image:url\('([^']+)'\)", photo_wrap['style'])
+                    if match:
+                        photo_url = match.group(1)
+
+            # ارسال نتیجه بر اساس محتوای پیدا شده
+            if video_url:
                 await update.message.reply_video(video=video_url, caption=msg_text)
-            else:
+            elif photo_url:
+                await update.message.reply_photo(photo=photo_url, caption=msg_text)
+            elif msg_text:
                 await update.message.reply_text(msg_text)
+            else:
+                await update.message.reply_text("❌ محتوایی در این لینک یافت نشد.")
                 
         except Exception as e:
-            await update.message.reply_text("❌ خطا در دریافت پیام! مطمئن شوید لینک متعلق به یک کانال عمومی است.")
+            print(f"Telegram Scraping Error: {e}")
+            await update.message.reply_text("❌ خطا در دریافت پیام! ممکن است حجم ویدیو بسیار بالا باشد یا لینک معتبر نباشد.")
         
-        set_state(chat_id, '') # <--- تغییر به معماری شما
+        set_state(chat_id, '')
 
     elif step == 'waiting_tg_latest':
         channel_id = text.strip().replace('@', '')

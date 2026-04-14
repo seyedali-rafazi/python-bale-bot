@@ -111,5 +111,3 @@ async def btn_tg_latest_req(update, context):
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, 'waiting_tg_latest')
     await update.message.reply_text("لطفاً آیدی کانال عمومی تلگرام را بفرستید (مثال: @varzesh3 یا varzesh3):")
-    context.user_data['state'] = 'waiting_tg_latest'
-    await update.message.reply_text("لطفاً آیدی کانال عمومی تلگرام را بفرستید (مثال: @varzesh3 یا varzesh3):")
