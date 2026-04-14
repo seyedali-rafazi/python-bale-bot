@@ -6,6 +6,7 @@ from core.state_manager import set_state
 from core.constants import *
 from core.keyboards import get_main_menu_keyboard
 from core.keyboards import get_ai_menu_keyboard
+from core.keyboards import get_music_menu_keyboard
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from .commands import cmd_start
@@ -64,9 +65,32 @@ async def btn_ai_tts_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def btn_ai_image_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, 'waiting_ai_image')
     await update.message.reply_text(
         "🎨 لطفاً توصیف عکسی که می‌خواهید ساخته شود را بنویسید (برای نتیجه بهتر انگلیسی بنویسید):", 
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
+    )
+
+async def btn_music_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎵 به بخش موسیقی خوش آمدید!\nیک گزینه را انتخاب کنید 👇", 
+        reply_markup=get_music_menu_keyboard()
+    )
+
+async def btn_music_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, 'waiting_music_search')
+    await update.message.reply_text(
+        "🔍 لطفاً نام آهنگ یا خواننده مورد نظر خود را بنویسید (مثلاً: شجریان مرغ سحر):", 
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
+    )
+
+async def btn_spotify_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, 'waiting_spotify_link')
+    await update.message.reply_text(
+        "🔗 لطفاً لینک آهنگ اسپاتیفای را ارسال کنید:", 
         reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)
     )

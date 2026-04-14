@@ -8,7 +8,8 @@ from .menus import (
     btn_book_help, btn_tr_help, btn_weather_help, 
     btn_yt_req, btn_ig_req, btn_back_action,
     btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req,
-    btn_ai_tts_req, btn_ai_image_req 
+    btn_ai_tts_req, btn_ai_image_req,
+    btn_music_menu, btn_music_search_req, btn_spotify_req
 )
 from .states import process_state_input, process_photo_input 
 from core.admin import cmd_stats, cmd_setvip
@@ -34,7 +35,7 @@ def register_all_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req))
     
-    # هندلرهای هوش مصنوعی (پرانتزهای OCR در اینجا مشکل‌ساز بودند که با re.escape حل شد)
+    # هندلرهای هوش مصنوعی )
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI)}$"), btn_ai_menu))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_CHAT)}$"), btn_ai_chat_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_OCR)}$"), btn_ai_ocr_req))
@@ -47,3 +48,8 @@ def register_all_handlers(application):
     
     # پردازش عکس‌ها (پشتیبانی همزمان از عکس عادی و عکسِ ارسال‌شده به صورت فایل)
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_photo_input))
+
+    #  هندلرهای موسیقی
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SEARCH)}$"), btn_music_search_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SPOTIFY)}$"), btn_spotify_req))

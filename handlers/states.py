@@ -10,8 +10,9 @@ from core.keyboards import get_yt_format_keyboard
 from services.youtube import download_youtube_video, download_youtube_audio
 from services.instagram import download_instagram
 from services.book import get_dbooks_download_url, download_pdf
-# ایمپورت‌های جا افتاده اضافه شدند
 from services.ai import ask_chatbot, perform_ocr, text_to_speech, generate_image
+import shutil
+from services.music import download_spotify_track, search_and_download_music
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -141,6 +142,43 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ خطا در تولید عکس. لطفاً متن دیگری را امتحان کنید.")
         return
 
+    elif step == 'waiting_music_search':
+        await update.message.reply_text("⏳ در حال جستجو و دانلود بهترین نتیجه...")
+        file_path, title = await asyncio.to_thread(search_and_download_music, text, chat_id)
+        
+        if file_path and os.path.exists(file_path):
+            try:
+                with open(file_path, 'rb') as aud:
+                    await context.bot.send_audio(chat_id=chat_id, audio=aud, title=title)
+            finally:
+                download_dir = f"temp_search_{chat_id}"
+                if os.path.exists(download_dir):
+                    shutil.rmtree(download_dir)
+        else:
+            await update.message.reply_text("❌ متأسفانه آهنگی با این نام پیدا نشد یا خطایی رخ داد.")
+        return
+
+    elif step == 'waiting_spotify_link':
+        if "spotify.com" not in text:
+            await update.message.reply_text("❌ لطفاً یک لینک معتبر اسپاتیفای بفرستید.")
+            return
+            
+        await update.message.reply_text("⏳ در حال دانلود از اسپاتیفای...")
+        file_path = await asyncio.to_thread(download_spotify_track, text, chat_id)
+        
+        if file_path and os.path.exists(file_path):
+            try:
+                title = os.path.basename(file_path).replace('.mp3', '')
+                with open(file_path, 'rb') as aud:
+                    await context.bot.send_audio(chat_id=chat_id, audio=aud, title=title)
+            finally:
+                download_dir = f"temp_spotify_{chat_id}"
+                if os.path.exists(download_dir):
+                    shutil.rmtree(download_dir) 
+        else:
+            await update.message.reply_text("❌ دانلود شکست خورد. لطفاً لینک یک تک‌آهنگ (Track) را بفرستید.")
+        return
+  
     if not step:
         await update.message.reply_text("لطفاً از منو استفاده کنید.")
 
