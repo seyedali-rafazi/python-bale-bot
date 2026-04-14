@@ -7,7 +7,7 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_DL_INSTA)],
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
-        [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)] 
+        [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)],
         [KeyboardButton(BTN_MUSIC)] 
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
