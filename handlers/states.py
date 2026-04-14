@@ -234,26 +234,73 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         set_state(chat_id, '')
 
     elif step == 'waiting_tg_latest':
-        channel_id = text.strip().replace('@', '')
-        await update.message.reply_text("⏳ در حال دریافت ۵ پیام آخر...")
+        # تمیز کردن ورودی (حذف @ یا لینک اضافی)
+        channel_id = text.strip().replace('@', '').split('/')[-1] 
+        await update.message.reply_text("⏳ در حال دریافت ۵ پیام آخر کانال...")
         try:
-            res = requests.get(f"https://t.me/s/{channel_id}")
+            import requests
+            from bs4 import BeautifulSoup
+            import re
+            
+            # استفاده از /s/ برای دیدن تاریخچه کانال در وب
+            url = f"https://t.me/s/{channel_id}"
+            res = requests.get(url)
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            messages = soup.find_all('div', class_='tgme_widget_message_text')
-            last_5 = messages[-5:] if len(messages) >= 5 else messages
+            # پیدا کردن تمام پیام‌ها
+            messages = soup.find_all('div', class_='tgme_widget_message')
+            latest_messages = messages[-5:] # ۵ تای آخر
             
-            if not last_5:
-                await update.message.reply_text("❌ پیامی یافت نشد یا کانال وجود ندارد.")
+            if not latest_messages:
+                await update.message.reply_text("❌ پیامی یافت نشد! مطمئن شوید آیدی صحیح است و کانال عمومی (Public) می‌باشد.")
             else:
-                for i, msg in enumerate(last_5, 1):
-                    await update.message.reply_text(f"پیام {i}:\n\n{msg.text}")
+                for msg in latest_messages:
+                    # دریافت متن پیام
+                    msg_div = msg.find('div', class_='tgme_widget_message_text')
+                    msg_text = msg_div.text if msg_div else ""
                     
-        except Exception as e:
-            await update.message.reply_text("❌ خطا در خواندن کانال!")
-            
-        set_state(chat_id, '') # <--- تغییر به معماری شما
+                    # تلاش برای پیدا کردن لینک ویدیو
+                    video_url = None
+                    video_tag = msg.find('video')
+                    if video_tag:
+                        if video_tag.get('src'):
+                            video_url = video_tag['src']
+                        else:
+                            source_tag = video_tag.find('source')
+                            if source_tag and source_tag.get('src'):
+                                video_url = source_tag['src']
+                    
+                    # تلاش برای پیدا کردن لینک عکس
+                    photo_url = None
+                    if not video_url:
+                        photo_wrap = msg.find('a', class_='tgme_widget_message_photo_wrap')
+                        if photo_wrap and photo_wrap.get('style'):
+                            match = re.search(r"background-image:url\('([^']+)'\)", photo_wrap['style'])
+                            if match:
+                                photo_url = match.group(1)
 
+                    # کپشن تلگرام محدودیت کاراکتر دارد (۱۰۲۴ حرف)
+                    safe_caption = msg_text[:1000] if msg_text else ""
+
+                    # ارسال پیام
+                    try:
+                        if video_url:
+                            await update.message.reply_video(video=video_url, caption=safe_caption)
+                        elif photo_url:
+                            await update.message.reply_photo(photo=photo_url, caption=safe_caption)
+                        elif msg_text:
+                            await update.message.reply_text(msg_text)
+                    except Exception as send_err:
+                        print(f"Error sending media: {send_err}")
+                        # اگر ارسال مدیا خطا داد، فقط متنش را بفرست
+                        if msg_text:
+                            await update.message.reply_text(f"*(فایل قابل ارسال نبود)*\n\n{msg_text}", parse_mode='Markdown')
+                            
+        except Exception as e:
+            print(f"Telegram Latest Error: {e}")
+            await update.message.reply_text("❌ خطا در خواندن کانال! ممکن است آیدی اشتباه باشد.")
+            
+        set_state(chat_id, '')
     if not step:
         await update.message.reply_text("لطفاً از منو استفاده کنید.")
 
