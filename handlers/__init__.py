@@ -35,21 +35,20 @@ def register_all_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req))
     
-    # هندلرهای هوش مصنوعی )
+    # هندلرهای هوش مصنوعی 
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI)}$"), btn_ai_menu))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_CHAT)}$"), btn_ai_chat_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_OCR)}$"), btn_ai_ocr_req))
-
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_TTS)}$"), btn_ai_tts_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_IMAGE)}$"), btn_ai_image_req))
 
-    # پردازش متون ارسالی کاربر بر اساس وضعیت (State)
+    # هندلرهای موسیقی (این بخش به اینجا منتقل شد!)
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SEARCH)}$"), btn_music_search_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SPOTIFY)}$"), btn_spotify_req))
+
+    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input))
     
     # پردازش عکس‌ها (پشتیبانی همزمان از عکس عادی و عکسِ ارسال‌شده به صورت فایل)
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_photo_input))
-
-    #  هندلرهای موسیقی
-    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu))
-    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SEARCH)}$"), btn_music_search_req))
-    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SPOTIFY)}$"), btn_spotify_req))
