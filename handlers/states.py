@@ -13,6 +13,8 @@ from services.book import get_dbooks_download_url, download_pdf
 from services.ai import ask_chatbot, perform_ocr, text_to_speech, generate_image
 import shutil
 from services.music import download_spotify_track, search_and_download_music
+import requests
+from bs4 import BeautifulSoup
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -179,6 +181,50 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ دانلود شکست خورد. لطفاً لینک یک تک‌آهنگ (Track) را بفرستید.")
         return
   
+    elif step == 'waiting_tg_single':
+        link = text.strip()
+        await update.message.reply_text("⏳ در حال دریافت اطلاعات پیام...")
+        try:
+            embed_url = link + "?embed=1" 
+            res = requests.get(embed_url)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            msg_div = soup.find('div', class_='tgme_widget_message_text')
+            msg_text = msg_div.text if msg_div else "متنی یافت نشد."
+            
+            video_tag = soup.find('video')
+            if video_tag and video_tag.get('src'):
+                video_url = video_tag['src']
+                await update.message.reply_video(video=video_url, caption=msg_text)
+            else:
+                await update.message.reply_text(msg_text)
+                
+        except Exception as e:
+            await update.message.reply_text("❌ خطا در دریافت پیام! مطمئن شوید لینک متعلق به یک کانال عمومی است.")
+        
+        set_state(chat_id, '') # <--- تغییر به معماری شما
+
+    elif step == 'waiting_tg_latest':
+        channel_id = text.strip().replace('@', '')
+        await update.message.reply_text("⏳ در حال دریافت ۵ پیام آخر...")
+        try:
+            res = requests.get(f"https://t.me/s/{channel_id}")
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            messages = soup.find_all('div', class_='tgme_widget_message_text')
+            last_5 = messages[-5:] if len(messages) >= 5 else messages
+            
+            if not last_5:
+                await update.message.reply_text("❌ پیامی یافت نشد یا کانال وجود ندارد.")
+            else:
+                for i, msg in enumerate(last_5, 1):
+                    await update.message.reply_text(f"پیام {i}:\n\n{msg.text}")
+                    
+        except Exception as e:
+            await update.message.reply_text("❌ خطا در خواندن کانال!")
+            
+        set_state(chat_id, '') # <--- تغییر به معماری شما
+
     if not step:
         await update.message.reply_text("لطفاً از منو استفاده کنید.")
 

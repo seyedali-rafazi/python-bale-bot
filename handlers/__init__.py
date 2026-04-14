@@ -9,7 +9,8 @@ from .menus import (
     btn_yt_req, btn_ig_req, btn_back_action,
     btn_ai_menu, btn_ai_chat_req, btn_ai_ocr_req,
     btn_ai_tts_req, btn_ai_image_req,
-    btn_music_menu, btn_music_search_req, btn_spotify_req
+    btn_music_menu, btn_music_search_req, btn_spotify_req,
+    btn_telegram_menu, btn_tg_single_req, btn_tg_latest_req
 )
 from .states import process_state_input, process_photo_input 
 from core.admin import cmd_stats, cmd_setvip
@@ -46,6 +47,11 @@ def register_all_handlers(application):
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SEARCH)}$"), btn_music_search_req))
     application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC_SPOTIFY)}$"), btn_spotify_req))
+
+    #هندلز های تلگرام
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_TELEGRAM)}$"), btn_telegram_menu))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_TG_SINGLE)}$"), btn_tg_single_req))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_TG_LATEST)}$"), btn_tg_latest_req))
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input))

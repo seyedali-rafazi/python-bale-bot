@@ -35,3 +35,11 @@ def get_music_menu_keyboard():
         [KeyboardButton(BTN_BACK)]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_telegram_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_TG_SINGLE)],
+        [KeyboardButton(BTN_TG_LATEST)],
+        [KeyboardButton(BTN_BACK)]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
