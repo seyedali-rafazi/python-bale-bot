@@ -10,6 +10,7 @@ PROXY = os.getenv("PROXY")
 
 def download_youtube_video(url):
     ydl_opts = {
+        "proxy": PROXY,
         "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",
         "merge_output_format": "mp4",
         "outtmpl": "%(title)s.%(ext)s",
