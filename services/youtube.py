@@ -10,11 +10,11 @@ PROXY = os.getenv("PROXY")
 
 def download_youtube_video(url):
     ydl_opts = {
-        "proxy": PROXY,
-        "format": "best[ext=mp4]/best",
-        "outtmpl": "yt_video_%(id)s.%(ext)s",
+        "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": "%(title)s.%(ext)s",
         "quiet": True,
-        "noplaylist": True,
+        "no_warnings": True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
