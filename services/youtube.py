@@ -15,7 +15,7 @@ MAX_TG_VIDEO_SIZE = 50 * 1024 * 1024
 
 
 def download_youtube_video(url):
-    """دانلود ویدیو با کیفیت 480p و لاگ کامل"""
+    """دانلود ویدیو با کیفیت 480p و فشرده‌سازی اجباری"""
 
     def progress_hook(d):
         if d["status"] == "finished":
@@ -23,11 +23,39 @@ def download_youtube_video(url):
 
     ydl_opts = {
         "proxy": PROXY,
-        "format": "best[height<=480][ext=mp4]/best[height<=480]/worst[ext=mp4]/worst",
+        # فرمت دقیق برای 480p
+        "format": "bestvideo[height<=480]+bestaudio[abr<=128]/best[height<=480]/worst",
+        "format_sort": ["res:480", "br"],  # اولویت به 480p
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
-        "quiet": False,  # فعلاً False تا ببینیم چی میشه
+        "quiet": False,
         "no_warnings": False,
         "progress_hooks": [progress_hook],
+        # فشرده‌سازی با ffmpeg
+        "postprocessors": [
+            {
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4",
+            },
+            {
+                "key": "FFmpegVideoRemuxer",
+                "preferedformat": "mp4",
+            },
+        ],
+        # محدود کردن کیفیت
+        "postprocessor_args": [
+            "-vf",
+            "scale=-2:480",  # اجبار به 480p
+            "-c:v",
+            "libx264",
+            "-crf",
+            "28",  # فشرده‌سازی بیشتر (23-28 خوبه)
+            "-preset",
+            "fast",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",  # کیفیت صدا پایین‌تر
+        ],
     }
 
     try:
@@ -50,16 +78,33 @@ def download_youtube_video(url):
                 print(
                     f"✅ Final file: {final_file} ({file_size / (1024 * 1024):.2f} MB)"
                 )
+
+                # اگه هنوز بزرگه، بیشتر فشرده کن
+                if file_size > MAX_TG_VIDEO_SIZE:
+                    print(f"⚠️ File too large, compressing more...")
+                    compressed_file = compress_video_more(final_file)
+                    if compressed_file:
+                        os.remove(final_file)
+                        return compressed_file
+
                 return os.path.abspath(final_file)
 
-            # اگه با ID پیدا نشد، همه فایل‌های دایرکتوری رو چک کن
+            # فال‌بک
             all_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*"))
             print(f"📂 All files in download dir: {all_files}")
 
             if all_files:
-                # جدیدترین فایل رو برگردون
                 latest = max(all_files, key=os.path.getctime)
                 print(f"⚠️ Using latest file: {latest}")
+
+                file_size = os.path.getsize(latest)
+                if file_size > MAX_TG_VIDEO_SIZE:
+                    print(f"⚠️ File too large, compressing more...")
+                    compressed_file = compress_video_more(latest)
+                    if compressed_file:
+                        os.remove(latest)
+                        return compressed_file
+
                 return os.path.abspath(latest)
 
             print("❌ No file found!")
@@ -70,6 +115,49 @@ def download_youtube_video(url):
         import traceback
 
         traceback.print_exc()
+        return None
+
+
+def compress_video_more(input_file):
+    """فشرده‌سازی بیشتر ویدیو با ffmpeg"""
+    try:
+        import subprocess
+
+        output_file = input_file.replace(".mp4", "_compressed.mp4")
+
+        cmd = [
+            "ffmpeg",
+            "-i",
+            input_file,
+            "-vf",
+            "scale=-2:480",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "32",  # فشرده‌سازی خیلی بیشتر
+            "-preset",
+            "veryfast",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",  # کیفیت صدا خیلی پایین
+            "-y",
+            output_file,
+        ]
+
+        print(f"🔧 Compressing with ffmpeg...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode == 0 and os.path.exists(output_file):
+            new_size = os.path.getsize(output_file)
+            print(f"✅ Compressed to: {new_size / (1024 * 1024):.2f} MB")
+            return output_file
+        else:
+            print(f"❌ Compression failed: {result.stderr}")
+            return None
+
+    except Exception as e:
+        print(f"❌ Compression error: {e}")
         return None
 
 
@@ -107,7 +195,6 @@ def download_youtube_audio(url):
 
             print(f"🎵 Audio ID: {video_id}")
 
-            # جستجوی فایل MP3
             pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}.*")
             files = glob.glob(pattern)
             mp3_files = [f for f in files if f.endswith(".mp3")]
@@ -118,7 +205,6 @@ def download_youtube_audio(url):
             if mp3_files:
                 return os.path.abspath(mp3_files[0]), title, performer
 
-            # فال‌بک
             all_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.mp3"))
             if all_files:
                 latest = max(all_files, key=os.path.getctime)
