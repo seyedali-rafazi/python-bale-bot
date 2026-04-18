@@ -477,26 +477,83 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 index = int(text.replace("📥 دانلود ویدیو ", "").strip()) - 1
                 videos = state_data.get("videos", [])
-                selected_video = videos[index]
 
-                # به صورت پیش‌فرض فرمت ویدیو در نظر گرفته می‌شود
+                print(f"🔢 Selected index: {index}")
+                print(f"📋 Available videos: {len(videos)}")
+
+                if index < 0 or index >= len(videos):
+                    await update.message.reply_text(
+                        f"❌ شماره نامعتبر است. لطفاً عددی بین 1 تا {len(videos)} وارد کنید."
+                    )
+                    return
+
+                selected_video = videos[index]
+                print(f"✅ Selected video: {selected_video}")
+
                 await update.message.reply_text("⏳ در حال دانلود ویدیو...")
                 file_path = await asyncio.to_thread(
                     download_youtube_video, selected_video["url"]
                 )
+
+                print(f"📁 Downloaded file path: {file_path}")
+
                 if file_path and os.path.exists(file_path):
+                    file_size = os.path.getsize(file_path)
+                    print(f"📦 File size: {file_size / (1024 * 1024):.2f} MB")
+
                     try:
-                        with open(file_path, "rb") as vid:
-                            await context.bot.send_video_safe(
-                                chat_id=chat_id, video=vid
+                        if file_size <= MAX_TG_VIDEO_SIZE:
+                            await update.message.reply_text("📤 در حال آپلود ویدیو...")
+                            with open(file_path, "rb") as vid:
+                                await context.bot.send_video(
+                                    chat_id=chat_id,
+                                    video=vid,
+                                    read_timeout=180,
+                                    write_timeout=180,
+                                    connect_timeout=60,
+                                )
+                        else:
+                            await update.message.reply_text(
+                                f"⚠️ حجم ویدیو {file_size // (1024 * 1024)} مگابایت است. به صورت فایل ارسال می‌شود..."
                             )
+                            with open(file_path, "rb") as vid:
+                                await context.bot.send_document(
+                                    chat_id=chat_id,
+                                    document=vid,
+                                    read_timeout=180,
+                                    write_timeout=180,
+                                    connect_timeout=60,
+                                )
+
+                        await update.message.reply_text("✅ ارسال موفق بود!")
+
+                    except Exception as send_err:
+                        print(f"❌ Send error: {send_err}")
+                        import traceback
+
+                        traceback.print_exc()
+                        await update.message.reply_text(
+                            f"❌ خطا در ارسال: {str(send_err)}"
+                        )
                     finally:
                         if os.path.exists(file_path):
                             os.remove(file_path)
+                            print(f"🗑️ Cleaned up: {file_path}")
                 else:
-                    await update.message.reply_text("❌ دانلود شکست خورد.")
+                    print("❌ File not found or download failed")
+                    await update.message.reply_text(
+                        "❌ دانلود شکست خورد یا فایل پیدا نشد."
+                    )
+
+            except ValueError as ve:
+                print(f"❌ ValueError: {ve}")
+                await update.message.reply_text("❌ فرمت شماره اشتباه است.")
             except Exception as e:
-                await update.message.reply_text("❌ انتخاب نامعتبر است.")
+                print(f"❌ General error: {e}")
+                import traceback
+
+                traceback.print_exc()
+                await update.message.reply_text(f"❌ خطا: {str(e)}")
         return
 
     elif step == "waiting_yt_link":
