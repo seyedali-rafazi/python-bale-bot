@@ -1,45 +1,61 @@
-# core/keyboards.py 
+# core/keyboards.py
 
 from telegram import ReplyKeyboardMarkup, KeyboardButton
 from .constants import *
+
 
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_DL_INSTA)],
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
         [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)],
-        [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)] 
+        [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 def get_yt_format_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_VIDEO)],
         [KeyboardButton(BTN_YT_AUDIO)],
-        [KeyboardButton(BTN_BACK)]
+        [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 def get_ai_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_AI_CHAT), KeyboardButton(BTN_AI_OCR)],
         [KeyboardButton(BTN_AI_TTS), KeyboardButton(BTN_AI_IMAGE)],
-        [KeyboardButton(BTN_BACK)]
+        [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 def get_music_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_MUSIC_SEARCH)],
         [KeyboardButton(BTN_MUSIC_SPOTIFY)],
-        [KeyboardButton(BTN_BACK)]
+        [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 def get_telegram_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_TG_SINGLE)],
         [KeyboardButton(BTN_TG_LATEST)],
-        [KeyboardButton(BTN_BACK)]
+        [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_youtube_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_YT_LAST5), KeyboardButton(BTN_YT_CH_SEARCH)],
+        [KeyboardButton(BTN_YT_GLOBAL)],
+        [KeyboardButton(BTN_YT_LINK_VID), KeyboardButton(BTN_YT_LINK_MP3)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
