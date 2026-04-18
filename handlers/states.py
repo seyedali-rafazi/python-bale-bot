@@ -115,33 +115,27 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif step == "waiting_yt_format":
         url = state_data.get("yt_url")
         if text == BTN_YT_VIDEO:
-            await update.message.reply_text("⏳ در حال دانلود ویدیو...")
-            file_path = await asyncio.to_thread(download_youtube_video, url)
-            if file_path and os.path.exists(file_path):
-                try:
-                    with open(file_path, "rb") as vid:
-                        await context.bot.send_video_safe(chat_id=chat_id, video=vid)
-                finally:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-            else:
-                await update.message.reply_text("❌ دانلود شکست خورد.")
-            return
+            await update.message.reply_text("⏳ در حال بررسی و دانلود ویدیو...")
+            result = await asyncio.to_thread(download_youtube_video, url)
 
-        elif text == BTN_YT_AUDIO:
-            await update.message.reply_text("⏳ در حال استخراج صدا...")
-            file_path, title, perf = await asyncio.to_thread(
-                download_youtube_audio, url
-            )
-            if file_path and os.path.exists(file_path):
+            if result == "TOO_LARGE":
+                await update.message.reply_text(
+                    "⚠️ حجم این ویدیو بیشتر از ۵۰ مگابایته و امکان ارسال نداره.\n"
+                    "لطفاً ویدیوی کوتاه‌تری انتخاب کن."
+                )
+            elif result and os.path.exists(result):
                 try:
-                    with open(file_path, "rb") as aud:
-                        await context.bot.send_audio(
-                            chat_id=chat_id, audio=aud, title=title, performer=perf
+                    with open(result, "rb") as vid:
+                        await context.bot.send_video(
+                            chat_id=chat_id,
+                            video=vid,
+                            read_timeout=180,
+                            write_timeout=180,
+                            connect_timeout=60,
                         )
                 finally:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+                    if os.path.exists(result):
+                        os.remove(result)
             else:
                 await update.message.reply_text("❌ دانلود شکست خورد.")
             return
@@ -478,9 +472,6 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 index = int(text.replace("📥 دانلود ویدیو ", "").strip()) - 1
                 videos = state_data.get("videos", [])
 
-                print(f"🔢 Selected index: {index}")
-                print(f"📋 Available videos: {len(videos)}")
-
                 if index < 0 or index >= len(videos):
                     await update.message.reply_text(
                         f"❌ شماره نامعتبر است. لطفاً عددی بین 1 تا {len(videos)} وارد کنید."
@@ -488,71 +479,46 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return
 
                 selected_video = videos[index]
-                print(f"✅ Selected video: {selected_video}")
+                await update.message.reply_text("⏳ در حال بررسی و دانلود ویدیو...")
 
-                await update.message.reply_text("⏳ در حال دانلود ویدیو...")
-                file_path = await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     download_youtube_video, selected_video["url"]
                 )
 
-                print(f"📁 Downloaded file path: {file_path}")
-
-                if file_path and os.path.exists(file_path):
-                    file_size = os.path.getsize(file_path)
-                    print(f"📦 File size: {file_size / (1024 * 1024):.2f} MB")
-
+                if result == "TOO_LARGE":
+                    await update.message.reply_text(
+                        "⚠️ حجم این ویدیو بیشتر از ۵۰ مگابایته و امکان ارسال نداره.\n"
+                        "لطفاً ویدیوی کوتاه‌تری انتخاب کن."
+                    )
+                elif result and os.path.exists(result):
                     try:
-                        if file_size <= MAX_TG_VIDEO_SIZE:
-                            await update.message.reply_text("📤 در حال آپلود ویدیو...")
-                            with open(file_path, "rb") as vid:
-                                await context.bot.send_video(
-                                    chat_id=chat_id,
-                                    video=vid,
-                                    read_timeout=180,
-                                    write_timeout=180,
-                                    connect_timeout=60,
-                                )
-                        else:
-                            await update.message.reply_text(
-                                f"⚠️ حجم ویدیو {file_size // (1024 * 1024)} مگابایت است. به صورت فایل ارسال می‌شود..."
+                        await update.message.reply_text("📤 در حال آپلود ویدیو...")
+                        with open(result, "rb") as vid:
+                            await context.bot.send_video(
+                                chat_id=chat_id,
+                                video=vid,
+                                read_timeout=180,
+                                write_timeout=180,
+                                connect_timeout=60,
                             )
-                            with open(file_path, "rb") as vid:
-                                await context.bot.send_document(
-                                    chat_id=chat_id,
-                                    document=vid,
-                                    read_timeout=180,
-                                    write_timeout=180,
-                                    connect_timeout=60,
-                                )
-
                         await update.message.reply_text("✅ ارسال موفق بود!")
-
                     except Exception as send_err:
                         print(f"❌ Send error: {send_err}")
-                        import traceback
-
-                        traceback.print_exc()
                         await update.message.reply_text(
                             f"❌ خطا در ارسال: {str(send_err)}"
                         )
                     finally:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                            print(f"🗑️ Cleaned up: {file_path}")
+                        if os.path.exists(result):
+                            os.remove(result)
                 else:
-                    print("❌ File not found or download failed")
                     await update.message.reply_text(
                         "❌ دانلود شکست خورد یا فایل پیدا نشد."
                     )
 
-            except ValueError as ve:
-                print(f"❌ ValueError: {ve}")
+            except ValueError:
                 await update.message.reply_text("❌ فرمت شماره اشتباه است.")
             except Exception as e:
-                print(f"❌ General error: {e}")
-                import traceback
-
-                traceback.print_exc()
+                print(f"❌ Error: {e}")
                 await update.message.reply_text(f"❌ خطا: {str(e)}")
         return
 
