@@ -2,6 +2,7 @@
 
 import os
 import glob
+import subprocess
 import yt_dlp
 from dotenv import load_dotenv
 
@@ -14,160 +15,135 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 MAX_TG_VIDEO_SIZE = 50 * 1024 * 1024
 
 
+def compress_video(input_file, target_height=480):
+    """فشرده‌سازی ویدیو با ffmpeg به صورت جداگانه"""
+    output_file = input_file.rsplit(".", 1)[0] + "_compressed.mp4"
+    
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_file,
+        "-vf", f"scale=-2:{target_height}",
+        "-c:v", "libx264",
+        "-crf", "30",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-movflags", "+faststart",
+        output_file
+    ]
+    
+    print(f"🔧 Compressing: {input_file}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode == 0 and os.path.exists(output_file):
+        new_size = os.path.getsize(output_file)
+        print(f"✅ Compressed: {new_size / (1024*1024):.2f} MB")
+        return output_file
+    else:
+        print(f"❌ ffmpeg error: {result.stderr[-500:]}")
+        return None
+
+
 def download_youtube_video(url):
-    """دانلود ویدیو با کیفیت 480p و فشرده‌سازی اجباری"""
-
-    def progress_hook(d):
-        if d["status"] == "finished":
-            print(f"✅ Download finished: {d.get('filename', 'unknown')}")
-
+    """دانلود ویدیو - بدون هیچ postprocessor"""
+    
     ydl_opts = {
         "proxy": PROXY,
-        # فرمت دقیق برای 480p
-        "format": "bestvideo[height<=480]+bestaudio[abr<=128]/best[height<=480]/worst",
-        "format_sort": ["res:480", "br"],  # اولویت به 480p
+        # فقط فرمت‌های از پیش merge شده (نه جداگانه ویدیو+صدا)
+        "format": "best[height<=480]/best[height<=720]/best",
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
         "quiet": False,
         "no_warnings": False,
-        "progress_hooks": [progress_hook],
-        # فشرده‌سازی با ffmpeg
-        "postprocessors": [
-            {
-                "key": "FFmpegVideoConvertor",
-                "preferedformat": "mp4",
-            },
-            {
-                "key": "FFmpegVideoRemuxer",
-                "preferedformat": "mp4",
-            },
-        ],
-        # محدود کردن کیفیت
-        "postprocessor_args": [
-            "-vf",
-            "scale=-2:480",  # اجبار به 480p
-            "-c:v",
-            "libx264",
-            "-crf",
-            "28",  # فشرده‌سازی بیشتر (23-28 خوبه)
-            "-preset",
-            "fast",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "96k",  # کیفیت صدا پایین‌تر
-        ],
+        # هیچ postprocessor نداریم
     }
-
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print(f"🔍 Extracting info from: {url}")
             info = ydl.extract_info(url, download=True)
-
+            
             video_id = info.get("id", "unknown")
             print(f"📹 Video ID: {video_id}")
-            print(f"📁 Looking in: {DOWNLOAD_DIR}")
-
-            # جستجوی فایل
+            
+            # پیدا کردن فایل دانلود شده
             pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}.*")
             files = glob.glob(pattern)
             print(f"🔎 Found files: {files}")
-
-            if files:
-                final_file = files[0]
-                file_size = os.path.getsize(final_file)
-                print(
-                    f"✅ Final file: {final_file} ({file_size / (1024 * 1024):.2f} MB)"
-                )
-
-                # اگه هنوز بزرگه، بیشتر فشرده کن
-                if file_size > MAX_TG_VIDEO_SIZE:
-                    print(f"⚠️ File too large, compressing more...")
-                    compressed_file = compress_video_more(final_file)
-                    if compressed_file:
-                        os.remove(final_file)
-                        return compressed_file
-
-                return os.path.abspath(final_file)
-
-            # فال‌بک
-            all_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*"))
-            print(f"📂 All files in download dir: {all_files}")
-
-            if all_files:
-                latest = max(all_files, key=os.path.getctime)
-                print(f"⚠️ Using latest file: {latest}")
-
-                file_size = os.path.getsize(latest)
-                if file_size > MAX_TG_VIDEO_SIZE:
-                    print(f"⚠️ File too large, compressing more...")
-                    compressed_file = compress_video_more(latest)
-                    if compressed_file:
-                        os.remove(latest)
-                        return compressed_file
-
-                return os.path.abspath(latest)
-
-            print("❌ No file found!")
-            return None
-
+            
+            if not files:
+                # فال‌بک: جدیدترین فایل
+                all_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*"))
+                if all_files:
+                    files = [max(all_files, key=os.path.getctime)]
+            
+            if not files:
+                print("❌ No file found!")
+                return None
+            
+            raw_file = files[0]
+            file_size = os.path.getsize(raw_file)
+            print(f"📦 Raw file: {raw_file} ({file_size / (1024*1024):.2f} MB)")
+            
+            # اگه حجمش بیشتر از 50MB هست، فشرده کن
+            if file_size > MAX_TG_VIDEO_SIZE:
+                print(f"⚠️ Too large ({file_size / (1024*1024):.1f} MB), compressing...")
+                compressed = compress_video(raw_file)
+                
+                if compressed:
+                    comp_size = os.path.getsize(compressed)
+                    # اگه هنوز بزرگه، بیشتر فشرده کن
+                    if comp_size > MAX_TG_VIDEO_SIZE:
+                        print(f"⚠️ Still too large ({comp_size / (1024*1024):.1f} MB), compressing harder...")
+                        os.remove(compressed)
+                        compressed = compress_video_harder(raw_file)
+                    
+                    if compressed and os.path.exists(compressed):
+                        os.remove(raw_file)
+                        return os.path.abspath(compressed)
+                
+                # اگه فشرده‌سازی فیل شد، همون فایل اصلی رو برگردون
+                print("⚠️ Compression failed, returning raw file")
+                return os.path.abspath(raw_file)
+            
+            return os.path.abspath(raw_file)
+            
     except Exception as e:
-        print(f"❌ Error downloading YT Video: {e}")
+        print(f"❌ Error downloading: {e}")
         import traceback
-
         traceback.print_exc()
         return None
 
 
-def compress_video_more(input_file):
-    """فشرده‌سازی بیشتر ویدیو با ffmpeg"""
-    try:
-        import subprocess
-
-        output_file = input_file.replace(".mp4", "_compressed.mp4")
-
-        cmd = [
-            "ffmpeg",
-            "-i",
-            input_file,
-            "-vf",
-            "scale=-2:480",
-            "-c:v",
-            "libx264",
-            "-crf",
-            "32",  # فشرده‌سازی خیلی بیشتر
-            "-preset",
-            "veryfast",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "64k",  # کیفیت صدا خیلی پایین
-            "-y",
-            output_file,
-        ]
-
-        print(f"🔧 Compressing with ffmpeg...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0 and os.path.exists(output_file):
-            new_size = os.path.getsize(output_file)
-            print(f"✅ Compressed to: {new_size / (1024 * 1024):.2f} MB")
-            return output_file
-        else:
-            print(f"❌ Compression failed: {result.stderr}")
-            return None
-
-    except Exception as e:
-        print(f"❌ Compression error: {e}")
+def compress_video_harder(input_file):
+    """فشرده‌سازی شدیدتر برای فایل‌های خیلی بزرگ"""
+    output_file = input_file.rsplit(".", 1)[0] + "_small.mp4"
+    
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_file,
+        "-vf", "scale=-2:360",  # 360p
+        "-c:v", "libx264",
+        "-crf", "34",
+        "-preset", "veryfast",
+        "-c:a", "aac",
+        "-b:a", "64k",
+        "-movflags", "+faststart",
+        output_file
+    ]
+    
+    print(f"🔧 Hard compressing...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode == 0 and os.path.exists(output_file):
+        new_size = os.path.getsize(output_file)
+        print(f"✅ Hard compressed: {new_size / (1024*1024):.2f} MB")
+        return output_file
+    else:
+        print(f"❌ Hard compression failed: {result.stderr[-500:]}")
         return None
 
 
 def download_youtube_audio(url):
-    """دانلود صدا با لاگ کامل"""
-
-    def progress_hook(d):
-        if d["status"] == "finished":
-            print(f"✅ Audio download finished: {d.get('filename', 'unknown')}")
-
     ydl_opts = {
         "proxy": PROXY,
         "format": "bestaudio/best",
@@ -181,44 +157,35 @@ def download_youtube_audio(url):
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
         "quiet": False,
         "noplaylist": True,
-        "progress_hooks": [progress_hook],
     }
-
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print(f"🔍 Extracting audio from: {url}")
             info = ydl.extract_info(url, download=True)
-
+            
             title = info.get("title", "Unknown Title")
             performer = info.get("uploader", "Unknown Artist")
             video_id = info.get("id", "unknown")
-
-            print(f"🎵 Audio ID: {video_id}")
-
+            
             pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}.*")
             files = glob.glob(pattern)
             mp3_files = [f for f in files if f.endswith(".mp3")]
-
-            print(f"🔎 Found files: {files}")
-            print(f"🎵 MP3 files: {mp3_files}")
-
+            
+            print(f"🔎 Found: {files} | MP3: {mp3_files}")
+            
             if mp3_files:
                 return os.path.abspath(mp3_files[0]), title, performer
-
-            all_files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.mp3"))
-            if all_files:
-                latest = max(all_files, key=os.path.getctime)
-                print(f"⚠️ Using latest MP3: {latest}")
+            
+            all_mp3 = glob.glob(os.path.join(DOWNLOAD_DIR, "*.mp3"))
+            if all_mp3:
+                latest = max(all_mp3, key=os.path.getctime)
                 return os.path.abspath(latest), title, performer
-
-            print("❌ No MP3 file found!")
+            
             return None, None, None
-
+            
     except Exception as e:
-        print(f"❌ Error downloading YT Audio: {e}")
-        import traceback
-
-        traceback.print_exc()
+        print(f"❌ Error downloading audio: {e}")
         return None, None, None
 
 
