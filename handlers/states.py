@@ -11,12 +11,42 @@ from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
     search_yt_videos,
+    MAX_TG_VIDEO_SIZE,
 )
 from services.instagram import download_instagram
 from services.book import get_dbooks_download_url, download_pdf
 from services.ai import ask_chatbot, perform_ocr, text_to_speech, generate_image
 import shutil
 from services.music import download_spotify_track, search_and_download_music
+
+
+async def send_video_safe(context, chat_id, file_path, update):
+    """ارسال ویدیو با چک حجم - اگه بزرگ بود به عنوان document میفرسته"""
+    file_size = os.path.getsize(file_path)
+    try:
+        if file_size <= MAX_TG_VIDEO_SIZE:
+            with open(file_path, "rb") as vid:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=vid,
+                    read_timeout=120,
+                    write_timeout=120,
+                    connect_timeout=60,
+                )
+        else:
+            await update.message.reply_text(
+                f"⚠️ حجم ویدیو ({file_size // (1024 * 1024)} مگابایت) بیشتر از حد مجاز تلگرامه. به صورت فایل ارسال میشه..."
+            )
+            with open(file_path, "rb") as vid:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=vid,
+                    read_timeout=120,
+                    write_timeout=120,
+                    connect_timeout=60,
+                )
+    except Exception as e:
+        raise e
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -90,7 +120,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             if file_path and os.path.exists(file_path):
                 try:
                     with open(file_path, "rb") as vid:
-                        await context.bot.send_video(chat_id=chat_id, video=vid)
+                        await context.bot.send_video_safe(chat_id=chat_id, video=vid)
                 finally:
                     if os.path.exists(file_path):
                         os.remove(file_path)
@@ -126,7 +156,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 if file_path.endswith(".mp4"):
                     with open(file_path, "rb") as vid:
-                        await context.bot.send_video(chat_id=chat_id, video=vid)
+                        await context.bot.send_video_safe(chat_id=chat_id, video=vid)
                 else:
                     with open(file_path, "rb") as doc:
                         await context.bot.send_document(chat_id=chat_id, document=doc)
@@ -457,7 +487,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if file_path and os.path.exists(file_path):
                     try:
                         with open(file_path, "rb") as vid:
-                            await context.bot.send_video(chat_id=chat_id, video=vid)
+                            await context.bot.send_video_safe(
+                                chat_id=chat_id, video=vid
+                            )
                     finally:
                         if os.path.exists(file_path):
                             os.remove(file_path)
@@ -480,7 +512,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             if file_path and os.path.exists(file_path):
                 try:
                     with open(file_path, "rb") as vid:
-                        await context.bot.send_video(chat_id=chat_id, video=vid)
+                        await context.bot.send_video_safe(chat_id=chat_id, video=vid)
                 finally:
                     if os.path.exists(file_path):
                         os.remove(file_path)
