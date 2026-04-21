@@ -47,46 +47,57 @@ def split_video_if_needed(file_path):
     if not duration:
         return [file_path]
 
-    # حجم هدف را به 25 مگابایت کاهش دادیم تا نوسانات بیت‌ریت باعث عبور از 50 مگ نشود
-    safe_split_size = 25 * 1024 * 1024
+    # محاسبه زمان برش (با هدف حجم حدود 20 مگابایت برای حاشیه امنیت بسیار بالا)
+    safe_split_size = 20 * 1024 * 1024
     num_chunks = math.ceil(file_size / safe_split_size)
     segment_time = duration / num_chunks
 
     base_name, ext = os.path.splitext(file_path)
     output_pattern = f"{base_name}_part%03d{ext}"
 
-    cmd = [
-        "ffmpeg",
-        "-i",
-        file_path,
-        "-c",
-        "copy",
-        "-f",
-        "segment",
-        "-segment_time",
-        str(segment_time),
-        "-reset_timestamps",
-        "1",
-        output_pattern,
-    ]
-
-    try:
-        print(f"⏳ Splitting video into {num_chunks} parts (Safe mode)...")
+    def run_split(seg_time):
+        cmd = [
+            "ffmpeg",
+            "-i",
+            file_path,
+            "-c",
+            "copy",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(seg_time),
+            "-reset_timestamps",
+            "1",
+            output_pattern,
+        ]
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        os.remove(file_path)  # حذف ویدیوی اصلی
+        return sorted(glob.glob(f"{base_name}_part*{ext}"))
 
-        # پیدا کردن پارت‌های ساخته شده
-        parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
+    try:
+        print(
+            f"⏳ Splitting video into ~{num_chunks} parts (Segment time: {segment_time}s)..."
+        )
+        parts = run_split(segment_time)
 
-        # بررسی نهایی برای اینکه مطمئن شویم هیچ پارتی از مرز 50 مگابایت (حدود 49 مگابایت برای اطمینان) عبور نکرده باشد
-        hard_limit = 49 * 1024 * 1024
-        for part in parts:
-            if os.path.getsize(part) > hard_limit:
-                print(f"⚠️ Warning: Part {part} is still over the limit!")
+        # بررسی سخت‌گیرانه: اگر به دلیل فاصله کی‌فریم‌ها باز هم پارتی بالای 45 مگابایت بود
+        hard_limit = 45 * 1024 * 1024
+        retry_needed = any(os.path.getsize(p) > hard_limit for p in parts)
 
+        if retry_needed:
+            print(
+                "⚠️ Some parts are still too large due to keyframes. Retrying with much smaller segments..."
+            )
+            # پاک کردن پارت‌های قبلی
+            for p in parts:
+                os.remove(p)
+            # نصف کردن زمان برش برای اجبار ffmpeg به پیدا کردن کی‌فریم‌های جدید
+            parts = run_split(segment_time / 2)
+
+        os.remove(file_path)  # حذف ویدیوی اصلی پس از موفقیت
         return parts
+
     except Exception as e:
         print(f"Error splitting video: {e}")
         return [file_path]
