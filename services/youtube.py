@@ -38,74 +38,100 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    # حداکثر حجم هدف برای هر پارت (کمی کمتر از 50 مگابایت بله در نظر می‌گیریم تا امن باشد)
-    target_size = 40 * 1024 * 1024  # 40 مگابایت
-    max_bale_size = 48 * 1024 * 1024
+    # تنظیمات حجم با فرمت $...$
+    max_safe_size = 47 * 1024 * 1024  # $47 \text{ MB}$ (حداکثر مجاز)
+    target_size_copy = 40 * 1024 * 1024  # $40 \text{ MB}$ (حجم هدف)
 
     file_size = os.path.getsize(file_path)
-    if file_size <= max_bale_size:
+    if file_size <= max_safe_size:
         return [file_path]
 
     duration = get_video_duration(file_path)
     if not duration:
         return [file_path]
 
-    # محاسبه تعداد پارت‌ها بر اساس حجم هدف
-    # $Chunks = \lceil FileSize / TargetSize \rceil$
-    chunks = math.ceil(file_size / target_size)
-
-    # محاسبه زمان هر پارت به ثانیه
-    # $SegmentTime = \lceil Duration / Chunks \rceil$
+    # محاسبه تعداد پارت‌ها
+    chunks = math.ceil(file_size / target_size_copy)
     segment_time = math.ceil(duration / chunks)
 
     base_name, ext = os.path.splitext(file_path)
-    # برای اطمینان از سازگاری در پیام‌رسان‌ها خروجی را mp4 می‌گذاریم
     output_pattern = f"{base_name}_part%03d.mp4"
 
-    # دستور جدید: برش بسیار سریع بدون رندر مجدد
-    cmd = [
+    # مرحله اول: تلاش برای برش سریع بدون رندر
+    cmd_copy = [
         "ffmpeg",
         "-y",
         "-i",
         file_path,
         "-c",
-        "copy",  # جادوی سرعت اینجاست! کپی مستقیم استریم
+        "copy",
         "-f",
-        "segment",  # قطعه قطعه کردن
+        "segment",
         "-segment_time",
-        str(segment_time),  # زمان هر قطعه
+        str(segment_time),
         "-reset_timestamps",
         "1",
         output_pattern,
     ]
 
     try:
-        print(
-            f"⏳ Fast Splitting video into ~{chunks} parts (each ~{segment_time}s)..."
-        )
+        print(f"⏳ Fast splitting into ~{chunks} parts...")
         subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd_copy, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
     except subprocess.CalledProcessError as e:
-        print(f"❌ FFmpeg error: {e}")
+        print(f"❌ FFmpeg copy error: {e}")
         return [file_path]
 
     parts = sorted(glob.glob(f"{base_name}_part*"))
+    final_parts = []
 
-    valid_parts = []
+    # مرحله دوم: بررسی و ترمیم پارت‌های دردسرساز
     for part in parts:
         part_size = os.path.getsize(part)
-        # در روش کپی چون رندر نداریم، به ندرت پیش می‌آید حجم به شدت بالا برود
-        # اما برای اطمینان چک می‌کنیم که ربات کرش نکند
-        if part_size > (49.5 * 1024 * 1024):
-            print(
-                f"⚠️ پارتی با حجم {part_size / (1024 * 1024):.2f}MB یافت شد و حذف گردید."
-            )
-            os.remove(part)
-        else:
-            valid_parts.append(part)
 
-    return valid_parts
+        if part_size > max_safe_size:
+            print(
+                f"⚠️ پارت حجیم شناسایی شد ({part_size / (1024 * 1024):.2f}MB). در حال ترمیم نقطه‌ای..."
+            )
+
+            fixed_part = part.replace(".mp4", "_fixed.mp4")
+            # رندر مجدد فقط برای همین پارت با سرعت الترافست برای کاهش حجم
+            cmd_fix = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                part,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "28",  # فشرده‌سازی کمی بیشتر برای اطمینان از افت حجم
+                "-c:a",
+                "copy",
+                fixed_part,
+            ]
+
+            try:
+                subprocess.run(
+                    cmd_fix,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                os.remove(part)  # حذف پارت خراب اصلی
+                final_parts.append(fixed_part)
+            except subprocess.CalledProcessError:
+                print("❌ خطا در ترمیم پارت. پارت حذف شد.")
+                os.remove(part)
+        else:
+            final_parts.append(part)
+
+    if not final_parts:
+        return [file_path]
+
+    return final_parts
 
 
 def download_youtube_video(url):
