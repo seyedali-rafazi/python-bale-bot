@@ -38,9 +38,9 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    # حداکثر حجم مجاز بله 48 در نظر گرفته می‌شود تا حاشیه امن باشد
+    # حداکثر حجم هدف برای هر پارت (کمی کمتر از 50 مگابایت بله در نظر می‌گیریم تا امن باشد)
+    target_size = 40 * 1024 * 1024  # 40 مگابایت
     max_bale_size = 48 * 1024 * 1024
-    target_size = 35 * 1024 * 1024  # هدف 35 مگابایت
 
     file_size = os.path.getsize(file_path)
     if file_size <= max_bale_size:
@@ -50,44 +50,30 @@ def split_video_if_needed(file_path):
     if not duration:
         return [file_path]
 
-    # محاسبه زمان و تعداد پارت‌ها
+    # محاسبه تعداد پارت‌ها بر اساس حجم هدف
+    # $Chunks = \lceil FileSize / TargetSize \rceil$
     chunks = math.ceil(file_size / target_size)
+
+    # محاسبه زمان هر پارت به ثانیه
+    # $SegmentTime = \lceil Duration / Chunks \rceil$
     segment_time = math.ceil(duration / chunks)
 
-    # --- محاسبه دقیق بیت‌ریت (Bitrate) ---
-    # تبدیل حجم هدف به بیت و تقسیم بر زمان هر پارت (bps)
-    target_size_bits = target_size * 8
-    max_rate_bps = int(target_size_bits / segment_time)
-
     base_name, ext = os.path.splitext(file_path)
-    output_pattern = f"{base_name}_part%03d{ext}"
+    # برای اطمینان از سازگاری در پیام‌رسان‌ها خروجی را mp4 می‌گذاریم
+    output_pattern = f"{base_name}_part%03d.mp4"
 
-    # پارامترهای کنترل حجم به ffmpeg اضافه شدند
+    # دستور جدید: برش بسیار سریع بدون رندر مجدد
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         file_path,
-        "-force_key_frames",
-        f"expr:gte(t,n_forced*{segment_time})",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-b:v",
-        str(max_rate_bps),  # تنظیم بیت‌ریت هدف
-        "-maxrate",
-        str(max_rate_bps),  # جلوگیری قطعی از افزایش حجم در صحنه‌های شلوغ
-        "-bufsize",
-        str(max_rate_bps * 2),  # بافر استاندارد
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
+        "-c",
+        "copy",  # جادوی سرعت اینجاست! کپی مستقیم استریم
         "-f",
-        "segment",
+        "segment",  # قطعه قطعه کردن
         "-segment_time",
-        str(segment_time),
+        str(segment_time),  # زمان هر قطعه
         "-reset_timestamps",
         "1",
         output_pattern,
@@ -95,7 +81,7 @@ def split_video_if_needed(file_path):
 
     try:
         print(
-            f"⏳ Splitting video into ~{chunks} parts with maxrate {max_rate_bps} bps..."
+            f"⏳ Fast Splitting video into ~{chunks} parts (each ~{segment_time}s)..."
         )
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -104,12 +90,18 @@ def split_video_if_needed(file_path):
         print(f"❌ FFmpeg error: {e}")
         return [file_path]
 
-    parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
+    parts = sorted(glob.glob(f"{base_name}_part*"))
 
     valid_parts = []
     for part in parts:
-        if os.path.getsize(part) > (49 * 1024 * 1024):
-            os.remove(part)  # اگر باز هم استثنائاً بزرگتر بود حذف شود که ربات کرش نکند
+        part_size = os.path.getsize(part)
+        # در روش کپی چون رندر نداریم، به ندرت پیش می‌آید حجم به شدت بالا برود
+        # اما برای اطمینان چک می‌کنیم که ربات کرش نکند
+        if part_size > (49.5 * 1024 * 1024):
+            print(
+                f"⚠️ پارتی با حجم {part_size / (1024 * 1024):.2f}MB یافت شد و حذف گردید."
+            )
+            os.remove(part)
         else:
             valid_parts.append(part)
 
