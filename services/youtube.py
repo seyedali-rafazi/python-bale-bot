@@ -2,8 +2,6 @@ import os
 import glob
 import yt_dlp
 import uuid
-import subprocess
-import math
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,134 +10,43 @@ PROXY = os.getenv("PROXY")
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# محدودیت‌های جدید حجم
-MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024  # 300 مگابایت
-SPLIT_SIZE_LIMIT = 45 * 1024 * 1024  # 45 مگابایت
+# $300 \text{ MB}$ limit for total download
+MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
+# $45 \text{ MB}$ limit for each binary part
+SPLIT_SIZE_LIMIT = 45 * 1024 * 1024
 
 
-def get_video_duration(file_path):
-    """دریافت زمان کل ویدیو با استفاده از ffprobe"""
-    try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            file_path,
-        ]
-        output = subprocess.check_output(cmd, text=True)
-        return float(output.strip())
-    except Exception as e:
-        print(f"Error getting duration: {e}")
-        return 0
-
-
-def split_video_if_needed(file_path):
-    # تنظیمات حجم با فرمت $...$
-    max_safe_size = 47 * 1024 * 1024  # $47 \text{ MB}$ (حداکثر مجاز)
-    target_size_copy = 40 * 1024 * 1024  # $40 \text{ MB}$ (حجم هدف)
-
+def split_file_binary(file_path):
+    """تقسیم فایل به صورت باینری به تکه‌های دقیق"""
     file_size = os.path.getsize(file_path)
-    if file_size <= max_safe_size:
+
+    if file_size <= SPLIT_SIZE_LIMIT:
         return [file_path]
 
-    duration = get_video_duration(file_path)
-    if not duration:
-        return [file_path]
+    parts = []
+    part_num = 1
 
-    # محاسبه تعداد پارت‌ها
-    chunks = math.ceil(file_size / target_size_copy)
-    segment_time = math.ceil(duration / chunks)
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(SPLIT_SIZE_LIMIT)
+            if not chunk:
+                break
 
-    base_name, ext = os.path.splitext(file_path)
-    output_pattern = f"{base_name}_part%03d.mp4"
+            part_name = f"{file_path}.part{part_num:03d}"
+            with open(part_name, "wb") as chunk_file:
+                chunk_file.write(chunk)
 
-    # مرحله اول: تلاش برای برش سریع بدون رندر
-    cmd_copy = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        file_path,
-        "-c",
-        "copy",
-        "-f",
-        "segment",
-        "-segment_time",
-        str(segment_time),
-        "-reset_timestamps",
-        "1",
-        output_pattern,
-    ]
+            parts.append(part_name)
+            part_num += 1
 
-    try:
-        print(f"⏳ Fast splitting into ~{chunks} parts...")
-        subprocess.run(
-            cmd_copy, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"❌ FFmpeg copy error: {e}")
-        return [file_path]
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
-    parts = sorted(glob.glob(f"{base_name}_part*"))
-    final_parts = []
-
-    # مرحله دوم: بررسی و ترمیم پارت‌های دردسرساز
-    for part in parts:
-        part_size = os.path.getsize(part)
-
-        if part_size > max_safe_size:
-            print(
-                f"⚠️ پارت حجیم شناسایی شد ({part_size / (1024 * 1024):.2f}MB). در حال ترمیم نقطه‌ای..."
-            )
-
-            fixed_part = part.replace(".mp4", "_fixed.mp4")
-            # رندر مجدد فقط برای همین پارت با سرعت الترافست برای کاهش حجم
-            cmd_fix = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                part,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "28",  # فشرده‌سازی کمی بیشتر برای اطمینان از افت حجم
-                "-c:a",
-                "copy",
-                fixed_part,
-            ]
-
-            try:
-                subprocess.run(
-                    cmd_fix,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                os.remove(part)  # حذف پارت خراب اصلی
-                final_parts.append(fixed_part)
-            except subprocess.CalledProcessError:
-                print("❌ خطا در ترمیم پارت. پارت حذف شد.")
-                os.remove(part)
-        else:
-            final_parts.append(part)
-
-    if not final_parts:
-        return [file_path]
-
-    return final_parts
+    return parts
 
 
 def download_youtube_video(url):
-    """دانلود ویدیو - تا سقف 300 مگابایت با پشتیبانی از چند کاربر همزمان"""
-
-    # تولید یک شناسه یکتا برای جلوگیری از تداخل دانلود کاربران
     req_id = uuid.uuid4().hex
-
     ydl_opts = {
         "proxy": PROXY,
         "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
@@ -149,16 +56,12 @@ def download_youtube_video(url):
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # فقط اطلاعات بگیر، دانلود نکن
             info = ydl.extract_info(url, download=False)
             filesize = info.get("filesize") or info.get("filesize_approx") or 0
-            size_mb = filesize / (1024 * 1024)
 
             if filesize > MAX_DOWNLOAD_SIZE:
-                print(f"❌ Too large: {size_mb:.1f} MB")
                 return "TOO_LARGE"
 
-            # سایز اوکیه، دانلود کن
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id", "unknown")
 
@@ -171,21 +74,18 @@ def download_youtube_video(url):
             final_file = files[0]
             actual_size = os.path.getsize(final_file)
 
-            # چک نهایی بعد دانلود
             if actual_size > MAX_DOWNLOAD_SIZE:
                 os.remove(final_file)
                 return "TOO_LARGE"
 
-            # تقسیم در صورت نیاز و بازگرداندن لیست فایل‌ها
-            return split_video_if_needed(final_file)
+            return split_file_binary(final_file)
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         return None
 
 
 def download_youtube_audio(url):
-    # این متد را برای جلوگیری از تداخل کاربران با UUID اصلاح کردیم
     req_id = uuid.uuid4().hex
     ydl_opts = {
         "proxy": PROXY,
@@ -199,30 +99,36 @@ def download_youtube_audio(url):
         ],
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": False,
-        "noplaylist": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"🔍 Extracting audio from: {url}")
-            info = ydl.extract_info(url, download=True)
+            info = ydl.extract_info(url, download=False)
+            filesize = info.get("filesize") or info.get("filesize_approx") or 0
 
-            title = info.get("title", "Unknown Title")
-            performer = info.get("uploader", "Unknown Artist")
-            video_id = info.get("id", "unknown")
+            if filesize > MAX_DOWNLOAD_SIZE:
+                return "TOO_LARGE"
 
-            pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
+            ydl.download([url])
+
+            pattern = os.path.join(DOWNLOAD_DIR, f"*_{req_id}.mp3")
             files = glob.glob(pattern)
-            mp3_files = [f for f in files if f.endswith(".mp3")]
 
-            if mp3_files:
-                return os.path.abspath(mp3_files[0]), title, performer
+            if not files:
+                return None
 
-            return None, None, None
+            final_file = files[0]
+            actual_size = os.path.getsize(final_file)
+
+            if actual_size > MAX_DOWNLOAD_SIZE:
+                os.remove(final_file)
+                return "TOO_LARGE"
+
+            return split_file_binary(final_file)
 
     except Exception as e:
-        print(f"❌ Error downloading audio: {e}")
-        return None, None, None
+        print(f"Error: {e}")
+        return None
 
 
 def search_yt_videos(query, max_results=5):
@@ -231,30 +137,34 @@ def search_yt_videos(query, max_results=5):
         "extract_flat": True,
         "quiet": True,
     }
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = (
-                f"ytsearch{max_results}:{query}"
-                if not query.startswith("http")
-                else query
-            )
+            search_query = f"ytsearch{max_results}:{query}"
             info = ydl.extract_info(search_query, download=False)
 
-            if "entries" in info:
-                entries = info["entries"][:max_results]
-            else:
-                entries = [info]
+            if "entries" not in info:
+                return []
 
             results = []
-            for entry in entries:
-                if entry.get("id"):
-                    results.append(
-                        {
-                            "title": entry.get("title", "Unknown"),
-                            "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
-                        }
-                    )
+            for entry in info["entries"]:
+                duration = entry.get("duration")
+                duration_str = (
+                    f"{int(duration // 60)}:{int(duration % 60):02d}"
+                    if duration
+                    else "نامشخص"
+                )
+
+                results.append(
+                    {
+                        "id": entry.get("id"),
+                        "title": entry.get("title", "بدون عنوان"),
+                        "url": entry.get("url"),
+                        "duration": duration_str,
+                    }
+                )
+
             return results
     except Exception as e:
-        print(f"Error searching YT: {e}")
+        print(f"Search Error: {e}")
         return []
