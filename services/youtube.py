@@ -38,10 +38,9 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    # حداکثر حجم مجاز بله 50 مگابایت است. ما مرز خطر را 49 در نظر میگیریم
-    max_bale_size = 49 * 1024 * 1024
-    # حجم هدف برای هر پارت را 30 مگابایت قرار میدهیم تا حاشیه امنیت بسیار بالایی داشته باشیم
-    target_size = 30 * 1024 * 1024
+    # حداکثر حجم مجاز بله 48 در نظر گرفته می‌شود تا حاشیه امن باشد
+    max_bale_size = 48 * 1024 * 1024
+    target_size = 35 * 1024 * 1024  # هدف 35 مگابایت
 
     file_size = os.path.getsize(file_path)
     if file_size <= max_bale_size:
@@ -51,14 +50,19 @@ def split_video_if_needed(file_path):
     if not duration:
         return [file_path]
 
-    # محاسبه تعداد پارت‌ها بر اساس هدف 30 مگابایتی
+    # محاسبه زمان و تعداد پارت‌ها
     chunks = math.ceil(file_size / target_size)
     segment_time = math.ceil(duration / chunks)
+
+    # --- محاسبه دقیق بیت‌ریت (Bitrate) ---
+    # تبدیل حجم هدف به بیت و تقسیم بر زمان هر پارت (bps)
+    target_size_bits = target_size * 8
+    max_rate_bps = int(target_size_bits / segment_time)
 
     base_name, ext = os.path.splitext(file_path)
     output_pattern = f"{base_name}_part%03d{ext}"
 
-    # استفاده از انکود مجدد (Re-encode) برای برش دقیق و کنترل حجم
+    # پارامترهای کنترل حجم به ffmpeg اضافه شدند
     cmd = [
         "ffmpeg",
         "-y",
@@ -70,10 +74,16 @@ def split_video_if_needed(file_path):
         "libx264",
         "-preset",
         "veryfast",
-        "-crf",
-        "28",
+        "-b:v",
+        str(max_rate_bps),  # تنظیم بیت‌ریت هدف
+        "-maxrate",
+        str(max_rate_bps),  # جلوگیری قطعی از افزایش حجم در صحنه‌های شلوغ
+        "-bufsize",
+        str(max_rate_bps * 2),  # بافر استاندارد
         "-c:a",
         "aac",
+        "-b:a",
+        "128k",
         "-f",
         "segment",
         "-segment_time",
@@ -84,20 +94,22 @@ def split_video_if_needed(file_path):
     ]
 
     try:
+        print(
+            f"⏳ Splitting video into ~{chunks} parts with maxrate {max_rate_bps} bps..."
+        )
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-    except subprocess.CalledProcessError:
-        return [file_path]  # در صورت خطای ffmpeg، فایل اصلی را برمی‌گرداند
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FFmpeg error: {e}")
+        return [file_path]
 
     parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
 
-    # بررسی نهایی برای جلوگیری از کرش کردن ربات (خطای 413)
     valid_parts = []
     for part in parts:
-        if os.path.getsize(part) > max_bale_size:
-            # اگر پارتی باز هم بزرگتر از 49 مگابایت بود، آن را حذف میکنیم تا ربات متوقف نشود
-            os.remove(part)
+        if os.path.getsize(part) > (49 * 1024 * 1024):
+            os.remove(part)  # اگر باز هم استثنائاً بزرگتر بود حذف شود که ربات کرش نکند
         else:
             valid_parts.append(part)
 
