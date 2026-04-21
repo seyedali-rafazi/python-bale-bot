@@ -13,7 +13,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 # $300 \text{ MB}$ limit for total download
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 # $45 \text{ MB}$ limit for each binary part
-SPLIT_SIZE_LIMIT = 35 * 1024 * 1024
+SPLIT_SIZE_LIMIT = 15 * 1024 * 1024
 
 
 def split_file_binary(file_path):
