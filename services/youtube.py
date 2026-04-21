@@ -38,69 +38,70 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    """تکه‌تکه کردن ویدیو به پارت‌های کوچکتر برای عبور از محدودیت سرور"""
+    # حداکثر حجم مجاز بله 50 مگابایت است. ما مرز خطر را 49 در نظر میگیریم
+    max_bale_size = 49 * 1024 * 1024
+    # حجم هدف برای هر پارت را 30 مگابایت قرار میدهیم تا حاشیه امنیت بسیار بالایی داشته باشیم
+    target_size = 30 * 1024 * 1024
+
     file_size = os.path.getsize(file_path)
-    if file_size <= SPLIT_SIZE_LIMIT:
+    if file_size <= max_bale_size:
         return [file_path]
 
     duration = get_video_duration(file_path)
     if not duration:
         return [file_path]
 
-    # محاسبه زمان برش (با هدف حجم حدود 20 مگابایت برای حاشیه امنیت بسیار بالا)
-    safe_split_size = 20 * 1024 * 1024
-    num_chunks = math.ceil(file_size / safe_split_size)
-    segment_time = duration / num_chunks
+    # محاسبه تعداد پارت‌ها بر اساس هدف 30 مگابایتی
+    chunks = math.ceil(file_size / target_size)
+    segment_time = math.ceil(duration / chunks)
 
     base_name, ext = os.path.splitext(file_path)
     output_pattern = f"{base_name}_part%03d{ext}"
 
-    def run_split(seg_time):
-        cmd = [
-            "ffmpeg",
-            "-i",
-            file_path,
-            "-c",
-            "copy",
-            "-f",
-            "segment",
-            "-segment_time",
-            str(seg_time),
-            "-reset_timestamps",
-            "1",
-            output_pattern,
-        ]
+    # استفاده از انکود مجدد (Re-encode) برای برش دقیق و کنترل حجم
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        file_path,
+        "-force_key_frames",
+        f"expr:gte(t,n_forced*{segment_time})",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "28",
+        "-c:a",
+        "aac",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(segment_time),
+        "-reset_timestamps",
+        "1",
+        output_pattern,
+    ]
+
+    try:
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        return sorted(glob.glob(f"{base_name}_part*{ext}"))
+    except subprocess.CalledProcessError:
+        return [file_path]  # در صورت خطای ffmpeg، فایل اصلی را برمی‌گرداند
 
-    try:
-        print(
-            f"⏳ Splitting video into ~{num_chunks} parts (Segment time: {segment_time}s)..."
-        )
-        parts = run_split(segment_time)
+    parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
 
-        # بررسی سخت‌گیرانه: اگر به دلیل فاصله کی‌فریم‌ها باز هم پارتی بالای 45 مگابایت بود
-        hard_limit = 45 * 1024 * 1024
-        retry_needed = any(os.path.getsize(p) > hard_limit for p in parts)
+    # بررسی نهایی برای جلوگیری از کرش کردن ربات (خطای 413)
+    valid_parts = []
+    for part in parts:
+        if os.path.getsize(part) > max_bale_size:
+            # اگر پارتی باز هم بزرگتر از 49 مگابایت بود، آن را حذف میکنیم تا ربات متوقف نشود
+            os.remove(part)
+        else:
+            valid_parts.append(part)
 
-        if retry_needed:
-            print(
-                "⚠️ Some parts are still too large due to keyframes. Retrying with much smaller segments..."
-            )
-            # پاک کردن پارت‌های قبلی
-            for p in parts:
-                os.remove(p)
-            # نصف کردن زمان برش برای اجبار ffmpeg به پیدا کردن کی‌فریم‌های جدید
-            parts = run_split(segment_time / 2)
-
-        os.remove(file_path)  # حذف ویدیوی اصلی پس از موفقیت
-        return parts
-
-    except Exception as e:
-        print(f"Error splitting video: {e}")
-        return [file_path]
+    return valid_parts
 
 
 def download_youtube_video(url):
