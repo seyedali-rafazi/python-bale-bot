@@ -38,18 +38,17 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    """تکه‌تکه کردن ویدیو به پارت‌های کمتر از 45 مگابایت"""
+    """تکه‌تکه کردن ویدیو به پارت‌های کوچکتر برای عبور از محدودیت سرور"""
     file_size = os.path.getsize(file_path)
     if file_size <= SPLIT_SIZE_LIMIT:
         return [file_path]
 
     duration = get_video_duration(file_path)
     if not duration:
-        # اگر زمان ویدیو به دست نیامد، ویدیو بدون تغییر برمی‌گردد
         return [file_path]
 
-    # برای اطمینان حجم هر تکه را روی 40 مگابایت تنظیم می‌کنیم تا از 45 عبور نکند
-    safe_split_size = 40 * 1024 * 1024
+    # حجم هدف را به 25 مگابایت کاهش دادیم تا نوسانات بیت‌ریت باعث عبور از 50 مگ نشود
+    safe_split_size = 25 * 1024 * 1024
     num_chunks = math.ceil(file_size / safe_split_size)
     segment_time = duration / num_chunks
 
@@ -72,14 +71,21 @@ def split_video_if_needed(file_path):
     ]
 
     try:
-        print(f"⏳ Splitting video into {num_chunks} parts...")
+        print(f"⏳ Splitting video into {num_chunks} parts (Safe mode)...")
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        os.remove(file_path)  # حذف ویدیوی اصلی یکپارچه
+        os.remove(file_path)  # حذف ویدیوی اصلی
 
         # پیدا کردن پارت‌های ساخته شده
         parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
+
+        # بررسی نهایی برای اینکه مطمئن شویم هیچ پارتی از مرز 50 مگابایت (حدود 49 مگابایت برای اطمینان) عبور نکرده باشد
+        hard_limit = 49 * 1024 * 1024
+        for part in parts:
+            if os.path.getsize(part) > hard_limit:
+                print(f"⚠️ Warning: Part {part} is still over the limit!")
+
         return parts
     except Exception as e:
         print(f"Error splitting video: {e}")
