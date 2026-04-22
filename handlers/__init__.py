@@ -10,6 +10,8 @@ from .menus import (
     btn_weather_help,
     btn_yt_req,
     btn_ig_req,
+    btn_ig_link_dl_req,
+    btn_ig_last_post_req,
     btn_back_action,
     btn_ai_menu,
     btn_ai_chat_req,
@@ -60,9 +62,6 @@ def register_all_handlers(application):
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req)
     )
 
     # هندلرهای هوش مصنوعی
@@ -134,6 +133,21 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_YT_LINK_MP3)}$"), btn_yt_link_mp3_req
+        )
+    )
+
+    #  هندلرهای منوی اینستاگرام
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IG_LINK_DL)}$"), btn_ig_link_dl_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IG_LAST_POST)}$"), btn_ig_last_post_req
         )
     )
 

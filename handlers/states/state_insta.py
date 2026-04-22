@@ -2,7 +2,10 @@ import os
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-from services.instagram import download_instagram
+from services.instagram import (
+    download_instagram,
+    get_latest_post,
+)
 
 
 async def handle_insta_state(
@@ -23,7 +26,6 @@ async def handle_insta_state(
         )
 
         try:
-            # اجرای دانلود در Thread جداگانه با حداکثر زمان 60 ثانیه برای جلوگیری از هنگ کردن ربات
             file_path = await asyncio.wait_for(
                 asyncio.to_thread(download_instagram, text), timeout=60.0
             )
@@ -39,11 +41,8 @@ async def handle_insta_state(
                                 chat_id=chat_id, document=doc
                             )
                 finally:
-                    # حذف فایل پس از ارسال
                     if os.path.exists(file_path):
                         os.remove(file_path)
-
-                # حذف پیام "در حال دانلود..." پس از ارسال موفق
                 await processing_msg.delete()
             else:
                 await processing_msg.edit_text(
@@ -56,6 +55,39 @@ async def handle_insta_state(
             )
         except Exception as e:
             print(f"Insta DL Error: {e}")
-            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای در حین دانلود رخ داد.")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        return
 
+    # -------- بخش جدید برای آخرین پست --------
+    elif step == "waiting_ig_last_post":
+        processing_msg = await update.message.reply_text(
+            "⏳ در حال بررسی پیج و دانلود آخرین پست..."
+        )
+        try:
+            file_path = await asyncio.wait_for(get_latest_post(text), timeout=60.0)
+
+            if file_path and os.path.exists(file_path):
+                try:
+                    if file_path.endswith(".mp4"):
+                        with open(file_path, "rb") as vid:
+                            await context.bot.send_video(chat_id=chat_id, video=vid)
+                    else:
+                        with open(file_path, "rb") as photo:
+                            await context.bot.send_photo(chat_id=chat_id, photo=photo)
+                finally:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                await processing_msg.delete()
+            else:
+                await processing_msg.edit_text(
+                    "❌ پست پیدا نشد. آیا مطمئنید پیج پابلیک (عمومی) است؟"
+                )
+
+        except asyncio.TimeoutError:
+            await processing_msg.edit_text(
+                "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
+            )
+        except Exception as e:
+            print(f"Insta Last Post Error: {e}")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
         return

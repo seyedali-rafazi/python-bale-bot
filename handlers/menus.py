@@ -9,6 +9,7 @@ from core.keyboards import (
     get_music_menu_keyboard,
     get_telegram_menu_keyboard,
     get_youtube_menu_keyboard,
+    get_insta_menu_keyboard,
 )
 
 
@@ -107,18 +108,6 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     set_state(chat_id, "waiting_yt_link", format="audio")
     await update.message.reply_text(
         "🔗 لطفاً لینک ویدیو یوتیوب را برای تبدیل به فایل صوتی (MP3) ارسال کنید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
-# اینستاگرام
-async def btn_ig_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_ig_link")
-    await update.message.reply_text(
-        "📸 لطفاً لینک اینستاگرام را ارسال کنید:",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
         ),
@@ -227,3 +216,39 @@ async def btn_tg_latest_req(update, context):
     await update.message.reply_text(
         "لطفاً آیدی کانال عمومی تلگرام را بفرستید (مثال: @varzesh3 یا varzesh3):"
     )
+
+
+# اینستاگرام start
+
+
+async def btn_ig_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # فقط منو را نشان می‌دهد
+    await update.message.reply_text(
+        "📸 به بخش اینستاگرام خوش آمدید. یک گزینه را انتخاب کنید:",
+        reply_markup=get_insta_menu_keyboard(),
+    )
+
+
+async def btn_ig_link_dl_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_ig_link")
+    await update.message.reply_text(
+        "🔗 لطفاً لینک پست یا ریلز اینستاگرام را ارسال کنید:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+async def btn_ig_last_post_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_ig_last_post")
+    await update.message.reply_text(
+        "🖼 لطفاً آیدی پیج یا لینک پروفایل اینستاگرام را بفرستید (پیج باید Public باشد):",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+# اینستاگرام end
