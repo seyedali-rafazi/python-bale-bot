@@ -3,6 +3,7 @@
 import os
 import instaloader
 import asyncio
+import yt_dlp
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -75,4 +76,22 @@ async def get_latest_post(page_input):
     return await asyncio.to_thread(get_latest_post_sync, page_input)
 
 
-# (تابع download_instagram با yt-dlp که قبلا داشتید را اینجا نگه دارید)
+# اضافه شدن تابع دانلود با لینک مستقیم
+def download_instagram(url):
+    ydl_opts = {
+        "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    if PROXY:
+        ydl_opts["proxy"] = PROXY
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            return filename
+    except Exception as e:
+        print(f"Error downloading with yt-dlp: {e}")
+        return None
