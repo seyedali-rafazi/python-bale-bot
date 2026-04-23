@@ -2,7 +2,6 @@
 
 BTN_DL_YOUTUBE = "📺 یوتیوب"
 BTN_DL_INSTA = "📸 دانلود از اینستاگرام"
-BTN_TRANSLATE = "🔤 ترجمه متن"
 BTN_WEATHER = "🌤 آب و هوا"
 BTN_BOOK = "📚 دانلود کتاب"
 BTN_YT_VIDEO = "🎥 دانلود ویدیو (تصویری)"
@@ -30,3 +29,8 @@ BTN_YT_LINK_MP3 = "🎵 لینک یوتیوب به MP3"
 #  منوی اینستاگرام
 BTN_IG_LINK_DL = "🔗 دانلود با لینک (پست/ریلز)"
 BTN_IG_LAST_POST = "🖼 آخرین پست پیج"
+
+# منو ترجمه
+BTN_TRANSLATE = "🔤 ترجمه متن"
+BTN_TR_FA_EN = "🇮🇷 فارسی به 🇬🇧 انگلیسی"
+BTN_TR_EN_FA = "🇬🇧 انگلیسی به 🇮🇷 فارسی"

@@ -11,6 +11,7 @@ from .state_insta import handle_insta_state
 from .state_ai import handle_ai_state, handle_ai_photo
 from .state_music import handle_music_state
 from .state_telegram import handle_telegram_state
+from .state_translation import handle_translation_state
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -48,6 +49,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step.startswith("waiting_tg"):
         await handle_telegram_state(update, context, step, text, chat_id, state_data)
+
+    elif step.startswith("waiting_tr"):
+        await handle_translation_state(update, context, step, text, chat_id, state_data)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

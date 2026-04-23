@@ -63,3 +63,12 @@ def get_youtube_menu_keyboard():
 def get_insta_menu_keyboard():
     keyboard = [[BTN_IG_LINK_DL], [BTN_BACK]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_translation_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_TR_FA_EN)],
+        [KeyboardButton(BTN_TR_EN_FA)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

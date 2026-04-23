@@ -6,7 +6,6 @@ from core.constants import *
 from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
 from .menus import (
     btn_book_help,
-    btn_tr_help,
     btn_weather_help,
     btn_yt_req,
     btn_ig_req,
@@ -29,6 +28,9 @@ from .menus import (
     btn_yt_global_req,
     btn_yt_link_vid_req,
     btn_yt_link_mp3_req,
+    btn_tr_help,
+    btn_tr_fa_en_req,
+    btn_tr_en_fa_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip
@@ -53,9 +55,6 @@ def register_all_handlers(application):
     # دکمه‌های منوی اصلی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_help)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TRANSLATE)}$"), btn_tr_help)
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_help)
@@ -149,6 +148,17 @@ def register_all_handlers(application):
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_IG_LAST_POST)}$"), btn_ig_last_post_req
         )
+    )
+
+    #  هندلرهای منوی ترجمه
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_TRANSLATE)}$"), btn_tr_help)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_TR_FA_EN)}$"), btn_tr_fa_en_req)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_TR_EN_FA)}$"), btn_tr_en_fa_req)
     )
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
