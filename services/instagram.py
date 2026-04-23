@@ -18,6 +18,13 @@ def get_instaloader_instance():
     L = instaloader.Instaloader()
     username = os.getenv("IG_USERNAME", "danny75479")
 
+    # --- تنظیمات پروکسی اضافه شد ---
+    if PROXY:
+        proxies = {"http": PROXY, "https": PROXY}
+        L.context._session.proxies = proxies
+        print("✅ پروکسی برای instaloader تنظیم شد.")
+    # -------------------------------
+
     try:
         # ربات تلاش می‌کند از فایل سشنی که ساختید استفاده کند
         L.load_session_from_file(username, filename=f"session_{username}")
