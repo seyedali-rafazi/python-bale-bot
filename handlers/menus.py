@@ -1,6 +1,12 @@
 # handlers/menus.py
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import *
@@ -289,3 +295,21 @@ async def btn_book_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # دانلود کتاب end
+
+
+# پشتیبانی start
+
+
+async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("💬 ارتباط با پشتیبانی در بله", url=BALE_SUPPORT_URL)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "برای ارتباط با پشتیبانی، طرح پیشنهادات و گزارش مشکلات، روی دکمه زیر کلیک کنید:",
+        reply_markup=reply_markup,
+    )
+
+
+# پشتیبانی end

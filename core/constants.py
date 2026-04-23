@@ -34,3 +34,7 @@ BTN_IG_LAST_POST = "🖼 آخرین پست پیج"
 BTN_TRANSLATE = "🔤 ترجمه متن"
 BTN_TR_FA_EN = "🇮🇷 فارسی به 🇬🇧 انگلیسی"
 BTN_TR_EN_FA = "🇬🇧 انگلیسی به 🇮🇷 فارسی"
+
+# پشتبانی
+BTN_SUPPORT = "👨‍💻 پشتیبانی و مشکلات"
+BALE_SUPPORT_URL = "https://ble.ir/digiachar_admin"

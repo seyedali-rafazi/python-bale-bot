@@ -10,6 +10,7 @@ def get_main_menu_keyboard():
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
         [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)],
         [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)],
+        [KeyboardButton(BTN_SUPPORT)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 

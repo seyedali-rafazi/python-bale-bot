@@ -164,6 +164,10 @@ def register_all_handlers(application):
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_req)
     )
 
+    # هندلر پشتیبانی
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)
+    )
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input)
