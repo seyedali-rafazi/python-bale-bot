@@ -31,6 +31,7 @@ from .menus import (
     btn_tr_help,
     btn_tr_fa_en_req,
     btn_tr_en_fa_req,
+    btn_support_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip
