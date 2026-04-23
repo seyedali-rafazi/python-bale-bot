@@ -2,14 +2,22 @@
 
 import requests
 
+
 def get_wmo_description(code):
     weather_codes = {
-        0: ("صاف و آفتابی", "☀️"), 1: ("عمدتاً صاف", "🌤"), 2: ("نیمه ابری", "⛅️"),
-        3: ("ابری", "☁️"), 45: ("مه‌آلود", "🌫"), 48: ("مه همراه با یخ‌زدگی", "❄️🌫"),
-        51: ("نم‌نم باران", "🌦"), 61: ("بارانی", "☔️"), 71: ("برفی", "🌨"),
-        95: ("رعد و برق", "🌩")
+        0: ("صاف و آفتابی", "☀️"),
+        1: ("عمدتاً صاف", "🌤"),
+        2: ("نیمه ابری", "⛅️"),
+        3: ("ابری", "☁️"),
+        45: ("مه‌آلود", "🌫"),
+        48: ("مه همراه با یخ‌زدگی", "❄️🌫"),
+        51: ("نم‌نم باران", "🌦"),
+        61: ("بارانی", "☔️"),
+        71: ("برفی", "🌨"),
+        95: ("رعد و برق", "🌩"),
     }
     return weather_codes.get(code, ("نامشخص", "🌍"))
+
 
 def get_weather_forecast(city_name):
     try:
@@ -37,7 +45,7 @@ def get_weather_forecast(city_name):
 
             result_text += f"📅 **تاریخ:** {date_str}\n"
             result_text += f"وضعیت: {emoji} {condition}\n"
-            result_text += f"دما: از $ {min_t}^{{\\circ}}C $ تا $ {max_t}^{{\\circ}}C $\n"
+            result_text += f"دما: از {min_t}°C تا {max_t}°C\n"
             result_text += "➖➖➖➖➖➖➖\n"
 
         return result_text
