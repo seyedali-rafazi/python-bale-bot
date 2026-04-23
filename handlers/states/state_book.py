@@ -2,9 +2,11 @@
 
 import os
 import asyncio
-from telegram import Update
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
-from services.book import get_dbooks_download_url, download_pdf
+from core.state_manager import set_state, clear_state
+from core.constants import BTN_BACK
+from services.book import get_dbooks_download_url, download_pdf, search_books
 
 
 async def handle_book_state(
@@ -15,8 +17,43 @@ async def handle_book_state(
     chat_id: str,
     state_data: dict,
 ):
+    # --- مرحله اول: دریافت نام کتاب و جستجو ---
+    if step == "waiting_book_search":
+        query = text
+        await update.message.reply_text(f"⏳ در حال جستجو برای `{query}`...")
 
-    if step == "waiting_book_selection":
+        # جستجو در سرویس کتاب
+        results = await asyncio.to_thread(search_books, query)
+
+        if not results:
+            await update.message.reply_text("❌ متأسفانه کتابی پیدا نشد.")
+            clear_state(chat_id)  # خروج از وضعیت در صورت پیدا نشدن نتیجه
+            return
+
+        res_text = f"🔎 **نتایج برای:** {query}\n\n"
+        download_buttons = []
+
+        # ساخت لیست نتایج و دکمه‌های دانلود
+        for i, book in enumerate(results, 1):
+            res_text += f"{i}️⃣ **{book['title']}**\n👤 نویسنده: {book['author']}\n🌐 منبع: {book['source']}\n〰️〰️〰️\n"
+            if book.get("has_pdf"):
+                download_buttons.append(KeyboardButton(f"📥 دانلود شماره {i}"))
+
+        # چیدمان دکمه‌ها (دو تا در هر ردیف)
+        keyboard = [
+            download_buttons[i : i + 2] for i in range(0, len(download_buttons), 2)
+        ]
+        keyboard.append([KeyboardButton(BTN_BACK)])
+
+        # تغییر وضعیت به انتخاب کتاب و ذخیره نتایج در state_data
+        set_state(chat_id, "waiting_book_selection", books=results)
+
+        await update.message.reply_text(
+            res_text, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+    # --- مرحله دوم: انتخاب کتاب و دانلود ---
+    elif step == "waiting_book_selection":
         if text.startswith("📥 دانلود شماره "):
             try:
                 index = int(text.replace("📥 دانلود شماره ", "").strip()) - 1

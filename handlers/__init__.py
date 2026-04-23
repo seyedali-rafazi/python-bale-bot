@@ -3,9 +3,9 @@
 import re
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
-from .commands import cmd_start, cmd_book, cmd_tr
+from .commands import cmd_start, cmd_tr
 from .menus import (
-    btn_book_help,
+    btn_book_req,
     btn_weather_req,
     btn_yt_req,
     btn_ig_req,
@@ -43,7 +43,6 @@ def register_all_handlers(application):
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("book", cmd_book))
     application.add_handler(CommandHandler("tr", cmd_tr))
 
     # دکمه‌های بازگشت
@@ -52,9 +51,7 @@ def register_all_handlers(application):
     )
 
     # دکمه‌های منوی اصلی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_help)
-    )
+
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req)
     )
@@ -160,6 +157,11 @@ def register_all_handlers(application):
     # هندلر هواشناسی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_req)
+    )
+
+    # هندلر دانلود کتاب
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_req)
     )
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد

@@ -20,16 +20,6 @@ async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 
-async def btn_book_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = "📚 برای جستجوی کتاب دستور زیر را بفرستید:\n`/book [نام کتاب]`\nمثال: `/book python`"
-    await update.message.reply_text(
-        help_text,
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
 # یوتیوب
 
 
@@ -283,3 +273,19 @@ async def btn_weather_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # هواشناسی end
+
+# دانلود کتاب start
+
+
+async def btn_book_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_book_search")
+    await update.message.reply_text(
+        "📚 لطفاً نام کتاب مورد نظر خود را به صورت انگلیسی وارد کنید (مثال: python):",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+# دانلود کتاب end
