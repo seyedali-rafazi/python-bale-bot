@@ -1,64 +1,95 @@
 # handlers/states/state_insta.py
 
+import os
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import clear_state
-from core.keyboards import get_main_menu_keyboard
-from services.instagram import download_instagram_post, get_latest_post
-import os
+from services.instagram import (
+    download_instagram,
+    get_latest_post,
+)
 
 
 async def handle_insta_state(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, step, text, chat_id, state_data
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    step: str,
+    text: str,
+    chat_id: str,
+    state_data: dict,
 ):
-
-    await update.message.reply_text("⏳ در حال دانلود...")
-
     if step == "waiting_ig_link":
-        result = download_instagram_post(text)
+        if "instagram.com" not in text:
+            await update.message.reply_text("❌ لینک نامعتبر است.")
+            return
 
+        processing_msg = await update.message.reply_text(
+            "⏳ در حال دانلود از اینستاگرام... لطفا کمی صبر کنید"
+        )
+
+        try:
+            file_path = await asyncio.wait_for(
+                asyncio.to_thread(download_instagram, text), timeout=60.0
+            )
+
+            if file_path and os.path.exists(file_path):
+                try:
+                    if file_path.endswith(".mp4"):
+                        with open(file_path, "rb") as vid:
+                            await context.bot.send_video(chat_id=chat_id, video=vid)
+                    else:
+                        with open(file_path, "rb") as doc:
+                            await context.bot.send_document(
+                                chat_id=chat_id, document=doc
+                            )
+                finally:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                await processing_msg.delete()
+            else:
+                await processing_msg.edit_text(
+                    "❌ دانلود شکست خورد. ممکن است پیج پرایوت باشد."
+                )
+
+        except asyncio.TimeoutError:
+            await processing_msg.edit_text(
+                "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه). لطفا مجددا تلاش کنید."
+            )
+        except Exception as e:
+            print(f"Insta DL Error: {e}")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        return
+
+    # -------- بخش جدید برای آخرین پست --------
     elif step == "waiting_ig_last_post":
-        result = get_latest_post(text)
-
-    else:
-        # اگر استپ تعریف نشده بود، از تابع خارج شو
-        clear_state(chat_id)
-        await update.message.reply_text(
-            "خطای داخلی: وضعیت نامشخص.", reply_markup=get_main_menu_keyboard()
+        processing_msg = await update.message.reply_text(
+            "⏳ در حال بررسی پیج و دانلود آخرین پست..."
         )
-        return
+        try:
+            file_path = await asyncio.wait_for(get_latest_post(text), timeout=60.0)
 
-    if not result["success"]:
-        error_message = result.get("error", "خطا در دانلود")
-        await update.message.reply_text(f"❌ {error_message}")
-        clear_state(chat_id)
-        return
+            if file_path and os.path.exists(file_path):
+                try:
+                    if file_path.endswith(".mp4"):
+                        with open(file_path, "rb") as vid:
+                            await context.bot.send_video(chat_id=chat_id, video=vid)
+                    else:
+                        with open(file_path, "rb") as photo:
+                            await context.bot.send_photo(chat_id=chat_id, photo=photo)
+                finally:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                await processing_msg.delete()
+            else:
+                await processing_msg.edit_text(
+                    "❌ پست پیدا نشد. آیا مطمئنید پیج پابلیک (عمومی) است؟"
+                )
 
-    file_path = result["file"]
-    caption = result.get("caption", "")
-
-    try:
-        # بررسی می‌کنیم که فایل ویدئویی است یا عکس
-        if file_path.lower().endswith((".mp4", ".mov", ".avi")):
-            await update.message.reply_video(
-                video=open(file_path, "rb"),
-                caption=caption[:1024],  # محدودیت کپشن ویدئو بیشتر است
+        except asyncio.TimeoutError:
+            await processing_msg.edit_text(
+                "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
             )
-        else:  # برای بقیه فرمت‌ها مثل jpg, png, webp و...
-            await update.message.reply_photo(
-                photo=open(file_path, "rb"), caption=caption[:1024]
-            )
-
-    except Exception as e:
-        await update.message.reply_text(f"خطا در ارسال فایل: {e}")
-
-    finally:
-        # پاک کردن فایل دانلود شده برای جلوگیری از پر شدن حافظه
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-        clear_state(chat_id)
-
-        await update.message.reply_text(
-            "✅ انجام شد", reply_markup=get_main_menu_keyboard()
-        )
+        except Exception as e:
+            print(f"Insta Last Post Error: {e}")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        return
