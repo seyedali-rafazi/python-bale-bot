@@ -15,30 +15,17 @@ if not os.path.exists(DOWNLOAD_DIR):
 
 
 def get_instaloader_instance():
-    L = instaloader.Instaloader(
-        dirname_pattern=DOWNLOAD_DIR,
-        download_pictures=True,
-        download_video_thumbnails=False,
-        download_videos=True,
-        download_geotags=False,
-        download_comments=False,
-        save_metadata=False,
-        compress_json=False,
-    )
+    L = instaloader.Instaloader()
+    username = os.getenv("IG_USERNAME", "danny75479")
 
-    # تنظیم پروکسی
-    if PROXY:
-        L.context._session.proxies = {"http": PROXY, "https": PROXY}
-
-    # خواندن اطلاعات از فایل .env و لاگین کردن
-    ig_username = os.getenv("IG_USERNAME")
-    ig_password = os.getenv("IG_PASSWORD")
-
-    if ig_username and ig_password:
-        try:
-            L.login(ig_username, ig_password)
-        except Exception as e:
-            print(f"Instaloader Login Error: {e}")
+    try:
+        # ربات تلاش می‌کند از فایل سشنی که ساختید استفاده کند
+        L.load_session_from_file(username, filename=f"session_{username}")
+        print("✅ لاگین از طریق فایل سشن با موفقیت انجام شد.")
+    except FileNotFoundError:
+        print("❌ فایل سشن پیدا نشد! لطفا فایل سشن را کنار ربات قرار دهید.")
+    except Exception as e:
+        print(f"❌ خطای لاگین: {e}")
 
     return L
 
