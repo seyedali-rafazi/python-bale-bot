@@ -30,16 +30,6 @@ async def btn_book_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def btn_weather_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = "🌤 برای مشاهده آب و هوا از دستور `/weather` استفاده کنید.\nمثال:\n`/weather Shiraz`"
-    await update.message.reply_text(
-        help_text,
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
 # یوتیوب
 
 
@@ -277,3 +267,19 @@ async def btn_tr_en_fa_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ترجمه end
+
+# هواشناسی start
+
+
+async def btn_weather_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_weather_city")
+    await update.message.reply_text(
+        "🌍 لطفاً نام شهر مورد نظر خود را به صورت **انگلیسی** وارد کنید (مثال: Shiraz):",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+# هواشناسی end

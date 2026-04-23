@@ -3,10 +3,10 @@
 import re
 from telegram.ext import MessageHandler, CommandHandler, filters
 from core.constants import *
-from .commands import cmd_start, cmd_book, cmd_tr, cmd_weather
+from .commands import cmd_start, cmd_book, cmd_tr
 from .menus import (
     btn_book_help,
-    btn_weather_help,
+    btn_weather_req,
     btn_yt_req,
     btn_ig_req,
     btn_ig_link_dl_req,
@@ -45,7 +45,6 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("book", cmd_book))
     application.add_handler(CommandHandler("tr", cmd_tr))
-    application.add_handler(CommandHandler("weather", cmd_weather))
 
     # دکمه‌های بازگشت
     application.add_handler(
@@ -55,9 +54,6 @@ def register_all_handlers(application):
     # دکمه‌های منوی اصلی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_help)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_help)
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req)
@@ -80,7 +76,7 @@ def register_all_handlers(application):
         MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_IMAGE)}$"), btn_ai_image_req)
     )
 
-    # هندلرهای موسیقی (این بخش به اینجا منتقل شد!)
+    # هندلرهای موسیقی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu)
     )
@@ -159,6 +155,11 @@ def register_all_handlers(application):
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_TR_EN_FA)}$"), btn_tr_en_fa_req)
+    )
+
+    # هندلر هواشناسی
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_req)
     )
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
