@@ -1,87 +1,36 @@
 # services/instagram.py
 
 import os
-import instaloader
-import asyncio
+import re
 import yt_dlp
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
 PROXY = os.getenv("PROXY")
 DOWNLOAD_DIR = "ig_downloads"
 
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+Path(DOWNLOAD_DIR).mkdir(exist_ok=True)
 
 
-def get_instaloader_instance():
-    L = instaloader.Instaloader(
-        dirname_pattern=DOWNLOAD_DIR,
-        download_pictures=True,
-        download_video_thumbnails=False,
-        download_videos=True,
-        download_geotags=False,
-        download_comments=False,
-        save_metadata=False,
-        compress_json=False,
-    )
+def extract_username(text: str):
+    text = text.strip().strip("/").lstrip("@")
 
-    # تنظیم پروکسی
-    if PROXY:
-        L.context._session.proxies = {"http": PROXY, "https": PROXY}
-    return L
+    if "instagram.com" in text:
+        match = re.search(r"instagram\.com/([^/?]+)", text)
+        if match:
+            return match.group(1)
 
-
-def extract_username(text):
-    text = text.strip().strip("/")
-    if "instagram.com/" in text:
-        parts = text.split("instagram.com/")
-        username_part = parts[1].split("?")[0].split("/")[0]
-        return username_part
     return text
 
 
-def get_latest_post_sync(page_input):
-    username = extract_username(page_input)
-    L = get_instaloader_instance()
-
-    try:
-        profile = instaloader.Profile.from_username(L.context, username)
-        post = next(profile.get_posts())  # گرفتن اولین (آخرین) پست
-        L.download_post(post, target=DOWNLOAD_DIR)
-
-        # پیدا کردن فایل دانلود شده (ویدیو یا عکس)
-        downloaded_files = os.listdir(DOWNLOAD_DIR)
-        media_files = [
-            f
-            for f in downloaded_files
-            if f.endswith((".mp4", ".jpg")) and username in f
-        ]
-
-        if media_files:
-            # مرتب‌سازی بر اساس زمان تغییر تا جدیدترین فایل برگردانده شود
-            media_files.sort(
-                key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_DIR, x)),
-                reverse=True,
-            )
-            return os.path.join(DOWNLOAD_DIR, media_files[0])
-        return None
-    except Exception as e:
-        print(f"Error downloading post: {e}")
-        return None
-
-
-# تابع کمکی برای فراخوانی ناهمگام (Async)
-async def get_latest_post(page_input):
-    return await asyncio.to_thread(get_latest_post_sync, page_input)
-
-
-# اضافه شدن تابع دانلود با لینک مستقیم
-def download_instagram(url):
+def download_instagram_post(url: str):
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
+        "format": "best",
     }
 
     if PROXY:
@@ -90,8 +39,53 @@ def download_instagram(url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            return filename
+
+            if "entries" in info:
+                info = info["entries"][0]
+
+            file_path = ydl.prepare_filename(info)
+
+            return {
+                "success": True,
+                "file": file_path,
+                "caption": info.get("description", ""),
+            }
+
     except Exception as e:
-        print(f"Error downloading with yt-dlp: {e}")
-        return None
+        return {"success": False, "error": str(e)}
+
+
+def download_latest_post(username_or_url: str):
+    username = extract_username(username_or_url)
+
+    profile_url = f"https://www.instagram.com/{username}/"
+
+    ydl_opts = {
+        "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
+        "quiet": True,
+        "no_warnings": True,
+        "playlistend": 1,
+        "format": "best",
+    }
+
+    if PROXY:
+        ydl_opts["proxy"] = PROXY
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(profile_url, download=True)
+
+            if "entries" in info:
+                info = info["entries"][0]
+
+            file_path = ydl.prepare_filename(info)
+
+            return {
+                "success": True,
+                "file": file_path,
+                "caption": info.get("description", ""),
+                "url": info.get("webpage_url"),
+            }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}

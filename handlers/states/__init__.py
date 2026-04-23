@@ -1,3 +1,5 @@
+# handlers/states/__init__.py
+
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import get_state
