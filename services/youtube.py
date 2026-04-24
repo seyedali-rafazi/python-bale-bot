@@ -105,10 +105,8 @@ def download_youtube_video(url, progress_dict=None):
     ydl_opts = {
         "proxy": PROXY,
         "cookiefile": "www.youtube.com_cookies.txt",
-        # درخواست بهترین کیفیت ویدیو و صدا بدون محدودیت پسوند
-        "format": "bestvideo+bestaudio/best",
-        # اجبار به ترکیب فایل‌ها در قالب mp4 (نیازمند ffmpeg)
-        "merge_output_format": "mp4",
+        # استفاده از فرمت کد قدیمی که بدون مشکل کار می‌کرد
+        "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
         "noprogress": True,
