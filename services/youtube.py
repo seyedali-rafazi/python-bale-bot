@@ -106,7 +106,7 @@ def download_youtube_video(url, progress_dict=None):
         "proxy": PROXY,
         "cookiefile": "www.youtube.com_cookies.txt",
         # خط زیر تغییر کرده است:
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
         "noprogress": True,
