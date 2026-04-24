@@ -104,7 +104,7 @@ def download_youtube_video(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
-        "cookiefile": "www.youtube.com_cookies",
+        "cookiefile": "www.youtube.com_cookies.txt",
         "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
@@ -151,7 +151,7 @@ def download_youtube_audio(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
-        "cookiefile": "www.youtube.com_cookies",
+        "cookiefile": "www.youtube.com_cookies.txt",
         "format": "bestaudio/best",
         "postprocessors": [
             {
@@ -192,7 +192,7 @@ def download_youtube_audio(url, progress_dict=None):
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
         "proxy": PROXY,
-        "cookiefile": "www.youtube.com_cookies",
+        "cookiefile": "www.youtube.com_cookies.txt",
         "extract_flat": True,
         "quiet": True,
     }
