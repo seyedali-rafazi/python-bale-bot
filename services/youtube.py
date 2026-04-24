@@ -1,3 +1,5 @@
+# services/youtube.py
+
 import os
 import glob
 import yt_dlp
@@ -12,13 +14,11 @@ PROXY = os.getenv("PROXY")
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# محدودیت‌های جدید حجم
-MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024  # 300 مگابایت
-SPLIT_SIZE_LIMIT = 20 * 1024 * 1024  # 45 مگابایت
+MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
+SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 
 def get_video_duration(file_path):
-    """دریافت زمان کل ویدیو با استفاده از ffprobe"""
     try:
         cmd = [
             "ffprobe",
@@ -38,7 +38,6 @@ def get_video_duration(file_path):
 
 
 def split_video_if_needed(file_path):
-    """تکه‌تکه کردن ویدیو به پارت‌های کوچکتر برای عبور از محدودیت سرور"""
     file_size = os.path.getsize(file_path)
     if file_size <= SPLIT_SIZE_LIMIT:
         return [file_path]
@@ -47,14 +46,12 @@ def split_video_if_needed(file_path):
     if not duration:
         return [file_path]
 
-    # حجم هدف را به 25 مگابایت کاهش دادیم تا نوسانات بیت‌ریت باعث عبور از 50 مگ نشود
     safe_split_size = 15 * 1024 * 1024
     num_chunks = math.ceil(file_size / safe_split_size)
     segment_time = duration / num_chunks
 
     base_name, ext = os.path.splitext(file_path)
     output_pattern = f"{base_name}_part%03d{ext}"
-    
 
     cmd = [
         "ffmpeg",
@@ -72,52 +69,56 @@ def split_video_if_needed(file_path):
     ]
 
     try:
-        print(f"⏳ Splitting video into {num_chunks} parts (Safe mode)...")
         subprocess.run(
             cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        os.remove(file_path)  # حذف ویدیوی اصلی
-
-        # پیدا کردن پارت‌های ساخته شده
+        os.remove(file_path)
         parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
-
-        # بررسی نهایی برای اینکه مطمئن شویم هیچ پارتی از مرز 50 مگابایت (حدود 49 مگابایت برای اطمینان) عبور نکرده باشد
-        hard_limit = 49 * 1024 * 1024
-        for part in parts:
-            if os.path.getsize(part) > hard_limit:
-                print(f"⚠️ Warning: Part {part} is still over the limit!")
-
         return parts
     except Exception as e:
         print(f"Error splitting video: {e}")
         return [file_path]
 
 
-def download_youtube_video(url):
-    """دانلود ویدیو - تا سقف 300 مگابایت با پشتیبانی از چند کاربر همزمان"""
+def progress_hook(d, progress_dict):
+    """به‌روزرسانی درصد دانلود در دیکشنری مشترک"""
+    if progress_dict is None:
+        return
 
-    # تولید یک شناسه یکتا برای جلوگیری از تداخل دانلود کاربران
+    if d["status"] == "downloading":
+        percent = d.get("_percent_str", "N/A").strip()
+        speed = d.get("_speed_str", "N/A").strip()
+        eta = d.get("_eta_str", "N/A").strip()
+        progress_dict["text"] = (
+            f"📥 در حال دانلود: {percent}\n🚀 سرعت: {speed}\n⏳ زمان باقیمانده: {eta}"
+        )
+    elif d["status"] == "finished":
+        progress_dict["text"] = "✅ دانلود تکمیل شد! در حال آماده‌سازی فایل..."
+
+
+def download_youtube_video(url, progress_dict=None):
     req_id = uuid.uuid4().hex
+
+    def my_hook(d):
+        progress_hook(d, progress_dict)
 
     ydl_opts = {
         "proxy": PROXY,
         "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
-        "quiet": False,
+        "quiet": True,
+        "noprogress": True,
+        "progress_hooks": [my_hook] if progress_dict else [],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # فقط اطلاعات بگیر، دانلود نکن
             info = ydl.extract_info(url, download=False)
             filesize = info.get("filesize") or info.get("filesize_approx") or 0
-            size_mb = filesize / (1024 * 1024)
 
             if filesize > MAX_DOWNLOAD_SIZE:
-                print(f"❌ Too large: {size_mb:.1f} MB")
                 return "TOO_LARGE"
 
-            # سایز اوکیه، دانلود کن
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id", "unknown")
 
@@ -130,12 +131,10 @@ def download_youtube_video(url):
             final_file = files[0]
             actual_size = os.path.getsize(final_file)
 
-            # چک نهایی بعد دانلود
             if actual_size > MAX_DOWNLOAD_SIZE:
                 os.remove(final_file)
                 return "TOO_LARGE"
 
-            # تقسیم در صورت نیاز و بازگرداندن لیست فایل‌ها
             return split_video_if_needed(final_file)
 
     except Exception as e:
@@ -143,9 +142,12 @@ def download_youtube_video(url):
         return None
 
 
-def download_youtube_audio(url):
-    # این متد را برای جلوگیری از تداخل کاربران با UUID اصلاح کردیم
+def download_youtube_audio(url, progress_dict=None):
     req_id = uuid.uuid4().hex
+
+    def my_hook(d):
+        progress_hook(d, progress_dict)
+
     ydl_opts = {
         "proxy": PROXY,
         "format": "bestaudio/best",
@@ -157,13 +159,14 @@ def download_youtube_audio(url):
             }
         ],
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
-        "quiet": False,
+        "quiet": True,
+        "noprogress": True,
         "noplaylist": True,
+        "progress_hooks": [my_hook] if progress_dict else [],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"🔍 Extracting audio from: {url}")
             info = ydl.extract_info(url, download=True)
 
             title = info.get("title", "Unknown Title")
