@@ -1,12 +1,11 @@
 # handlers/commands.py
 
 import asyncio
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import clear_state, set_state
+from core.state_manager import clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.constants import BTN_BACK
-from services.book import search_books
 from services.translator import translate_text
 from services.weather import get_weather_forecast
 from core.database import add_user
