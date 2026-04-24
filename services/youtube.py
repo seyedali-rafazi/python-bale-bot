@@ -104,7 +104,6 @@ def download_youtube_video(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
-        "cookiefile": "www.youtube.com_cookies.txt",
         # استفاده از فرمت کد قدیمی که بدون مشکل کار می‌کرد
         "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
@@ -152,7 +151,6 @@ def download_youtube_audio(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
-        "cookiefile": "www.youtube.com_cookies.txt",
         "format": "bestaudio/best",
         "postprocessors": [
             {
