@@ -1,22 +1,50 @@
 # handlers/commands.py
 
 import asyncio
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import clear_state
 from core.keyboards import get_main_menu_keyboard
-from core.constants import BTN_BACK
 from services.translator import translate_text
 from services.weather import get_weather_forecast
 from core.database import add_user
+import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
+CHANNEL_ID = os.getenv("CHANNEL_ID")  
+CHANNEL_URL = os.getenv("CHANNEL_URL")  
+
+
+async def check_membership(bot, user_id):
+    if not CHANNEL_ID:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        if member.status in ["member", "administrator", "creator"]:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     username = update.effective_chat.username
 
-    # ثبت کاربر در دیتابیس (اگر قبلا نباشد اضافه میشود)
+    # ثبت کاربر در دیتابیس
     add_user(chat_id, username)
+
+    # بررسی جوین اجباری
+    is_member = await check_membership(context.bot, chat_id)
+    if not is_member:
+        keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
+        await update.message.reply_text(
+            "🛑 برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید.\nپس از عضویت مجدداً /start را ارسال کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
 
     clear_state(chat_id)
     await update.message.reply_text(

@@ -1,7 +1,8 @@
 # handlers/__init__.py
 
 import re
-from telegram.ext import MessageHandler, CommandHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import MessageHandler, CommandHandler, filters, ApplicationHandlerStop
 from core.constants import *
 from .commands import cmd_start, cmd_tr
 from .menus import (
@@ -34,13 +35,53 @@ from .menus import (
     btn_support_req,
 )
 from .states import process_state_input, process_photo_input
-from core.admin import cmd_stats, cmd_setvip
+from core.admin import cmd_stats, cmd_setvip, cmd_messageuser
+import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_URL = os.getenv("CHANNEL_URL")
+
+
+async def check_membership_middleware(update, context):
+    if not update.effective_user or not update.message:
+        return
+
+    user_id = update.effective_user.id
+
+    # اگر آیدی کانال تنظیم نشده بود، کاری نکن
+    if not CHANNEL_ID:
+        return
+
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        if member.status in ["member", "administrator", "creator"]:
+            return  # کاربر عضو است، ادامه کار ربات
+    except Exception:
+        pass  # کاربر عضو نیست یا ربات در کانال ادمین نیست
+
+    # اگر به اینجا رسیدیم یعنی کاربر عضو نیست
+    keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
+    await update.message.reply_text(
+        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\nپس از عضویت، مجدداً دکمه مورد نظر خود را بزنید.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    # متوقف کردن ادامه پردازش (تا ربات جواب دیگری ندهد)
+    raise ApplicationHandlerStop()
 
 
 def register_all_handlers(application):
+    # این خط باعث می‌شود قبل از هر دستوری، جوین اجباری چک شود (گروه 1-)
+    application.add_handler(
+        MessageHandler(filters.ALL, check_membership_middleware), group=-1
+    )
+
     # دستورات ادمین
     application.add_handler(CommandHandler("stats", cmd_stats))
     application.add_handler(CommandHandler("setvip", cmd_setvip))
+    application.add_handler(CommandHandler("messageuser", cmd_messageuser))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
