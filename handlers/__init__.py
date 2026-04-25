@@ -65,7 +65,8 @@ async def check_membership_middleware(update, context):
     # اگر به اینجا رسیدیم یعنی کاربر عضو نیست
     keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
     await update.message.reply_text(
-        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\nپس از عضویت، مجدداً دکمه مورد نظر خود را بزنید.",
+        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
+        "پس از عضویت در کانال، لطفاً دستور /start را برای ربات ارسال کنید.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     # متوقف کردن ادامه پردازش (تا ربات جواب دیگری ندهد)
