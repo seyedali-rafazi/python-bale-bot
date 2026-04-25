@@ -43,18 +43,28 @@ async def cmd_setvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ کاربر {target_user} {status_text}")
 
 
-async def cmd_messageuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_messageuser(update, context):
     chat_id = str(update.effective_chat.id)
-    if chat_id != ADMIN_ID:
+    if (
+        chat_id != ADMIN_ID
+    ):  # فرض بر این است که ADMIN_ID در این فایل ایمپورت یا تعریف شده است
         return
 
-    if not context.args:
+    # دریافت کل متن پیام ارسال شده توسط ادمین
+    text = update.message.text
+
+    # جدا کردن دستور (/messageuser) از متن اصلی
+    parts = text.split(maxsplit=1)
+
+    # بررسی اینکه آیا بعد از دستور، متنی هم نوشته شده است یا خیر
+    if len(parts) < 2:
         await update.message.reply_text(
-            "❌ متن پیام را وارد کنید.\nمثال: `/messageuser سلام کاربران عزیز`"
+            "❌ متن پیام را وارد کنید.\nمثال:\n`/messageuser سلام کاربران عزیز`"
         )
         return
 
-    message_text = " ".join(context.args)
+    # قسمت دوم (ایندکس 1) شامل تمام متن همراه با اینترها است
+    message_text = parts[1]
     users = get_all_users()
 
     await update.message.reply_text(
@@ -70,7 +80,7 @@ async def cmd_messageuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success += 1
         except Exception:
             fail += 1
-        await asyncio.sleep(0.05)  # جلوگیری از اسپم و بلاک شدن ربات
+        await asyncio.sleep(0.05)  # جلوگیری از اسپم
 
     await update.message.reply_text(
         f"✅ ارسال به پایان رسید!\nموفق: $ {success} $\nناموفق: $ {fail} $"
