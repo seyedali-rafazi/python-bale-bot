@@ -9,8 +9,12 @@ from duckduckgo_search import DDGS
 
 async def background_download(chat_id, bot, download_url, filename, caption):
     try:
+        # افزودن User-Agent برای جلوگیری از مسدود شدن توسط گوگل
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        }
         async with aiohttp.ClientSession() as session:
-            async with session.get(download_url) as response:
+            async with session.get(download_url, headers=headers) as response:
                 if response.status == 200:
                     file_bytes = await response.read()
                     await bot.send_document(
@@ -21,7 +25,8 @@ async def background_download(chat_id, bot, download_url, filename, caption):
                     )
                 else:
                     await bot.send_message(
-                        chat_id, "❌ خطا در دریافت فایل از سرور اصلی."
+                        chat_id,
+                        f"❌ خطا در دریافت فایل از سرور اصلی. کد خطا: {response.status}",
                     )
     except Exception as e:
         await bot.send_message(chat_id, f"❌ خطای غیرمنتظره در دانلود: {e}")
@@ -52,7 +57,8 @@ async def handle_programming_state(
             await update.message.reply_text(
                 "⏳ درخواست شما در صف دانلود (پس‌زمینه) قرار گرفت..."
             )
-            download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=49.0&acceptformat=crx3&x=id%3D{ext_id}%26installsource%3Dondemand%26uc"
+            # استفاده از پارامترهای جدیدتر برای دانلود
+            download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
 
             asyncio.create_task(
                 background_download(
@@ -66,12 +72,12 @@ async def handle_programming_state(
         else:
             await update.message.reply_text("🔍 در حال جستجوی نام افزونه...")
             try:
-                query = f"site:chromewebstore.google.com {text}"
+                # حذف کلمه site: برای نتایج بهتر در داک‌داک‌گو
+                query = f"chrome web store extension {text}"
 
-                # اجرای جستجو در یک ترد جداگانه تا ربات مسدود نشود
                 def perform_search(q):
                     with DDGS() as ddgs:
-                        return list(ddgs.text(q, max_results=3))
+                        return list(ddgs.text(q, max_results=5))
 
                 results = await asyncio.to_thread(perform_search, query)
 
@@ -80,25 +86,29 @@ async def handle_programming_state(
                 else:
                     keyboard = []
                     response_msg = "✅ **نتایج یافت شده:**\n\n"
+                    count = 1
 
-                    for idx, res in enumerate(results, 1):
-                        title = res.get("title", "بدون عنوان").replace(
-                            " - Chrome Web Store", ""
-                        )
+                    for res in results:
                         link = res.get("href", "")
-                        ext_id_match = re.search(r"([a-z]{32})", link)
+                        if (
+                            "chromewebstore.google.com" in link
+                            or "chrome.google.com/webstore" in link
+                        ):
+                            title = res.get("title", "بدون عنوان").split("-")[0].strip()
+                            ext_id_match = re.search(r"([a-z]{32})", link)
 
-                        if ext_id_match:
-                            ext_id = ext_id_match.group(1)
-                            response_msg += f"{idx}. **{title}**\n"
-                            keyboard.append(
-                                [
-                                    InlineKeyboardButton(
-                                        f"📥 دانلود گزینه {idx}",
-                                        callback_data=f"dlchrome_{ext_id}",
-                                    )
-                                ]
-                            )
+                            if ext_id_match and count <= 3:
+                                ext_id = ext_id_match.group(1)
+                                response_msg += f"{count}. **{title}**\n"
+                                keyboard.append(
+                                    [
+                                        InlineKeyboardButton(
+                                            f"📥 دانلود گزینه {count}",
+                                            callback_data=f"dlchrome_{ext_id}",
+                                        )
+                                    ]
+                                )
+                                count += 1
 
                     if keyboard:
                         await update.message.reply_text(
@@ -107,9 +117,11 @@ async def handle_programming_state(
                             parse_mode="Markdown",
                         )
                     else:
-                        await update.message.reply_text("❌ شناسه‌ای یافت نشد.")
-            except Exception:
-                await update.message.reply_text("❌ خطا در جستجو.")
+                        await update.message.reply_text(
+                            "❌ شناسه‌ای در نتایج جستجو یافت نشد. لطفاً لینک یا ID دقیق را ارسال کنید."
+                        )
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطا در جستجو: {e}")
 
     elif step == "waiting_prog_firefox":
         await update.message.reply_text("⏳ در صف دانلود...")
@@ -163,7 +175,6 @@ async def handle_programming_state(
         )
 
 
-# پردازش دکمه‌های شیشه‌ای کروم
 async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -174,7 +185,7 @@ async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_T
         chat_id = query.message.chat_id
 
         await query.message.reply_text("⏳ دانلود در پس‌زمینه شروع شد...")
-        download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=49.0&acceptformat=crx3&x=id%3D{ext_id}%26installsource%3Dondemand%26uc"
+        download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
 
         asyncio.create_task(
             background_download(
