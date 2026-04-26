@@ -347,16 +347,9 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📆 اولین استفاده: {join_date}
 
 ⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
-• استفادهٔ عمومی: {general_count}/{gen_limit}
-• ترجمه: {translation_count}/{tr_limit}
-• یوتیوب — جستجو / دانلود: {yt_count}/{yt_limit}
-• سرچ وب (Tavily): {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
-• مقاله — جست‌وجو / دانلود: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
-• کتاب OA — جست‌وجو / دانلود: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
-• Kaggle — جست‌وجو / دانلود ZIP: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
-• تلگرام /tgposts: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+• یوتیوب  / دانلود: {yt_count}/{yt_limit}
 
-📥 دانلود لینک مستقیم: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو — حداکثر 1024 مگابایت"}"""
+"""
 
     await update.message.reply_text(profile_text, parse_mode="Markdown")
 
