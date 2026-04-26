@@ -4,7 +4,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import clear_state
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 
 async def background_download(chat_id, bot, download_url, filename, caption):
