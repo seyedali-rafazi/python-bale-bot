@@ -49,6 +49,24 @@ def init_db():
     conn.close()
 
 
+def add_user(user_id, username):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO users (user_id, username, is_vip, join_date, yt_count, yt_date) 
+        VALUES (?, ?, 0, ?, 0, ?)
+    """,
+        (user_id, username, join_date, today),
+    )
+
+    conn.commit()
+    conn.close()
+
+
 def is_vip(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
