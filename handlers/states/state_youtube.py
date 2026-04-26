@@ -1,5 +1,6 @@
 # handlers/states/state_youtube.py
 
+
 import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -7,17 +8,24 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
+from core.database import is_vip, get_yt_downloads, increment_yt_downloads
 from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
     search_yt_videos,
 )
 
-# متغیر سراسری برای شمارش افراد در صف
 active_downloads = 0
-# محدودکننده دانلودهای همزمان به 2 عدد
 MAX_CONCURRENT_DOWNLOADS = 2
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+
+def check_user_limit(chat_id: str) -> bool:
+    """بررسی اینکه آیا کاربر مجاز به دانلود جدید است یا خیر."""
+    vip_status = is_vip(chat_id)
+    limit = 10 if vip_status else 3
+    usage = get_yt_downloads(chat_id)
+    return usage < limit
 
 
 async def background_yt_download(
@@ -29,11 +37,10 @@ async def background_yt_download(
 
     status_msg = await context.bot.send_message(
         chat_id=chat_id,
-        text=f"⏳ درخواست شما ثبت شد.\nشما نفر {queue_pos} در کل صف (در حال انجام + منتظر) هستید.\nلطفاً تا خالی شدن ظرفیت منتظر بمانید...",
+        text=f"⏳ درخواست شما ثبت شد.\nشما نفر {queue_pos} در کل صف هستید.\nلطفاً تا خالی شدن ظرفیت منتظر بمانید...",
     )
 
     try:
-        # منتظر ماندن در صف تا زمانی که نوبت کاربر برسد (حداکثر 2 پردازش همزمان)
         async with download_semaphore:
             progress_dict = {"text": "شروع پردازش...", "is_finished": False}
 
@@ -51,9 +58,7 @@ async def background_yt_download(
                             last_text = current_text
                         except Exception:
                             pass
-                    await asyncio.sleep(
-                        3
-                    )  # آپدیت هر 3 ثانیه برای جلوگیری از لیمیت شدن تلگرام
+                    await asyncio.sleep(3)
 
             updater_task = asyncio.create_task(update_progress_message())
 
@@ -67,7 +72,7 @@ async def background_yt_download(
                     if result == "TOO_LARGE":
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.\nلطفاً ویدیوی کم‌حجم‌تری انتخاب کن.",
+                            text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                         )
                     elif isinstance(result, list) and len(result) > 0:
                         try:
@@ -98,6 +103,9 @@ async def background_yt_download(
                             await context.bot.send_message(
                                 chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
                             )
+                            # ثبت دانلود موفق در دیتابیس
+                            increment_yt_downloads(chat_id)
+
                         except Exception as send_err:
                             print(f"❌ Send error: {send_err}")
                             await context.bot.send_message(
@@ -135,6 +143,8 @@ async def background_yt_download(
                                     write_timeout=300,
                                     connect_timeout=60,
                                 )
+                            # ثبت دانلود موفق در دیتابیس
+                            increment_yt_downloads(chat_id)
                         finally:
                             if os.path.exists(file_path):
                                 os.remove(file_path)
@@ -244,6 +254,12 @@ async def handle_youtube_state(
 
     elif step == "waiting_yt_selection":
         if text.startswith("📥 دانلود ویدیو "):
+            if not check_user_limit(chat_id):
+                await update.message.reply_text(
+                    "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+                )
+                return
+
             try:
                 index = int(text.replace("📥 دانلود ویدیو ", "").strip()) - 1
                 videos = state_data.get("videos", [])
@@ -284,6 +300,12 @@ async def handle_youtube_state(
             )
             return
 
+        if not check_user_limit(chat_id):
+            await update.message.reply_text(
+                "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+            )
+            return
+
         if dl_format == "video":
             asyncio.create_task(background_yt_download(context, text, chat_id, "video"))
         elif dl_format == "audio":
@@ -293,6 +315,12 @@ async def handle_youtube_state(
 
     elif step == "waiting_yt_format":
         url = state_data.get("yt_url")
+
+        if not check_user_limit(chat_id):
+            await update.message.reply_text(
+                "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+            )
+            return
 
         if text == BTN_YT_VIDEO:
             asyncio.create_task(background_yt_download(context, url, chat_id, "video"))

@@ -1,5 +1,6 @@
 # core/database.py
 
+
 import sqlite3
 from datetime import datetime
 
@@ -9,7 +10,8 @@ DB_NAME = "bot_data.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # جدول کاربران
+
+    # 1. ساخت جدول کاربران (در صورتی که کلا وجود نداشته باشد)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
@@ -18,7 +20,22 @@ def init_db():
             join_date TEXT
         )
     """)
-    # جدول آمار استفاده روزانه
+
+    # --- آپدیت خودکار دیتابیس (Migration) ---
+    # چک کردن ستون‌های فعلی جدول کاربران
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+
+    # اگر ستون شمارش یوتیوب نبود، آن را اضافه کن
+    if "yt_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN yt_count INTEGER DEFAULT 0")
+
+    # اگر ستون تاریخ یوتیوب نبود، آن را اضافه کن
+    if "yt_date" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN yt_date TEXT")
+    # ----------------------------------------
+
+    # 2. ساخت جدول آمار استفاده روزانه (عمومی)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usage_stats (
             user_id TEXT,
@@ -28,18 +45,6 @@ def init_db():
             PRIMARY KEY (user_id, action, date)
         )
     """)
-    conn.commit()
-    conn.close()
-
-
-def add_user(user_id, username=None):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute(
-        "INSERT OR IGNORE INTO users (user_id, username, join_date) VALUES (?, ?, ?)",
-        (user_id, username, today),
-    )
     conn.commit()
     conn.close()
 
@@ -59,6 +64,52 @@ def set_vip(user_id, status: int):
     cursor.execute("UPDATE users SET is_vip = ? WHERE user_id = ?", (status, user_id))
     conn.commit()
     conn.close()
+
+
+# ----------- بخش مربوط به دانلودهای یوتیوب -----------
+
+
+def get_yt_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        count, db_date = result
+        if db_date != today:
+            return 0  # اگر روز جدید شده، مصرف 0 در نظر گرفته می‌شود
+        return count
+    return 0
+
+
+def increment_yt_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    cursor.execute("SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+
+    if result:
+        count, db_date = result
+        if db_date != today:
+            new_count = 1
+        else:
+            new_count = count + 1
+        cursor.execute(
+            "UPDATE users SET yt_count = ?, yt_date = ? WHERE user_id = ?",
+            (new_count, today, user_id),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+# -----------------------------------------------------
 
 
 def log_usage(user_id, action):
