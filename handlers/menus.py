@@ -19,6 +19,7 @@ from core.keyboards import (
     get_translation_menu_keyboard,
     get_programming_menu_keyboard,
 )
+from core.database import get_user_info, get_yt_downloads, get_user_usage_today
 
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -311,6 +312,53 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "برای ارتباط با پشتیبانی، طرح پیشنهادات و گزارش مشکلات، روی دکمه زیر کلیک کنید:",
         reply_markup=reply_markup,
     )
+
+
+async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_chat.id)
+    user_info = get_user_info(user_id)
+
+    if not user_info:
+        await update.message.reply_text(
+            "❌ اطلاعات شما یافت نشد. لطفاً دستور /start را ارسال کنید."
+        )
+        return
+
+    username, is_vip_status, join_date = user_info
+    username_str = f"@{username}" if username else "ندارد"
+    vip_str = "💎 ویژه (پرو)" if is_vip_status == 1 else "🆓 رایگان"
+
+    # دریافت آمار مصرف (فرض بر این است که برای بخش عمومی و ترجمه از log_usage استفاده می‌کنید)
+    # اگر اسامی اکشن‌ها متفاوت است، آن‌ها را با نام‌های خودتان در دیتابیس جایگزین کنید
+    yt_count = get_yt_downloads(user_id)
+    general_count = get_user_usage_today(user_id, "general")
+    translation_count = get_user_usage_today(user_id, "translation")
+
+    # بررسی محدودیت‌ها
+    gen_limit = "∞" if is_vip_status == 1 else "10"
+    tr_limit = "∞" if is_vip_status == 1 else "10"
+    yt_limit = "10" if is_vip_status == 1 else "3"  # لیمیت فرضی یوتیوب
+
+    # ساختار متن
+    profile_text = f"""🪪 **مشخصات شما**
+🆔 ایدی عددی: `{user_id}`
+👤 یوزرنیم: {username_str}
+📊 وضعیت اشتراک: {vip_str}
+📆 اولین استفاده: {join_date}
+
+⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
+• استفادهٔ عمومی: {general_count}/{gen_limit}
+• ترجمه: {translation_count}/{tr_limit}
+• یوتیوب — جستجو / دانلود: {yt_count}/{yt_limit}
+• سرچ وب (Tavily): {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+• مقاله — جست‌وجو / دانلود: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+• کتاب OA — جست‌وجو / دانلود: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+• Kaggle — جست‌وجو / دانلود ZIP: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+• تلگرام /tgposts: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو"}
+
+📥 دانلود لینک مستقیم: {"آماده استفاده" if is_vip_status == 1 else "فقط پرو — حداکثر 1024 مگابایت"}"""
+
+    await update.message.reply_text(profile_text, parse_mode="Markdown")
 
 
 # پشتیبانی end

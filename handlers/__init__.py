@@ -43,6 +43,7 @@ from .menus import (
     btn_prog_chrome_req,
     btn_prog_firefox_req,
     btn_prog_vscode_req,
+    btn_profile_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip, cmd_messageuser
@@ -218,7 +219,7 @@ def register_all_handlers(application):
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_req)
     )
 
-    # هندلرهای منوی برنامه‌نویسی (این‌ها را قبل از MessageHandler مربوط به Stateها قرار دهید)
+    # هندلرهای منوی برنامه‌نویسی
     application.add_handler(
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_PROGRAMMING)}$"), btn_programming_menu
@@ -248,6 +249,9 @@ def register_all_handlers(application):
     # هندلر پشتیبانی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
     )
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(

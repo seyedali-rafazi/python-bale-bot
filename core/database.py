@@ -84,6 +84,17 @@ def set_vip(user_id, status: int):
     conn.close()
 
 
+def get_user_info(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT username, is_vip, join_date FROM users WHERE user_id = ?", (user_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+
 # ----------- بخش مربوط به دانلودهای یوتیوب -----------
 
 
