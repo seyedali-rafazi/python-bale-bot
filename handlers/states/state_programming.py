@@ -4,7 +4,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import clear_state
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import DDGS
 
 
 async def background_download(chat_id, bot, download_url, filename, caption):
@@ -67,7 +67,13 @@ async def handle_programming_state(
             await update.message.reply_text("🔍 در حال جستجوی نام افزونه...")
             try:
                 query = f"site:chromewebstore.google.com {text}"
-                results = await AsyncDDGS().atext(query, max_results=3)
+
+                # اجرای جستجو در یک ترد جداگانه تا ربات مسدود نشود
+                def perform_search(q):
+                    with DDGS() as ddgs:
+                        return list(ddgs.text(q, max_results=3))
+
+                results = await asyncio.to_thread(perform_search, query)
 
                 if not results:
                     await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
