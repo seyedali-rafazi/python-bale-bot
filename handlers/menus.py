@@ -349,11 +349,4 @@ async def btn_prog_vscode_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def btn_prog_docs_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📚 به دلیل ساختار داینامیک داکیومنت‌ها، دانلود مستقیم PDF امکان‌پذیر نیست.\n\n"
-        "💡 پیشنهاد: از نرم‌افزار **Zeal** (برای ویندوز/لینوکس) یا **Dash** (برای مک) جهت دانلود آفلاین داکیومنت زبان‌های برنامه‌نویسی استفاده کنید."
-    )
-
-
 # برنامه نویسی end

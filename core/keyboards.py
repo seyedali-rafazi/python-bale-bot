@@ -79,7 +79,7 @@ def get_translation_menu_keyboard():
 def get_programming_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROG_CHROME), KeyboardButton(BTN_PROG_FIREFOX)],
-        [KeyboardButton(BTN_PROG_VSCODE), KeyboardButton(BTN_PROG_DOCS)],
+        [KeyboardButton(BTN_PROG_VSCODE)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
