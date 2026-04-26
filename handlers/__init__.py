@@ -2,7 +2,7 @@
 
 import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import MessageHandler, CommandHandler, filters, ApplicationHandlerStop
+from telegram.ext import MessageHandler, CommandHandler, filters, ApplicationHandlerStop , CallbackQueryHandler
 from core.constants import *
 from .commands import cmd_start, cmd_tr
 from .menus import (
@@ -33,11 +33,18 @@ from .menus import (
     btn_tr_fa_en_req,
     btn_tr_en_fa_req,
     btn_support_req,
+    btn_programming_menu,
+    btn_prog_chrome_req,
+    btn_prog_firefox_req,
+    btn_prog_vscode_req,
+    btn_prog_docs_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip, cmd_messageuser
 import os
 from dotenv import load_dotenv
+from .states.state_programming import handle_chrome_callback
+
 
 
 load_dotenv()
@@ -205,6 +212,38 @@ def register_all_handlers(application):
     # هندلر دانلود کتاب
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_req)
+    )
+
+    # هندلرهای منوی برنامه‌نویسی (این‌ها را قبل از MessageHandler مربوط به Stateها قرار دهید)
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROGRAMMING)}$"), btn_programming_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROG_CHROME)}$"), btn_prog_chrome_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROG_FIREFOX)}$"), btn_prog_firefox_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROG_VSCODE)}$"), btn_prog_vscode_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROG_DOCS)}$"), btn_prog_docs_req
+        )
+    )
+
+    # ثبت کال‌بک دکمه‌های شیشه‌ای (جستجوی کروم)
+    application.add_handler(
+        CallbackQueryHandler(handle_chrome_callback, pattern=r"^dlchrome_")
     )
 
     # هندلر پشتیبانی

@@ -3,8 +3,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import get_state
-
-# ایمپورت توابع از فایل‌های خرد شده
+from .state_programming import handle_programming_state
 from .state_book import handle_book_state
 from .state_youtube import handle_youtube_state
 from .state_insta import handle_insta_state
@@ -56,6 +55,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step.startswith("waiting_weather"):
         await handle_weather_state(update, context, step, text, chat_id, state_data)
+
+    elif step.startswith("waiting_prog"):
+        await handle_programming_state(update, context, step, text, chat_id, state_data)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

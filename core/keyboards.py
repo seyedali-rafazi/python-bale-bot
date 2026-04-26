@@ -10,6 +10,7 @@ def get_main_menu_keyboard():
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
         [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)],
         [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)],
+        [KeyboardButton(BTN_PROGRAMMING)],
         [KeyboardButton(BTN_SUPPORT)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -70,6 +71,15 @@ def get_translation_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_TR_FA_EN)],
         [KeyboardButton(BTN_TR_EN_FA)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_programming_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_PROG_CHROME), KeyboardButton(BTN_PROG_FIREFOX)],
+        [KeyboardButton(BTN_PROG_VSCODE), KeyboardButton(BTN_PROG_DOCS)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

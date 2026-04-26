@@ -17,6 +17,7 @@ from core.keyboards import (
     get_youtube_menu_keyboard,
     get_insta_menu_keyboard,
     get_translation_menu_keyboard,
+    get_programming_menu_keyboard,
 )
 
 
@@ -313,3 +314,46 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # پشتیبانی end
+
+# برنامه نویسی start
+
+
+async def btn_programming_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👨‍💻 به بخش برنامه‌نویسی خوش آمدید. چه افزونه‌ای نیاز دارید؟",
+        reply_markup=get_programming_menu_keyboard(),
+    )
+
+
+async def btn_prog_chrome_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_prog_chrome")
+    await update.message.reply_text(
+        "🌐 لینک، نام افزونه یا ID (32 کاراکتری) افزونه کروم را ارسال کنید:"
+    )
+
+
+async def btn_prog_firefox_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_prog_firefox")
+    await update.message.reply_text(
+        "🦊 نام افزونه فایرفاکس را جهت جستجو و دانلود ارسال کنید:"
+    )
+
+
+async def btn_prog_vscode_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_prog_vscode")
+    await update.message.reply_text(
+        "💻 شناسه دقیق افزونه VS Code (مثال: esbenp.prettier-vscode) را ارسال کنید:"
+    )
+
+
+async def btn_prog_docs_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📚 به دلیل ساختار داینامیک داکیومنت‌ها، دانلود مستقیم PDF امکان‌پذیر نیست.\n\n"
+        "💡 پیشنهاد: از نرم‌افزار **Zeal** (برای ویندوز/لینوکس) یا **Dash** (برای مک) جهت دانلود آفلاین داکیومنت زبان‌های برنامه‌نویسی استفاده کنید."
+    )
+
+
+# برنامه نویسی end

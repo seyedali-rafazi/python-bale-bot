@@ -38,3 +38,10 @@ BTN_TR_EN_FA = "🇬🇧 انگلیسی به 🇮🇷 فارسی"
 # پشتبانی
 BTN_SUPPORT = "👨‍💻 پشتیبانی و مشکلات"
 BALE_SUPPORT_URL = "https://ble.ir/digiachar_admin"
+
+# منوی برنامه‌نویسی
+BTN_PROGRAMMING = "👨‍💻 برنامه‌نویسی و افزونه"
+BTN_PROG_CHROME = "🌐 افزونه کروم"
+BTN_PROG_FIREFOX = "🦊 افزونه فایرفاکس"
+BTN_PROG_VSCODE = "💻 افزونه VS Code"
+BTN_PROG_DOCS = "📚 داکیومنت‌ها"
