@@ -27,8 +27,8 @@ async def background_download_task(
     context, chat_id, track_id, title, performer, safe_filename
 ):
     try:
-        # فراخوانی تابع دانلود
-        file_path = await download_youtube_audio(track_id)
+        # فراخوانی تابع دانلود در یک ترد جداگانه (حل مشکل هنگ کردن ربات)
+        file_path = await asyncio.to_thread(download_youtube_audio, track_id)
 
         if file_path and os.path.exists(file_path):
             with open(file_path, "rb") as aud:
@@ -217,7 +217,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("dltrack_"):
         track_id = data.split("_", 1)[1]
 
-        # 1. بررسی محدودیت کاربر (کاربر عادی 6، کاربر ویژه 20)
+        # 1. بررسی محدودیت کاربر
         user_vip_status = is_vip(chat_id)
         limit = 20 if user_vip_status else 6
         current_downloads = get_music_downloads(chat_id)
