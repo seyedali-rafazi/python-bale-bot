@@ -147,16 +147,20 @@ def download_youtube_audio(url, progress_dict=None):
     req_id = uuid.uuid4().hex
 
     def my_hook(d):
-        progress_hook(d, progress_dict)
+        if progress_dict is not None:
+            progress_hook(d, progress_dict)
 
     ydl_opts = {
-        "proxy": PROXY,
+        "proxy": PROXY,  # اعمال پروکسی
         "format": "bestaudio/best",
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
+            },
+            {
+                "key": "FFmpegMetadata", # اضافه کردن متادیتا به فایل صوتی
             }
         ],
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
@@ -170,8 +174,10 @@ def download_youtube_audio(url, progress_dict=None):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-            title = info.get("title", "Unknown Title")
-            performer = info.get("uploader", "Unknown Artist")
+            # تلاش برای گرفتن نام اصلی آهنگ و خواننده (در صورت نبود، از نام ویدیو و کانال استفاده می‌شود)
+            title = info.get("track") or info.get("title") or "Unknown Title"
+            performer = info.get("artist") or info.get("creator") or info.get("uploader") or "Unknown Artist"
+            
             video_id = info.get("id", "unknown")
 
             pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
@@ -186,7 +192,6 @@ def download_youtube_audio(url, progress_dict=None):
     except Exception as e:
         print(f"❌ Error downloading audio: {e}")
         return None, None, None
-
 
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
