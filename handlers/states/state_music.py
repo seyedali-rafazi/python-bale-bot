@@ -4,6 +4,10 @@ import os
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
+
+# وارد کردن توابع دیتابیس برای بررسی وضعیت کاربر و محدودیت‌ها
+from core.database import is_vip, get_music_downloads, increment_music_downloads
+
 from services.music import (
     search_track,
     search_album,
@@ -16,6 +20,38 @@ from services.music import (
 
 # فرض بر این است که تابع دانلود یوتیوب در این مسیر قرار دارد
 from services.youtube import download_youtube_audio
+
+
+# --- تابع پردازش در پس‌زمینه (برای جلوگیری از هنگ کردن ربات) ---
+async def background_download_task(
+    context, chat_id, track_id, title, performer, safe_filename
+):
+    try:
+        # فراخوانی تابع دانلود
+        file_path = await download_youtube_audio(track_id)
+
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as aud:
+                await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=aud,
+                    title=title,
+                    performer=performer,
+                    filename=f"{safe_filename}.mp3",
+                )
+            # حذف فایل پس از ارسال موفق
+            os.remove(file_path)
+        else:
+            await context.bot.send_message(
+                chat_id, "❌ دانلود شکست خورد یا فایل یافت نشد."
+            )
+
+    except Exception as e:
+        print(f"Download Error: {e}")
+        await context.bot.send_message(chat_id, "❌ خطایی در فرآیند دانلود رخ داد.")
+
+
+# ----------------------------------------------------------------
 
 
 async def handle_music_state(
@@ -180,8 +216,23 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("dltrack_"):
         track_id = data.split("_", 1)[1]
+
+        # 1. بررسی محدودیت کاربر (کاربر عادی 6، کاربر ویژه 20)
+        user_vip_status = is_vip(chat_id)
+        limit = 20 if user_vip_status else 6
+        current_downloads = get_music_downloads(chat_id)
+
+        if current_downloads >= limit:
+            await query.message.reply_text(
+                f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ($ {limit} $ آهنگ).\nفردا مجدداً تلاش کنید."
+            )
+            return
+
+        # 2. ثبت یک دانلود جدید برای کاربر
+        increment_music_downloads(chat_id)
+
         await query.message.reply_text(
-            "⏳ در حال دانلود آهنگ از سرور... لطفا صبور باشید."
+            "⏳ آهنگ در صف دانلود قرار گرفت و در پس‌زمینه در حال پردازش است.\nشما می‌توانید به کار با ربات ادامه دهید."
         )
 
         # پیدا کردن متن دکمه‌ای که کاربر روی آن کلیک کرده برای استخراج نام و خواننده
@@ -193,7 +244,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         button_text = btn.text
                         break
 
-        # جدا کردن نام آهنگ و خواننده (در مرحله جستجو فرمت "Title - Artist" بود)
+        # جدا کردن نام آهنگ و خواننده
         title = button_text
         performer = "YouTube Music"
 
@@ -205,29 +256,14 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             except ValueError:
                 pass
 
-        try:
-            # فراخوانی تابع دانلودی که ساختیم
-            file_path = await download_youtube_audio(track_id)
+        # تمیز کردن نام فایل برای جلوگیری از خطای تلگرام
+        safe_filename = "".join(
+            c for c in button_text if c.isalnum() or c in " -_"
+        ).strip()
 
-            if file_path and os.path.exists(file_path):
-                # تمیز کردن نام فایل برای جلوگیری از خطای تلگرام (حذف کاراکترهای خاص)
-                safe_filename = "".join(
-                    c for c in button_text if c.isalnum() or c in " -_"
-                ).strip()
-
-                with open(file_path, "rb") as aud:
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=aud,
-                        title=title,
-                        performer=performer,
-                        filename=f"{safe_filename}.mp3",  # ارسال نام تمیز به جای آیدی یوتیوب
-                    )
-                # حذف فایل پس از ارسال موفق
-                os.remove(file_path)
-            else:
-                await query.message.reply_text("❌ دانلود شکست خورد یا فایل یافت نشد.")
-
-        except Exception as e:
-            print(f"Download Error: {e}")
-            await query.message.reply_text("❌ خطایی در فرآیند دانلود رخ داد.")
+        # 3. ایجاد تسک در پس‌زمینه (برای جلوگیری از هنگ کردن ربات)
+        asyncio.create_task(
+            background_download_task(
+                context, chat_id, track_id, title, performer, safe_filename
+            )
+        )
