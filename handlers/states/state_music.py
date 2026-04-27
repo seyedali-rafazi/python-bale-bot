@@ -62,7 +62,7 @@ async def background_download_task(
                     await context.bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=status_msg.message_id,
-                        text="📤 دانلود تکمیل شد! در حال آپلود فایل به تلگرام...",
+                        text="📤 دانلود تکمیل شد! در حال آپلود فایل به بله...",
                     )
                 except Exception:
                     pass
@@ -203,7 +203,7 @@ async def handle_music_state(
 async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # جلوگیری از کرش ربات در صورت قطعی یا کندی سرور تلگرام
+    # جلوگیری از کرش ربات در صورت قطعی یا کندی سرور بله
     try:
         await query.answer()
     except Exception as e:
@@ -307,7 +307,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             except ValueError:
                 pass
 
-        # تمیز کردن نام فایل برای جلوگیری از خطای تلگرام
+        # تمیز کردن نام فایل برای جلوگیری از خطای بله
         safe_filename = "".join(
             c for c in button_text if c.isalnum() or c in " -_"
         ).strip()

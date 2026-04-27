@@ -143,8 +143,12 @@ def download_youtube_video(url, progress_dict=None):
         return None
 
 
-def download_youtube_audio(video_id: str) -> str:
-    url = f"https://www.youtube.com/watch?v={video_id}"
+def download_youtube_audio(video_id_or_url: str) -> str:
+    # بررسی اینکه ورودی لینک است یا فقط آیدی
+    if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
+        url = video_id_or_url
+    else:
+        url = f"https://www.youtube.com/watch?v={video_id_or_url}"
 
     ydl_opts = {
         "format": "bestaudio/best",
@@ -157,13 +161,16 @@ def download_youtube_audio(video_id: str) -> str:
             }
         ],
         "quiet": True,
-        "proxy": PROXY,
+        # "proxy": PROXY, # اگر متغیر PROXY را در فایل دارید از کامنت در بیاورید
         "no_warnings": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+            # استفاده از extract_info برای دانلود و گرفتن آیدی دقیق ویدیو جهت نام فایل
+            info = ydl.extract_info(url, download=True)
+            video_id = info.get("id")
+
             file_path = f"downloads/{video_id}.mp3"
 
             if os.path.exists(file_path):
