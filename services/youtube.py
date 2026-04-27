@@ -156,8 +156,8 @@ def download_youtube_audio(video_id: str) -> str:
                 "preferredquality": "192",
             }
         ],
-        # "proxy": PROXY, # در صورت نیاز فعال کنید
         "quiet": True,
+        "proxy": PROXY,
         "no_warnings": True,
     }
 
