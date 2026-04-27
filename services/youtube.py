@@ -160,8 +160,8 @@ def download_youtube_audio(video_id_or_url: str) -> str:
                 "preferredquality": "192",
             }
         ],
+        "proxy": PROXY,
         "quiet": True,
-        # "proxy": PROXY, # اگر متغیر PROXY را در فایل دارید از کامنت در بیاورید
         "no_warnings": True,
     }
 
