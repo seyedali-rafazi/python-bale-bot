@@ -306,15 +306,11 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # دریافت آمار مصرف
     yt_count = get_yt_downloads(user_id)
-    general_count = get_user_usage_today(user_id, "general")
-    translation_count = get_user_usage_today(user_id, "translation")
-    music_count = get_music_downloads(user_id)  # دریافت آمار موسیقی
+    music_count = get_music_downloads(user_id)
 
     # بررسی محدودیت‌ها
-    gen_limit = "∞" if is_vip_status == 1 else "10"
-    tr_limit = "∞" if is_vip_status == 1 else "10"
     yt_limit = "10" if is_vip_status == 1 else "3"
-    music_limit = "20" if is_vip_status == 1 else "6"  # لیمیت موسیقی
+    music_limit = "20" if is_vip_status == 1 else "6"
 
     # ساختار متن
     profile_text = f"""🪪 **مشخصات شما**
@@ -324,8 +320,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📆 اولین استفاده: {join_date}
 
 ⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
-• یوتیوب  / دانلود: {yt_count}/{yt_limit}
-• موسیقی / دانلود: {music_count}/{music_limit}
+• یوتیوب  / دانلود: $ {yt_count}/{yt_limit} $
+• موسیقی / دانلود: $ {music_count}/{music_limit} $
 """
 
     await update.message.reply_text(profile_text, parse_mode="Markdown")

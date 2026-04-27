@@ -27,11 +27,12 @@ async def background_download_task(
     context, chat_id, track_id, title, performer, safe_filename
 ):
     try:
-        # فراخوانی تابع دانلود در یک ترد جداگانه (حل مشکل هنگ کردن ربات)
+        # 1. فراخوانی تابع دانلود سینک در ترد جداگانه
         file_path = await asyncio.to_thread(download_youtube_audio, track_id)
 
         if file_path and os.path.exists(file_path):
             with open(file_path, "rb") as aud:
+                # 2. ارسال فایل به کاربر
                 await context.bot.send_audio(
                     chat_id=chat_id,
                     audio=aud,
@@ -39,7 +40,11 @@ async def background_download_task(
                     performer=performer,
                     filename=f"{safe_filename}.mp3",
                 )
-            # حذف فایل پس از ارسال موفق
+
+            # 3. افزایش شمارنده *فقط* بعد از آپلود و ارسال موفق
+            increment_music_downloads(chat_id)
+
+            # 4. حذف فایل از سرور
             os.remove(file_path)
         else:
             await context.bot.send_message(
@@ -47,8 +52,10 @@ async def background_download_task(
             )
 
     except Exception as e:
-        print(f"Download Error: {e}")
-        await context.bot.send_message(chat_id, "❌ خطایی در فرآیند دانلود رخ داد.")
+        print(f"Download/Upload Error: {e}")
+        await context.bot.send_message(
+            chat_id, "❌ خطایی در فرآیند دانلود یا ارسال رخ داد."
+        )
 
 
 # ----------------------------------------------------------------
@@ -228,8 +235,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
-        # 2. ثبت یک دانلود جدید برای کاربر
-        increment_music_downloads(chat_id)
+        # (ثبت دانلود زودهنگام از اینجا حذف شد تا فقط بعد از ارسال موفق ثبت شود)
 
         await query.message.reply_text(
             "⏳ آهنگ در صف دانلود قرار گرفت و در پس‌زمینه در حال پردازش است.\nشما می‌توانید به کار با ربات ادامه دهید."
@@ -261,7 +267,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             c for c in button_text if c.isalnum() or c in " -_"
         ).strip()
 
-        # 3. ایجاد تسک در پس‌زمینه (برای جلوگیری از هنگ کردن ربات)
+        # 2. ایجاد تسک در پس‌زمینه (برای جلوگیری از هنگ کردن ربات)
         asyncio.create_task(
             background_download_task(
                 context, chat_id, track_id, title, performer, safe_filename

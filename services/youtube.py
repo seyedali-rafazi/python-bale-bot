@@ -143,13 +143,12 @@ def download_youtube_video(url, progress_dict=None):
         return None
 
 
-async def download_youtube_audio(video_id: str) -> str:
+def download_youtube_audio(video_id: str) -> str:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # تنظیمات ساده و بدون متادیتا (فقط دانلود و تبدیل به MP3)
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": "downloads/%(id)s.%(ext)s",  # مسیر ذخیره
+        "outtmpl": "downloads/%(id)s.%(ext)s",
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -157,21 +156,18 @@ async def download_youtube_audio(video_id: str) -> str:
                 "preferredquality": "192",
             }
         ],
-        "proxy": PROXY,
+        # "proxy": PROXY, # در صورت نیاز فعال کنید
         "quiet": True,
         "no_warnings": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # فقط دانلود می‌کنیم، نیازی به دستکاری info_dict نیست
             ydl.download([url])
-
-            # چون فرمت mp3 است، نام فایل اینگونه خواهد بود:
             file_path = f"downloads/{video_id}.mp3"
 
             if os.path.exists(file_path):
-                return file_path  # 👈 فقط یک رشته (String) برمی‌گرداند
+                return file_path
             else:
                 return None
 
