@@ -1,5 +1,6 @@
 # handlers/states/state_music.py
 
+
 import os
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -21,41 +22,91 @@ from services.music import (
 # فرض بر این است که تابع دانلود یوتیوب در این مسیر قرار دارد
 from services.youtube import download_youtube_audio
 
+# --- متغیرهای مربوط به صف ---
+active_music_downloads = 0
+MAX_MUSIC_CONCURRENT = 3  # حداکثر تعداد دانلود همزمان موسیقی
+music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
 
-# --- تابع پردازش در پس‌زمینه (برای جلوگیری از هنگ کردن ربات) ---
+
+# --- تابع پردازش در پس‌زمینه (همراه با سیستم صف) ---
 async def background_download_task(
     context, chat_id, track_id, title, performer, safe_filename
 ):
+    global active_music_downloads
+    active_music_downloads += 1
+    queue_pos = active_music_downloads
+
+    # پیام اولیه صف
+    status_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"⏳ درخواست شما ثبت شد.\nشما نفر $ {queue_pos} $ در کل صف هستید.\nلطفاً تا خالی شدن ظرفیت منتظر بمانید...",
+    )
+
     try:
-        # 1. فراخوانی تابع دانلود سینک در ترد جداگانه
-        file_path = await asyncio.to_thread(download_youtube_audio, track_id)
-
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as aud:
-                # 2. ارسال فایل به کاربر
-                await context.bot.send_audio(
+        # قفل صف (تا زمانی که ظرفیت خالی شود منتظر می‌ماند)
+        async with music_download_semaphore:
+            try:
+                await context.bot.edit_message_text(
                     chat_id=chat_id,
-                    audio=aud,
-                    title=title,
-                    performer=performer,
-                    filename=f"{safe_filename}.mp3",
+                    message_id=status_msg.message_id,
+                    text="⏳ نوبت شما رسید! در حال دانلود آهنگ از سرور...",
                 )
+            except Exception:
+                pass
 
-            # 3. افزایش شمارنده *فقط* بعد از آپلود و ارسال موفق
-            increment_music_downloads(chat_id)
+            # 1. فراخوانی تابع دانلود سینک در ترد جداگانه
+            file_path = await asyncio.to_thread(download_youtube_audio, track_id)
 
-            # 4. حذف فایل از سرور
-            os.remove(file_path)
-        else:
-            await context.bot.send_message(
-                chat_id, "❌ دانلود شکست خورد یا فایل یافت نشد."
-            )
+            if file_path and os.path.exists(file_path):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=status_msg.message_id,
+                        text="📤 دانلود تکمیل شد! در حال آپلود فایل به تلگرام...",
+                    )
+                except Exception:
+                    pass
+
+                with open(file_path, "rb") as aud:
+                    # 2. ارسال فایل به کاربر
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=aud,
+                        title=title,
+                        performer=performer,
+                        filename=f"{safe_filename}.mp3",
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=60,
+                    )
+
+                # 3. افزایش شمارنده *فقط* بعد از آپلود و ارسال موفق
+                increment_music_downloads(chat_id)
+
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=status_msg.message_id,
+                        text="✅ آهنگ با موفقیت ارسال شد!",
+                    )
+                except Exception:
+                    pass
+
+                # 4. حذف فایل از سرور
+                os.remove(file_path)
+            else:
+                await context.bot.send_message(
+                    chat_id, "❌ دانلود از سرور مبدا شکست خورد یا فایل یافت نشد."
+                )
 
     except Exception as e:
         print(f"Download/Upload Error: {e}")
         await context.bot.send_message(
             chat_id, "❌ خطایی در فرآیند دانلود یا ارسال رخ داد."
         )
+
+    finally:
+        active_music_downloads -= 1
 
 
 # ----------------------------------------------------------------
@@ -235,12 +286,6 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
-        # (ثبت دانلود زودهنگام از اینجا حذف شد تا فقط بعد از ارسال موفق ثبت شود)
-
-        await query.message.reply_text(
-            "⏳ آهنگ در صف دانلود قرار گرفت و در پس‌زمینه در حال پردازش است.\nشما می‌توانید به کار با ربات ادامه دهید."
-        )
-
         # پیدا کردن متن دکمه‌ای که کاربر روی آن کلیک کرده برای استخراج نام و خواننده
         button_text = "Unknown Track"
         if query.message.reply_markup and query.message.reply_markup.inline_keyboard:
@@ -267,7 +312,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             c for c in button_text if c.isalnum() or c in " -_"
         ).strip()
 
-        # 2. ایجاد تسک در پس‌زمینه (برای جلوگیری از هنگ کردن ربات)
+        # 2. ایجاد تسک در پس‌زمینه (عملیات اصلی شامل صف و پیام‌ها در این تابع انجام می‌شود)
         asyncio.create_task(
             background_download_task(
                 context, chat_id, track_id, title, performer, safe_filename

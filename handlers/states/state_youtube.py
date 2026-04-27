@@ -1,6 +1,5 @@
 # handlers/states/state_youtube.py
 
-
 import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -123,16 +122,24 @@ async def background_yt_download(
                         )
 
                 elif format_type == "audio":
-                    file_path, title, perf = await asyncio.to_thread(
-                        download_youtube_audio, url, progress_dict
-                    )
+                    # تابع قدیمی فقط یک خروجی مسیر فایل می‌دهد و progress_dict نمی‌گیرد
+                    file_path = await asyncio.to_thread(download_youtube_audio, url)
                     progress_dict["is_finished"] = True
 
-                    if file_path and os.path.exists(file_path):
+                    if (
+                        file_path
+                        and isinstance(file_path, str)
+                        and os.path.exists(file_path)
+                    ):
                         try:
                             await context.bot.send_message(
                                 chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
                             )
+
+                            # مقادیر پیش‌فرض چون تابع قدیمی اینها را برنمی‌گرداند
+                            title = "صوت یوتیوب"
+                            perf = "ربات دانلودر"
+
                             with open(file_path, "rb") as aud:
                                 await context.bot.send_audio(
                                     chat_id=chat_id,
