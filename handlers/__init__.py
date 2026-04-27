@@ -74,10 +74,13 @@ async def check_membership_middleware(update, context):
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
             return  # کاربر عضو است، ادامه کار ربات
-    except Exception:
-        pass  # کاربر عضو نیست یا ربات در کانال ادمین نیست
+    except Exception as e:
+        # اگر خطایی رخ داد (مثلا سرور تلگرام مشکل داشت یا لیست در دسترس نبود)
+        # به جای جلوگیری از کار ربات، اجازه می‌دهیم کاربر ادامه دهد
+        print(f"Membership check failed (ignored): {e}")
+        return
 
-    # اگر به اینجا رسیدیم یعنی کاربر عضو نیست
+    # اگر به اینجا رسیدیم یعنی ارتبا‌ط با سرور موفق بوده اما کاربر وضعیتش عضو نیست (مثلا left کرده است)
     keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
     await update.message.reply_text(
         "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
