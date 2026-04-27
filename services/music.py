@@ -1,62 +1,153 @@
-# ایجاد فایل جدید services/music.py
+# services/music.py
 
+from ytmusicapi import YTMusic
 import os
-import subprocess
-import glob
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
-from dotenv import load_dotenv
 
-load_dotenv()
-SPOTIPY_CLIENT_ID = os.getenv("SPOTIPY_CLIENT_ID")
-SPOTIPY_CLIENT_SECRET = os.getenv("SPOTIPY_CLIENT_SECRET")
-
-# تنظیم کلاینت اسپاتیفای
-sp = spotipy.Spotify(
-    auth_manager=SpotifyClientCredentials(
-        client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET
-    )
-)
+ytmusic = YTMusic()
 
 
-def search_spotify(query, type="track", limit=5):
+def search_track(query, limit=10):
     try:
-        return sp.search(q=query, type=type, limit=limit)
+        results = ytmusic.search(query, filter="songs", limit=limit)
+        tracks = []
+        for item in results:
+            if item["videoId"]:
+                tracks.append(
+                    {
+                        "id": item["videoId"],
+                        "name": item["title"],
+                        "artists": [
+                            {"name": artist["name"]}
+                            for artist in item.get("artists", [])
+                        ],
+                        "url": f"https://music.youtube.com/watch?v={item['videoId']}",
+                    }
+                )
+        return tracks
     except Exception as e:
-        print(f"Spotify Search Error: {e}")
-        return None
+        print(f"YTMusic Track Search Error: {e}")
+        return []
+
+
+def search_album(query, limit=5):
+    try:
+        results = ytmusic.search(query, filter="albums", limit=limit)
+        albums = []
+        for item in results:
+            if item["browseId"]:
+                albums.append(
+                    {
+                        "id": item["browseId"],
+                        "name": item["title"],
+                        "artists": [
+                            {"name": artist["name"]}
+                            for artist in item.get("artists", [])
+                        ],
+                    }
+                )
+        return albums
+    except Exception as e:
+        print(f"YTMusic Album Search Error: {e}")
+        return []
 
 
 def get_album_tracks(album_id):
-    return sp.album_tracks(album_id)
+    try:
+        album = ytmusic.get_album(album_id)
+        tracks = []
+        for item in album.get("tracks", []):
+            if item["videoId"]:
+                tracks.append(
+                    {
+                        "id": item["videoId"],
+                        "name": item["title"],
+                        "artists": [
+                            {"name": artist["name"]}
+                            for artist in item.get("artists", [])
+                        ]
+                        if item.get("artists")
+                        else album.get("artists", []),
+                        "url": f"https://music.youtube.com/watch?v={item['videoId']}",
+                    }
+                )
+        return tracks
+    except Exception as e:
+        print(f"YTMusic Get Album Tracks Error: {e}")
+        return []
 
 
-def get_playlist_tracks(playlist_id):
-    return sp.playlist_tracks(playlist_id, limit=10)
+def search_artist(query, limit=5):
+    try:
+        results = ytmusic.search(query, filter="artists", limit=limit)
+        artists = []
+        for item in results:
+            if item["browseId"]:
+                artists.append({"id": item["browseId"], "name": item["artist"]})
+        return artists
+    except Exception as e:
+        print(f"YTMusic Artist Search Error: {e}")
+        return []
 
 
 def get_artist_top_tracks(artist_id):
-    return sp.artist_top_tracks(artist_id)
-
-
-def get_artist_info(artist_id):
-    return sp.artist(artist_id)
-
-
-def get_track_info(track_id):
-    return sp.track(track_id)
-
-
-def download_spotify_track(url, chat_id):
     try:
-        download_dir = f"temp_spotify_{chat_id}"
-        os.makedirs(download_dir, exist_ok=True)
-        command = ["spotdl", url, "--output", download_dir]
-        subprocess.run(command, capture_output=True, text=True)
-        files = glob.glob(os.path.join(download_dir, "*.mp3"))
-        if files:
-            return files[0]
-        return None
+        artist = ytmusic.get_artist(artist_id)
+        tracks = []
+        # ytmusicapi معمولا آهنگ‌ها را در songs برمی‌گرداند
+        songs = artist.get("songs", {}).get("results", [])
+        for item in songs:
+            if item["videoId"]:
+                tracks.append(
+                    {
+                        "id": item["videoId"],
+                        "name": item["title"],
+                        "artists": [{"name": artist["name"]}],
+                        "url": f"https://music.youtube.com/watch?v={item['videoId']}",
+                    }
+                )
+        return tracks
     except Exception as e:
-        print(f"Spotify Error: {e}")
-        return None
+        print(f"YTMusic Get Artist Tracks Error: {e}")
+        return []
+
+
+def search_playlist(query, limit=5):
+    try:
+        results = ytmusic.search(query, filter="playlists", limit=limit)
+        playlists = []
+        for item in results:
+            if item["browseId"]:
+                playlists.append(
+                    {
+                        "id": item["browseId"],
+                        "name": item["title"],
+                        "owner": item.get("author", "YouTube Music"),
+                    }
+                )
+        return playlists
+    except Exception as e:
+        print(f"YTMusic Playlist Search Error: {e}")
+        return []
+
+
+def get_playlist_tracks(playlist_id):
+    try:
+        playlist = ytmusic.get_playlist(playlist_id)
+        tracks = []
+        for item in playlist.get("tracks", []):
+            if item["videoId"]:
+                tracks.append(
+                    {
+                        "id": item["videoId"],
+                        "name": item["title"],
+                        "artists": [
+                            {"name": artist["name"]}
+                            for artist in item.get("artists", [])
+                        ],
+                        "url": f"https://music.youtube.com/watch?v={item['videoId']}",
+                    }
+                )
+        return tracks
+    except Exception as e:
+        print(f"YTMusic Get Playlist Tracks Error: {e}")
+        return []
