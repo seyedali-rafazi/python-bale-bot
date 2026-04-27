@@ -143,55 +143,42 @@ def download_youtube_video(url, progress_dict=None):
         return None
 
 
-def download_youtube_audio(url, progress_dict=None):
-    req_id = uuid.uuid4().hex
+async def download_youtube_audio(video_id: str) -> str:
+    url = f"https://www.youtube.com/watch?v={video_id}"
 
-    def my_hook(d):
-        if progress_dict is not None:
-            progress_hook(d, progress_dict)
-
+    # تنظیمات ساده و بدون متادیتا (فقط دانلود و تبدیل به MP3)
     ydl_opts = {
-        "proxy": PROXY,  # اعمال پروکسی
         "format": "bestaudio/best",
+        "outtmpl": "downloads/%(id)s.%(ext)s",  # مسیر ذخیره
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
-            },
-            {
-                "key": "FFmpegMetadata", # اضافه کردن متادیتا به فایل صوتی
             }
         ],
-        "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
+        "proxy": PROXY,
         "quiet": True,
-        "noprogress": True,
-        "noplaylist": True,
-        "progress_hooks": [my_hook] if progress_dict else [],
+        "no_warnings": True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            # فقط دانلود می‌کنیم، نیازی به دستکاری info_dict نیست
+            ydl.download([url])
 
-            # تلاش برای گرفتن نام اصلی آهنگ و خواننده (در صورت نبود، از نام ویدیو و کانال استفاده می‌شود)
-            title = info.get("track") or info.get("title") or "Unknown Title"
-            performer = info.get("artist") or info.get("creator") or info.get("uploader") or "Unknown Artist"
-            
-            video_id = info.get("id", "unknown")
+            # چون فرمت mp3 است، نام فایل اینگونه خواهد بود:
+            file_path = f"downloads/{video_id}.mp3"
 
-            pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
-            files = glob.glob(pattern)
-            mp3_files = [f for f in files if f.endswith(".mp3")]
-
-            if mp3_files:
-                return os.path.abspath(mp3_files[0]), title, performer
-
-            return None, None, None
+            if os.path.exists(file_path):
+                return file_path  # 👈 فقط یک رشته (String) برمی‌گرداند
+            else:
+                return None
 
     except Exception as e:
         print(f"❌ Error downloading audio: {e}")
-        return None, None, None
+        return None
+
 
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
