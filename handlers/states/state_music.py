@@ -2,7 +2,6 @@
 
 import os
 import asyncio
-import shutil
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from services.music import (
@@ -110,7 +109,7 @@ async def handle_music_state(
 async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # جلوگیری از کرش ربات در صورت قطعی یا کندی سرور بله
+    # جلوگیری از کرش ربات در صورت قطعی یا کندی سرور تلگرام
     try:
         await query.answer()
     except Exception as e:
@@ -186,7 +185,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
         # پیدا کردن متن دکمه‌ای که کاربر روی آن کلیک کرده برای استخراج نام و خواننده
-        button_text = "Unknown"
+        button_text = "Unknown Track"
         if query.message.reply_markup and query.message.reply_markup.inline_keyboard:
             for row in query.message.reply_markup.inline_keyboard:
                 for btn in row:
@@ -195,23 +194,34 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         break
 
         # جدا کردن نام آهنگ و خواننده (در مرحله جستجو فرمت "Title - Artist" بود)
-        performer = "Unknown"
         title = button_text
+        performer = "YouTube Music"
+
         if " - " in button_text:
             try:
-                title, performer = button_text.split(" - ", 1)
+                parts = button_text.split(" - ", 1)
+                title = parts[0].strip()
+                performer = parts[1].strip()
             except ValueError:
                 pass
 
         try:
-            # فراخوانی تابع دانلودی که ساختیم (چون تابع async است مستقیم await می‌کنیم)
-            # فقط track_id را می‌فرستیم تا تابع خودش لینک را بسازد
+            # فراخوانی تابع دانلودی که ساختیم
             file_path = await download_youtube_audio(track_id)
 
             if file_path and os.path.exists(file_path):
+                # تمیز کردن نام فایل برای جلوگیری از خطای تلگرام (حذف کاراکترهای خاص)
+                safe_filename = "".join(
+                    c for c in button_text if c.isalnum() or c in " -_"
+                ).strip()
+
                 with open(file_path, "rb") as aud:
                     await context.bot.send_audio(
-                        chat_id=chat_id, audio=aud, title=title, performer=performer
+                        chat_id=chat_id,
+                        audio=aud,
+                        title=title,
+                        performer=performer,
+                        filename=f"{safe_filename}.mp3",  # ارسال نام تمیز به جای آیدی یوتیوب
                     )
                 # حذف فایل پس از ارسال موفق
                 os.remove(file_path)
