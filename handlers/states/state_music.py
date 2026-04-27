@@ -6,14 +6,16 @@ import shutil
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from services.music import (
-    search_spotify,
+    search_track,
+    search_album,
+    search_artist,
+    search_playlist,
     get_album_tracks,
     get_playlist_tracks,
     get_artist_top_tracks,
-    get_artist_info,
-    download_spotify_track,
-    get_track_info,
 )
+# فرض بر این است که تابع دانلود یوتیوب در این مسیر قرار دارد
+from services.youtube import download_youtube_audio
 
 
 async def handle_music_state(
@@ -25,14 +27,15 @@ async def handle_music_state(
     state_data: dict,
 ):
     if step == "waiting_music_track":
-        results = await asyncio.to_thread(search_spotify, text, "track")
-        if not results or not results["tracks"]["items"]:
+        results = await asyncio.to_thread(search_track, text)
+        if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
 
         keyboard = []
-        for item in results["tracks"]["items"]:
-            btn_text = f"{item['name']} - {item['artists'][0]['name']}"
+        for item in results:
+            artist_name = item['artists'][0]['name'] if item.get('artists') else "ناشناس"
+            btn_text = f"{item['name']} - {artist_name}"
             keyboard.append(
                 [InlineKeyboardButton(btn_text, callback_data=f"dltrack_{item['id']}")]
             )
@@ -43,14 +46,15 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_album":
-        results = await asyncio.to_thread(search_spotify, text, "album")
-        if not results or not results["albums"]["items"]:
+        results = await asyncio.to_thread(search_album, text)
+        if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
 
         keyboard = []
-        for item in results["albums"]["items"]:
-            btn_text = f"{item['name']} - {item['artists'][0]['name']}"
+        for item in results:
+            artist_name = item['artists'][0]['name'] if item.get('artists') else "ناشناس"
+            btn_text = f"{item['name']} - {artist_name}"
             keyboard.append(
                 [InlineKeyboardButton(btn_text, callback_data=f"album_{item['id']}")]
             )
@@ -60,13 +64,13 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_artist":
-        results = await asyncio.to_thread(search_spotify, text, "artist")
-        if not results or not results["artists"]["items"]:
+        results = await asyncio.to_thread(search_artist, text)
+        if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
 
         keyboard = []
-        for item in results["artists"]["items"]:
+        for item in results:
             keyboard.append(
                 [
                     InlineKeyboardButton(
@@ -80,17 +84,18 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_playlist":
-        results = await asyncio.to_thread(search_spotify, text, "playlist")
-        if not results or not results["playlists"]["items"]:
+        results = await asyncio.to_thread(search_playlist, text)
+        if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
 
         keyboard = []
-        for item in results["playlists"]["items"]:
+        for item in results:
+            btn_text = f"{item['name']} (ایجاد کننده: {item.get('owner', 'ناشناس')})"
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        item["name"], callback_data=f"playlist_{item['id']}"
+                        btn_text, callback_data=f"playlist_{item['id']}"
                     )
                 ]
             )
@@ -110,9 +115,13 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith("album_"):
         album_id = data.split("_")[1]
         tracks = await asyncio.to_thread(get_album_tracks, album_id)
+        if not tracks:
+             await query.message.reply_text("❌ آهنگی در این آلبوم یافت نشد.")
+             return
+             
         keyboard = [
             [InlineKeyboardButton(t["name"], callback_data=f"dltrack_{t['id']}")]
-            for t in tracks["items"]
+            for t in tracks
         ]
         await query.message.reply_text(
             "آهنگ‌های این آلبوم:", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -121,14 +130,17 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("playlist_"):
         playlist_id = data.split("_")[1]
         tracks = await asyncio.to_thread(get_playlist_tracks, playlist_id)
+        if not tracks:
+             await query.message.reply_text("❌ آهنگی در این پلی‌لیست یافت نشد.")
+             return
+             
         keyboard = [
             [
                 InlineKeyboardButton(
-                    t["track"]["name"], callback_data=f"dltrack_{t['track']['id']}"
+                    t["name"], callback_data=f"dltrack_{t['id']}"
                 )
             ]
-            for t in tracks["items"]
-            if t.get("track")
+            for t in tracks
         ]
         await query.message.reply_text(
             "آهنگ‌های پلی‌لیست:", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -136,58 +148,55 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("artist_"):
         artist_id = data.split("_")[1]
-        artist_info = await asyncio.to_thread(get_artist_info, artist_id)
+        # برای یوتیوب موزیک مستقیماً آهنگ‌های برتر را نمایش می‌دهیم
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "🎧 ۱۰ آهنگ برتر", callback_data=f"toptracks_{artist_id}"
+                    "🎧 دریافت آهنگ‌های برتر خواننده", callback_data=f"toptracks_{artist_id}"
                 )
             ]
         ]
-
-        # اگر خواننده عکس دارد ارسال کن
-        if artist_info["images"]:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=artist_info["images"][0]["url"],
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-        else:
-            await query.message.reply_text(
-                f"خواننده: {artist_info['name']}",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
+        await query.message.reply_text(
+            "برای دریافت آهنگ‌های برتر کلیک کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
 
     elif data.startswith("toptracks_"):
         artist_id = data.split("_")[1]
         tracks = await asyncio.to_thread(get_artist_top_tracks, artist_id)
+        if not tracks:
+             await query.message.reply_text("❌ آهنگی برای این خواننده یافت نشد.")
+             return
+             
         keyboard = [
             [InlineKeyboardButton(t["name"], callback_data=f"dltrack_{t['id']}")]
-            for t in tracks["tracks"]
+            for t in tracks
         ]
         await query.message.reply_text(
-            "۱۰ آهنگ برتر:", reply_markup=InlineKeyboardMarkup(keyboard)
+            "آهنگ‌های برتر:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
     elif data.startswith("dltrack_"):
         track_id = data.split("_")[1]
-        await query.message.reply_text("⏳ در حال دانلود آهنگ...")
+        await query.message.reply_text("⏳ در حال دانلود آهنگ از سرور...")
 
-        track_info = await asyncio.to_thread(get_track_info, track_id)
-        track_url = track_info["external_urls"]["spotify"]
+        # ساخت لینک مستقیم یوتیوب برای دانلود
+        track_url = f"https://music.youtube.com/watch?v={track_id}"
 
-        file_path = await asyncio.to_thread(download_spotify_track, track_url, chat_id)
+        try:
+            # استفاده از تابع دانلود یوتیوب (همان تابعی که برای بخش یوتیوب ربات دارید)
+            file_path = await asyncio.to_thread(download_youtube_audio, track_url, chat_id)
 
-        if file_path and os.path.exists(file_path):
-            try:
+            if file_path and os.path.exists(file_path):
                 title = os.path.basename(file_path).replace(".mp3", "")
                 with open(file_path, "rb") as aud:
                     await context.bot.send_audio(
                         chat_id=chat_id, audio=aud, title=title
                     )
-            finally:
-                download_dir = f"temp_spotify_{chat_id}"
-                if os.path.exists(download_dir):
-                    shutil.rmtree(download_dir)
-        else:
-            await query.message.reply_text("❌ دانلود شکست خورد.")
+                # حذف فایل پس از ارسال
+                os.remove(file_path)
+            else:
+                await query.message.reply_text("❌ دانلود شکست خورد.")
+        except Exception as e:
+            print(f"Download Error: {e}")
+            await query.message.reply_text("❌ خطایی در فرآیند دانلود رخ داد.")
