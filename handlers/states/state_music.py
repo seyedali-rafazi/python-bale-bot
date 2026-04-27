@@ -119,7 +119,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = str(update.effective_chat.id)
 
     if data.startswith("album_"):
-        album_id = data.split("_")[1]
+        album_id = data.split("_", 1)[1]
         tracks = await asyncio.to_thread(get_album_tracks, album_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این آلبوم یافت نشد.")
@@ -134,7 +134,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("playlist_"):
-        playlist_id = data.split("_")[1]
+        playlist_id = data.split("_", 1)[1]
         tracks = await asyncio.to_thread(get_playlist_tracks, playlist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این پلی‌لیست یافت نشد.")
@@ -149,7 +149,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("artist_"):
-        artist_id = data.split("_")[1]
+        artist_id = data.split("_", 1)[1]
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -164,7 +164,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("toptracks_"):
-        artist_id = data.split("_")[1]
+        artist_id = data.split("_", 1)[1]
         tracks = await asyncio.to_thread(get_artist_top_tracks, artist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی برای این خواننده یافت نشد.")
@@ -179,7 +179,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("dltrack_"):
-        track_id = data.split("_")[1]
+        track_id = data.split("_", 1)[1]
         await query.message.reply_text(
             "⏳ در حال دانلود آهنگ از سرور... لطفا صبور باشید."
         )
