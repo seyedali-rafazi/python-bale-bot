@@ -24,9 +24,6 @@ from .menus import (
     btn_ai_ocr_req,
     btn_ai_tts_req,
     btn_ai_image_req,
-    btn_music_menu,
-    btn_music_search_req,
-    btn_spotify_req,
     btn_telegram_menu,
     btn_tg_single_req,
     btn_tg_latest_req,
@@ -44,12 +41,18 @@ from .menus import (
     btn_prog_firefox_req,
     btn_prog_vscode_req,
     btn_profile_req,
+    btn_music_menu,
+    btn_music_track_req,
+    btn_music_album_req,
+    btn_music_artist_req,
+    btn_music_playlist_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip, cmd_messageuser
 import os
 from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
+from .states.state_music import handle_music_callback
 
 
 load_dotenv()
@@ -126,21 +129,6 @@ def register_all_handlers(application):
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_IMAGE)}$"), btn_ai_image_req)
-    )
-
-    # هندلرهای موسیقی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_SEARCH)}$"), btn_music_search_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_SPOTIFY)}$"), btn_spotify_req
-        )
     )
 
     # هندلز های تلگرام
@@ -244,6 +232,39 @@ def register_all_handlers(application):
     # ثبت کال‌بک دکمه‌های شیشه‌ای (جستجوی کروم)
     application.add_handler(
         CallbackQueryHandler(handle_chrome_callback, pattern=r"^dlchrome_")
+    )
+
+    # هندلرهای موسیقی
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MUSIC_TRACK)}$"), btn_music_track_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MUSIC_ALBUM)}$"), btn_music_album_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MUSIC_ARTIST)}$"), btn_music_artist_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MUSIC_PLAYLIST)}$"), btn_music_playlist_req
+        )
+    )
+
+    # ثبت کال‌بک دکمه‌های شیشه‌ای مربوط به موسیقی
+    application.add_handler(
+        CallbackQueryHandler(
+            handle_music_callback,
+            pattern=r"^(album_|playlist_|artist_|toptracks_|dltrack_)",
+        )
     )
 
     # هندلر پشتیبانی

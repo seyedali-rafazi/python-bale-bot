@@ -59,6 +59,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif step.startswith("waiting_prog"):
         await handle_programming_state(update, context, step, text, chat_id, state_data)
 
+    elif step.startswith("waiting_music_"):
+        await handle_music_state(update, context, step, text, chat_id, state_data)
+
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)

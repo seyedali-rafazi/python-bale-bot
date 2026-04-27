@@ -145,35 +145,6 @@ async def btn_ai_image_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def btn_music_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎵 به بخش موسیقی خوش آمدید!\nیک گزینه را انتخاب کنید 👇",
-        reply_markup=get_music_menu_keyboard(),
-    )
-
-
-async def btn_music_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_music_search")
-    await update.message.reply_text(
-        "🔍 لطفاً نام آهنگ یا خواننده مورد نظر خود را بنویسید (مثلاً: شجریان مرغ سحر):",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
-async def btn_spotify_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_spotify_link")
-    await update.message.reply_text(
-        "🔗 لطفاً لینک آهنگ اسپاتیفای را ارسال کنید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
 async def btn_telegram_menu(update, context):
     await update.message.reply_text(
         "به منوی تلگرام خوش آمدید. یک گزینه را انتخاب کنید:",
@@ -391,3 +362,39 @@ async def btn_prog_vscode_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # برنامه نویسی end
+
+#  موسیقی start
+
+
+async def btn_music_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎵 به بخش موسیقی خوش آمدید!\nیک گزینه را انتخاب کنید 👇",
+        reply_markup=get_music_menu_keyboard(),
+    )
+
+
+async def btn_music_track_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_music_track")
+    await update.message.reply_text("🔍 نام آهنگ یا خواننده را بفرستید:")
+
+
+async def btn_music_album_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_music_album")
+    await update.message.reply_text("💿 نام آلبوم را برای جستجو بفرستید:")
+
+
+async def btn_music_artist_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_music_artist")
+    await update.message.reply_text("🎤 نام خواننده مورد نظر را بفرستید:")
+
+
+async def btn_music_playlist_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_music_playlist")
+    await update.message.reply_text("🎧 نام یا موضوع پلی‌لیست را بفرستید:")
+
+
+#  موسیقی end
