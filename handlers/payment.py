@@ -19,7 +19,7 @@ async def btn_buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     description = f"ارتقا به حساب ویژه برای $ {VIP_LIMIT_VALUE} $ روز"
     payload = f"vip_charge_{chat_id}"
     currency = "IRR"
-    prices = [LabeledPrice(f"اشتراک {VIP_LIMIT_VALUE} روزه", int(PAYMENT_VALUE))]
+    prices = [LabeledPrice(f"اشتراک $ {VIP_LIMIT_VALUE} $ روزه", int(PAYMENT_VALUE))]
 
     await context.bot.send_invoice(
         chat_id=chat_id,
@@ -35,10 +35,21 @@ async def btn_buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
-    if query.invoice_payload.startswith("vip_charge_"):
-        await query.answer(ok=True)
-    else:
-        await query.answer(ok=False, error_message="خطا در اطلاعات پرداخت.")
+    try:
+        # بررسی صحت اطلاعات ارسالی پیش از کسر وجه
+        if query.invoice_payload.startswith("vip_charge_"):
+            await query.answer(ok=True)
+        else:
+            await query.answer(
+                ok=False,
+                error_message="❌ خطا در اطلاعات پرداخت. لطفاً دوباره تلاش کنید.",
+            )
+    except Exception as e:
+        # نمایش خطای پاپ‌آپ در صورت مشکل در اتصال به درگاه
+        await query.answer(
+            ok=False,
+            error_message="❌ مشکلی در ارتباط با درگاه پیش آمد. تراکنش انجام نشد.",
+        )
 
 
 async def successful_payment_callback(
@@ -51,23 +62,39 @@ async def successful_payment_callback(
     payload = payment_info.invoice_payload
     provider_charge_id = payment_info.provider_payment_charge_id
 
-    add_transaction(
-        user_id=chat_id,
-        amount=total_amount,
-        payload=payload,
-        provider_charge_id=provider_charge_id,
-    )
+    try:
+        # ثبت تراکنش در دیتابیس
+        add_transaction(
+            user_id=chat_id,
+            amount=total_amount,
+            payload=payload,
+            provider_charge_id=provider_charge_id,
+        )
 
-    add_vip_time(chat_id, VIP_LIMIT_VALUE)
+        # افزایش زمان VIP کاربر
+        add_vip_time(chat_id, VIP_LIMIT_VALUE)
 
-    amount_toman = int(total_amount / 10)  # محاسبه تومان: $$ amount / 10 $$
-    receipt_text = (
-        "✅ **پرداخت شما با موفقیت تایید و ثبت شد!**\n\n"
-        "🧾 **رسید تراکنش شما:**\n"
-        f"👤 شناسه: `{chat_id}`\n"
-        f"💰 مبلغ: $ {amount_toman} $ تومان\n"
-        f"🔖 کد پیگیری: `{provider_charge_id}`\n\n"
-        f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
-    )
+        amount_toman = int(total_amount / 10)  # محاسبه تومان: $$ amount / 10 $$
 
-    await update.message.reply_text(text=receipt_text, parse_mode="Markdown")
+        # استفاده از HTML به جای Markdown برای جلوگیری از کرش کردن ارسال پیام
+        receipt_text = (
+            "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
+            "🧾 <b>رسید تراکنش شما:</b>\n"
+            f"👤 شناسه: <code>{chat_id}</code>\n"
+            f"💰 مبلغ: $ {amount_toman} $ تومان\n"
+            f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
+            f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
+        )
+
+        await update.message.reply_text(text=receipt_text, parse_mode="HTML")
+
+    except Exception as e:
+        # در صورتی که بعد از پرداخت موفق خطایی رخ دهد (مثلا در دیتابیس)
+        error_text = (
+            "⚠️ <b>پرداخت شما انجام شد اما در ثبت سیستم مشکلی پیش آمد!</b>\n\n"
+            f"کد پیگیری شما: <code>{provider_charge_id}</code>\n"
+            f" شناشه شما: <code>{chat_id}</code>\n"
+            "لطفاً این پیام را برای پشتیبانی ارسال کنید تا اشتراک شما دستی فعال شود."
+            "@digiacahr_admin"
+        )
+        await update.message.reply_text(text=error_text, parse_mode="HTML")
