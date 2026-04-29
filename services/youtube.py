@@ -150,9 +150,11 @@ def download_youtube_audio(video_id_or_url: str) -> str:
     else:
         url = f"https://www.youtube.com/watch?v={video_id_or_url}"
 
+    req_id = uuid.uuid4().hex  # اضافه کردن شناسه یکتا برای جلوگیری از تداخل
+
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": "downloads/%(id)s.%(ext)s",
+        "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",  # اعمال req_id
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -167,14 +169,15 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # استفاده از extract_info برای دانلود و گرفتن آیدی دقیق ویدیو جهت نام فایل
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id")
 
-            file_path = f"downloads/{video_id}.mp3"
+            # جستجوی داینامیک فایل تبدیل شده
+            pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.mp3")
+            files = glob.glob(pattern)
 
-            if os.path.exists(file_path):
-                return file_path
+            if files and os.path.exists(files[0]):
+                return files[0]
             else:
                 return None
 

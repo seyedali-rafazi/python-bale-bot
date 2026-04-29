@@ -20,7 +20,6 @@ download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 
 def check_user_limit(chat_id: str) -> bool:
-    """بررسی اینکه آیا کاربر مجاز به دانلود جدید است یا خیر."""
     vip_status = is_vip(chat_id)
     limit = 10 if vip_status else 3
     usage = get_yt_downloads(chat_id)
@@ -63,23 +62,22 @@ async def background_yt_download(
 
             try:
                 if format_type == "video":
-                    result = await asyncio.to_thread(
-                        download_youtube_video, url, progress_dict
-                    )
-                    progress_dict["is_finished"] = True
-
-                    if result == "TOO_LARGE":
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
+                    downloaded_files = []  # تعریف لیست فایل‌ها برای پاکسازی در صورت بروز خطا
+                    try:
+                        result = await asyncio.to_thread(
+                            download_youtube_video, url, progress_dict
                         )
-                    elif isinstance(result, list) and len(result) > 0:
-                        try:
-                            part_msg = (
-                                f" (شامل {len(result)} پارت به دلیل حجم بالا)"
-                                if len(result) > 1
-                                else ""
+                        progress_dict["is_finished"] = True
+
+                        if result == "TOO_LARGE":
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
+                        elif isinstance(result, list) and len(result) > 0:
+                            downloaded_files = result  # مقداردهی فایل‌های دانلود شده
+                            part_msg = f" (شامل {len(result)} پارت به دلیل حجم بالا)" if len(result) > 1 else ""
+                            
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=f"📤 در حال آپلود ویدیو{part_msg}...",
@@ -99,44 +97,38 @@ async def background_yt_download(
                                         write_timeout=300,
                                         connect_timeout=60,
                                     )
-                            await context.bot.send_message(
-                                chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
-                            )
-                            # ثبت دانلود موفق در دیتابیس
+                            
+                            await context.bot.send_message(chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!")
                             increment_yt_downloads(chat_id)
 
-                        except Exception as send_err:
-                            print(f"❌ Send error: {send_err}")
+                        else:
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text=f"❌ خطا در ارسال: {str(send_err)}",
+                                text="❌ دانلود شکست خورد یا فایل پیدا نشد.",
                             )
-                        finally:
-                            for file_path in result:
-                                if os.path.exists(file_path):
+                    except Exception as send_err:
+                        print(f"❌ Video process error: {send_err}")
+                        await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا: {str(send_err)}")
+                    finally:
+                        # پاکسازی قطعی فایل‌های ویدیویی مستقل از موفقیت یا شکست آپلود
+                        for file_path in downloaded_files:
+                            if os.path.exists(file_path):
+                                try:
                                     os.remove(file_path)
-                    else:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="❌ دانلود شکست خورد یا فایل پیدا نشد.",
-                        )
+                                except Exception as e:
+                                    print(f"❌ Cleanup error (video): {e}")
 
                 elif format_type == "audio":
-                    # تابع قدیمی فقط یک خروجی مسیر فایل می‌دهد و progress_dict نمی‌گیرد
-                    file_path = await asyncio.to_thread(download_youtube_audio, url)
-                    progress_dict["is_finished"] = True
+                    file_path = None
+                    try:
+                        file_path = await asyncio.to_thread(download_youtube_audio, url)
+                        progress_dict["is_finished"] = True
 
-                    if (
-                        file_path
-                        and isinstance(file_path, str)
-                        and os.path.exists(file_path)
-                    ):
-                        try:
+                        if file_path and isinstance(file_path, str) and os.path.exists(file_path):
                             await context.bot.send_message(
                                 chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
                             )
 
-                            # مقادیر پیش‌فرض چون تابع قدیمی اینها را برنمی‌گرداند
                             title = "صوت یوتیوب"
                             perf = "ربات دانلودر"
 
@@ -150,15 +142,19 @@ async def background_yt_download(
                                     write_timeout=300,
                                     connect_timeout=60,
                                 )
-                            # ثبت دانلود موفق در دیتابیس
                             increment_yt_downloads(chat_id)
-                        finally:
-                            if os.path.exists(file_path):
+                        else:
+                            await context.bot.send_message(chat_id=chat_id, text="❌ دانلود شکست خورد.")
+                    except Exception as send_err:
+                        print(f"❌ Audio process error: {send_err}")
+                        await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا: {str(send_err)}")
+                    finally:
+                        # پاکسازی قطعی فایل صوتی مستقل از موفقیت یا شکست آپلود
+                        if file_path and os.path.exists(file_path):
+                            try:
                                 os.remove(file_path)
-                    else:
-                        await context.bot.send_message(
-                            chat_id=chat_id, text="❌ دانلود شکست خورد."
-                        )
+                            except Exception as e:
+                                print(f"❌ Cleanup error (audio): {e}")
 
             except Exception as e:
                 print(f"❌ Error in background task: {e}")
