@@ -25,6 +25,7 @@ from core.database import (
     get_user_usage_today,
     get_music_downloads,
 )
+from datetime import datetime
 
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,6 +293,8 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
+
+    # توجه: باید تابع get_user_info در دیتابیس خود را آپدیت کنید تا تاریخ انقضا را هم برگرداند
     user_info = get_user_info(user_id)
 
     if not user_info:
@@ -300,9 +303,33 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    username, is_vip_status, join_date = user_info
+    # فرض می‌کنیم خروجی دیتابیس حالا 4 مقدار دارد (تاریخ انقضا اضافه شده است)
+    # اگر تاریخ انقضا ندارید، باید تابع get_user_info را اصلاح کنید
+    username, is_vip_status, join_date, vip_expire_date = user_info
+
     username_str = f"@{username}" if username else "ندارد"
-    vip_str = "💎 ویژه (پرو)" if is_vip_status == 1 else "🆓 رایگان"
+
+    # محاسبه روزهای باقی‌مانده از اشتراک
+    vip_days_text = ""
+    if is_vip_status == 1:
+        if vip_expire_date:
+            try:
+                # فرمت تاریخ را بر اساس چیزی که در دیتابیس ذخیره کردید تنظیم کنید (مثلاً YYYY-MM-DD HH:MM:SS)
+                expire_dt = datetime.strptime(vip_expire_date, "%Y-%m-%d %H:%M:%S")
+                now = datetime.now()
+                delta = expire_dt - now
+                days_left = delta.days
+
+                if days_left > 0:
+                    vip_days_text = f"\n⏳ اعتبار اشتراک: $ {days_left} $ روز"
+                else:
+                    vip_days_text = "\n⏳ اعتبار اشتراک: پایان یافته"
+            except ValueError:
+                vip_days_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا در تاریخ)"
+
+        vip_str = "💎 ویژه (پرو)"
+    else:
+        vip_str = "🆓 رایگان"
 
     # دریافت آمار مصرف
     yt_count = get_yt_downloads(user_id)
@@ -316,7 +343,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     profile_text = f"""🪪 **مشخصات شما**
 🆔 ایدی عددی: `{user_id}`
 👤 یوزرنیم: {username_str}
-📊 وضعیت اشتراک: {vip_str}
+📊 وضعیت اشتراک: {vip_str} {vip_days_text}
 📆 اولین استفاده: {join_date}
 
 ⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
