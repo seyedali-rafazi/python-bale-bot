@@ -8,6 +8,7 @@ from telegram.ext import (
     filters,
     ApplicationHandlerStop,
     CallbackQueryHandler,
+    PreCheckoutQueryHandler,
 )
 from core.constants import *
 from .commands import cmd_start, cmd_tr
@@ -53,6 +54,7 @@ import os
 from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
+from .payment import btn_buy_vip, precheckout_callback, successful_payment_callback
 
 
 load_dotenv()
@@ -270,6 +272,13 @@ def register_all_handlers(application):
         )
     )
 
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_BUY_VIP)}$"), btn_buy_vip)
+    )
+    application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    application.add_handler(
+        MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
+    )
     # هندلر پشتیبانی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)

@@ -36,6 +36,7 @@ BTN_TR_EN_FA = "🇬🇧 انگلیسی به 🇮🇷 فارسی"
 BTN_SUPPORT = "👨‍💻 پشتیبانی و مشکلات"
 BALE_SUPPORT_URL = "https://ble.ir/digiachar_admin"
 BTN_PROFILE = "🪪 حساب کاربری من"
+BTN_BUY_VIP = "خرید اشتراک 🌟"
 
 # منوی برنامه‌نویسی
 BTN_PROGRAMMING = "👨‍💻 برنامه‌نویسی و افزونه"
