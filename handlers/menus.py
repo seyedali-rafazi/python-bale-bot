@@ -339,8 +339,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_count = get_music_downloads(user_id)
 
     # بررسی محدودیت‌ها
-    yt_limit = "نامحدود" if is_vip == 1 else "3"
-    music_limit = "نامحدود" if is_vip == 1 else "6"
+    yt_limit = "10" if is_vip == 1 else "3"
+    music_limit = "20" if is_vip == 1 else "6"
 
     # ساختار متن نهایی
     # متغیر vip_duration_text فقط در صورتی که کاربر vip باشد، مقدار می‌گیرد
