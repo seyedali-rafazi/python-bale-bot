@@ -6,6 +6,7 @@ import yt_dlp
 import uuid
 import subprocess
 import math
+import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,7 +38,8 @@ def get_video_duration(file_path):
         return 0
 
 
-def split_video_if_needed(file_path):
+# تبدیل به async و استفاده از asyncio.create_subprocess_exec
+async def split_video_if_needed(file_path):
     file_size = os.path.getsize(file_path)
     if file_size <= SPLIT_SIZE_LIMIT:
         return [file_path]
@@ -69,19 +71,22 @@ def split_video_if_needed(file_path):
     ]
 
     try:
-        subprocess.run(
-            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
         )
-        os.remove(file_path)
-        parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
-        return parts
+        await process.communicate()
+
+        if process.returncode == 0:
+            os.remove(file_path)
+            parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
+            return parts
+        return [file_path]
     except Exception as e:
         print(f"Error splitting video: {e}")
         return [file_path]
 
 
 def progress_hook(d, progress_dict):
-    """به‌روزرسانی درصد دانلود در دیکشنری مشترک"""
     if progress_dict is None:
         return
 
@@ -104,22 +109,18 @@ def download_youtube_video(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
-        # استفاده از فرمت کد قدیمی که بدون مشکل کار می‌کرد
-        "format": "best[height<=720][filesize<300M]/best[height<=480][filesize<300M]/best[height<=360]/worst",
+        "format": "best[height<=720]/best[height<=480]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
         "noprogress": True,
+        "max_filesize": MAX_DOWNLOAD_SIZE,  # بهینه سازی: جلوگیری از دانلود فایل حجیم توسط خود کتابخانه
+        "noplaylist": True,
         "progress_hooks": [my_hook] if progress_dict else [],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            filesize = info.get("filesize") or info.get("filesize_approx") or 0
-
-            if filesize > MAX_DOWNLOAD_SIZE:
-                return "TOO_LARGE"
-
+            # بهینه سازی: حذف extract_info اضافه (False) و دانلود مستقیم
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id", "unknown")
 
@@ -127,7 +128,9 @@ def download_youtube_video(url, progress_dict=None):
             files = glob.glob(pattern)
 
             if not files:
-                return None
+                return (
+                    "TOO_LARGE"  # اگر فایلی نیست، احتمالا به خاطر محدودیت حجم اسکیپ شده
+                )
 
             final_file = files[0]
             actual_size = os.path.getsize(final_file)
@@ -136,7 +139,8 @@ def download_youtube_video(url, progress_dict=None):
                 os.remove(final_file)
                 return "TOO_LARGE"
 
-            return split_video_if_needed(final_file)
+            # تابع split حالا در هندلر صدا زده می‌شود نه اینجا
+            return final_file
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -144,17 +148,16 @@ def download_youtube_video(url, progress_dict=None):
 
 
 def download_youtube_audio(video_id_or_url: str) -> str:
-    # بررسی اینکه ورودی لینک است یا فقط آیدی
     if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
         url = video_id_or_url
     else:
         url = f"https://www.youtube.com/watch?v={video_id_or_url}"
 
-    req_id = uuid.uuid4().hex  # اضافه کردن شناسه یکتا برای جلوگیری از تداخل
+    req_id = uuid.uuid4().hex
 
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",  # اعمال req_id
+        "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -165,6 +168,8 @@ def download_youtube_audio(video_id_or_url: str) -> str:
         "proxy": PROXY,
         "quiet": True,
         "no_warnings": True,
+        "noplaylist": True,  # بهینه سازی
+        "max_filesize": MAX_DOWNLOAD_SIZE,
     }
 
     try:
@@ -172,7 +177,6 @@ def download_youtube_audio(video_id_or_url: str) -> str:
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id")
 
-            # جستجوی داینامیک فایل تبدیل شده
             pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.mp3")
             files = glob.glob(pattern)
 
@@ -191,6 +195,7 @@ def search_yt_videos(query, max_results=5):
         "proxy": PROXY,
         "extract_flat": True,
         "quiet": True,
+        "noplaylist": True,  # بهینه سازی: جلوگیری از لود پلی‌لیست‌ها
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

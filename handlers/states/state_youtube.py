@@ -12,10 +12,10 @@ from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
     search_yt_videos,
+    split_video_if_needed,
 )
 
-active_downloads = 0
-MAX_CONCURRENT_DOWNLOADS = 2
+MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 
@@ -29,14 +29,26 @@ def check_user_limit(chat_id: str) -> bool:
 async def background_yt_download(
     context: ContextTypes.DEFAULT_TYPE, url: str, chat_id: str, format_type: str
 ):
-    global active_downloads
-    active_downloads += 1
-    queue_pos = active_downloads
-
-    status_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"⏳ درخواست شما ثبت شد.\nشما نفر {queue_pos} در کل صف هستید.\nلطفاً تا خالی شدن ظرفیت منتظر بمانید...",
+    # بررسی وضعیت صف با استفاده از سمفور به جای متغیر سراسری ناامن
+    waiting_count = max(
+        0,
+        MAX_CONCURRENT_DOWNLOADS
+        - download_semaphore._value
+        + len(download_semaphore._waiters)
+        if download_semaphore._waiters
+        else 0,
     )
+
+    if waiting_count > 0:
+        status_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ درخواست شما ثبت شد.\nسرور در حال حاضر شلوغ است. در صف قرار گرفتید...\nلطفاً منتظر بمانید.",
+        )
+    else:
+        status_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="⏳ درخواست شما ثبت شد و پردازش آغاز گردید...",
+        )
 
     try:
         async with download_semaphore:
@@ -51,33 +63,48 @@ async def background_yt_download(
                             await context.bot.edit_message_text(
                                 chat_id=chat_id,
                                 message_id=status_msg.message_id,
-                                text=f"⏳ نوبت شما رسید! در حال پردازش...\n\n{current_text}",
+                                text=f"⏳ در حال پردازش...\n\n{current_text}",
                             )
                             last_text = current_text
                         except Exception:
                             pass
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(
+                        8
+                    )  # بهینه سازی: افزایش تاخیر به 8 ثانیه برای جلوگیری از FloodWait
 
             updater_task = asyncio.create_task(update_progress_message())
 
             try:
                 if format_type == "video":
-                    downloaded_files = []  # تعریف لیست فایل‌ها برای پاکسازی در صورت بروز خطا
+                    downloaded_files = []
                     try:
-                        result = await asyncio.to_thread(
+                        # دانلود ویدیو به صورت خام
+                        raw_file = await asyncio.to_thread(
                             download_youtube_video, url, progress_dict
                         )
                         progress_dict["is_finished"] = True
 
-                        if result == "TOO_LARGE":
+                        if raw_file == "TOO_LARGE":
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
-                        elif isinstance(result, list) and len(result) > 0:
-                            downloaded_files = result  # مقداردهی فایل‌های دانلود شده
-                            part_msg = f" (شامل {len(result)} پارت به دلیل حجم بالا)" if len(result) > 1 else ""
-                            
+                        elif raw_file and isinstance(raw_file, str):
+                            # بهینه سازی: اجرای غیرهمگام FFmpeg برای شکستن ویدیو (جلوگیری از قفل شدن بات)
+                            await context.bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=status_msg.message_id,
+                                text="⏳ در حال آماده‌سازی و برش ویدیو...",
+                            )
+                            result = await split_video_if_needed(raw_file)
+                            downloaded_files = result
+
+                            part_msg = (
+                                f" (شامل {len(result)} پارت به دلیل حجم بالا)"
+                                if len(result) > 1
+                                else ""
+                            )
+
                             await context.bot.send_message(
                                 chat_id=chat_id,
                                 text=f"📤 در حال آپلود ویدیو{part_msg}...",
@@ -97,8 +124,10 @@ async def background_yt_download(
                                         write_timeout=300,
                                         connect_timeout=60,
                                     )
-                            
-                            await context.bot.send_message(chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!")
+
+                            await context.bot.send_message(
+                                chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
+                            )
                             increment_yt_downloads(chat_id)
 
                         else:
@@ -108,9 +137,10 @@ async def background_yt_download(
                             )
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
-                        await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا: {str(send_err)}")
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=f"❌ خطا: {str(send_err)}"
+                        )
                     finally:
-                        # پاکسازی قطعی فایل‌های ویدیویی مستقل از موفقیت یا شکست آپلود
                         for file_path in downloaded_files:
                             if os.path.exists(file_path):
                                 try:
@@ -124,7 +154,11 @@ async def background_yt_download(
                         file_path = await asyncio.to_thread(download_youtube_audio, url)
                         progress_dict["is_finished"] = True
 
-                        if file_path and isinstance(file_path, str) and os.path.exists(file_path):
+                        if (
+                            file_path
+                            and isinstance(file_path, str)
+                            and os.path.exists(file_path)
+                        ):
                             await context.bot.send_message(
                                 chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
                             )
@@ -144,12 +178,15 @@ async def background_yt_download(
                                 )
                             increment_yt_downloads(chat_id)
                         else:
-                            await context.bot.send_message(chat_id=chat_id, text="❌ دانلود شکست خورد.")
+                            await context.bot.send_message(
+                                chat_id=chat_id, text="❌ دانلود شکست خورد."
+                            )
                     except Exception as send_err:
                         print(f"❌ Audio process error: {send_err}")
-                        await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا: {str(send_err)}")
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=f"❌ خطا: {str(send_err)}"
+                        )
                     finally:
-                        # پاکسازی قطعی فایل صوتی مستقل از موفقیت یا شکست آپلود
                         if file_path and os.path.exists(file_path):
                             try:
                                 os.remove(file_path)
@@ -167,8 +204,8 @@ async def background_yt_download(
                 progress_dict["is_finished"] = True
                 updater_task.cancel()
 
-    finally:
-        active_downloads -= 1
+    except Exception as e:
+        print(f"Semaphore Error: {e}")
 
 
 async def handle_youtube_state(
