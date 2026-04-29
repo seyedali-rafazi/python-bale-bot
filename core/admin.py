@@ -6,6 +6,8 @@ from core.database import get_total_users, set_vip, get_all_users, get_total_vip
 import os
 from dotenv import load_dotenv
 import asyncio
+import sqlite3
+from core.database import DB_NAME
 
 load_dotenv()
 # آیدی عددی ادمین را در فایل .env قرار دهید
@@ -91,3 +93,23 @@ async def cmd_messageuser(update, context):
     await update.message.reply_text(
         f"✅ ارسال به پایان رسید!\nموفق: $ {success} $\nناموفق: $ {fail} $"
     )
+
+
+async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # صفر کردن تعداد دفعات استفاده برای همه کاربران
+    cursor.execute("UPDATE users SET yt_count = 0, music_count = 0")
+
+    # در صورت نیاز به پاک کردن جدول لاگ مصرف روزانه
+    # cursor.execute("DELETE FROM usage_stats")
+
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text("✅ محدودیت‌های تمامی کاربران با موفقیت ریست شد.")

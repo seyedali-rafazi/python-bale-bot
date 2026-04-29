@@ -1,6 +1,5 @@
 # core/database.py
 
-
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
@@ -162,7 +161,7 @@ def get_total_vip_users():
 def get_music_downloads(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
 
     cursor.execute(
         "SELECT music_count, music_date FROM users WHERE user_id = ?", (user_id,)
@@ -181,7 +180,7 @@ def get_music_downloads(user_id):
 def increment_music_downloads(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
 
     cursor.execute(
         "SELECT music_count, music_date FROM users WHERE user_id = ?", (user_id,)
@@ -206,8 +205,8 @@ def increment_music_downloads(user_id):
 def add_user(user_id, username):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    join_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    today = datetime.now().strftime("%Y-%m-%d")
+    join_date = get_tehran_now_full()
+    today = get_tehran_today()
 
     cursor.execute(
         """
@@ -247,7 +246,7 @@ def get_user_info(user_id):
 def get_yt_downloads(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
 
     cursor.execute("SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
@@ -264,7 +263,7 @@ def get_yt_downloads(user_id):
 def increment_yt_downloads(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
 
     cursor.execute("SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
@@ -290,7 +289,7 @@ def increment_yt_downloads(user_id):
 def log_usage(user_id, action):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
 
     cursor.execute(
         """
@@ -317,7 +316,7 @@ def get_total_users():
 def get_user_usage_today(user_id, action):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = get_tehran_today()
     cursor.execute(
         "SELECT count FROM usage_stats WHERE user_id = ? AND action = ? AND date = ?",
         (user_id, action, today),

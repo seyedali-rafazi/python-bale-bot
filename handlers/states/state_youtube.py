@@ -21,7 +21,7 @@ download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 def check_user_limit(chat_id: str) -> bool:
     vip_status = is_vip(chat_id)
-    limit = 10 if vip_status else 3
+    limit = 20 if vip_status else 4
     usage = get_yt_downloads(chat_id)
     return usage < limit
 
@@ -259,7 +259,7 @@ async def handle_youtube_state(
         if text.startswith("📥 دانلود ویدیو "):
             if not check_user_limit(chat_id):
                 await update.message.reply_text(
-                    "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+                    "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
                 )
                 return
 
@@ -305,7 +305,7 @@ async def handle_youtube_state(
 
         if not check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 
@@ -321,7 +321,7 @@ async def handle_youtube_state(
 
         if not check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 3 $ ویدیو برای عادی، $ 10 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 
