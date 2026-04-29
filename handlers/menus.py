@@ -293,8 +293,6 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
-
-    # توجه: باید تابع get_user_info در دیتابیس خود را آپدیت کنید تا تاریخ انقضا را هم برگرداند
     user_info = get_user_info(user_id)
 
     if not user_info:
@@ -303,55 +301,62 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # فرض می‌کنیم خروجی دیتابیس حالا 4 مقدار دارد (تاریخ انقضا اضافه شده است)
-    # اگر تاریخ انقضا ندارید، باید تابع get_user_info را اصلاح کنید
-    username, is_vip_status, join_date, vip_expire_date = user_info
+    username, is_vip, join_date, vip_expire_date = user_info
 
     username_str = f"@{username}" if username else "ندارد"
 
-    # محاسبه روزهای باقی‌مانده از اشتراک
-    vip_days_text = ""
-    if is_vip_status == 1:
+    # ------------------- بخش اصلاح شده -------------------
+
+    vip_status_text = "🆓 رایگان"
+    vip_duration_text = ""  # متنی برای نمایش مدت زمان باقی‌مانده
+
+    if is_vip == 1:
+        vip_status_text = "💎 ویژه (پرو)"
         if vip_expire_date:
             try:
-                # فرمت تاریخ را بر اساس چیزی که در دیتابیس ذخیره کردید تنظیم کنید (مثلاً YYYY-MM-DD HH:MM:SS)
-                expire_dt = datetime.strptime(vip_expire_date, "%Y-%m-%d %H:%M:%S")
+                # کلید حل مشکل: تاریخ در دیتابیس با فرمت ISO ذخیره شده است
+                # پس باید با fromisoformat خوانده شود
+                expire_dt = datetime.fromisoformat(vip_expire_date)
                 now = datetime.now()
-                delta = expire_dt - now
-                days_left = delta.days
 
-                if days_left > 0:
-                    vip_days_text = f"\n⏳ اعتبار اشتراک: $ {days_left} $ روز"
+                if expire_dt > now:
+                    remaining_time = expire_dt - now
+                    # افزودن 1 به remaining_time.days باعث می‌شود روز آخر هم "1 روز" نمایش داده شود
+                    remaining_days = remaining_time.days + 1
+                    vip_duration_text = f"\n⏳ اعتبار اشتراک: {remaining_days} روز"
                 else:
-                    vip_days_text = "\n⏳ اعتبار اشتراک: پایان یافته"
-            except ValueError:
-                vip_days_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا در تاریخ)"
+                    vip_duration_text = "\n⏳ اعتبار اشتراک: منقضی شده"
 
-        vip_str = "💎 ویژه (پرو)"
-    else:
-        vip_str = "🆓 رایگان"
+            except Exception as e:
+                # این لاگ برای خطایابی خودتان در کنسول مفید است
+                print(f"Error parsing date for user {user_id}: {e}")
+                vip_duration_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا)"
+
+    # ------------------- پایان بخش اصلاح شده -------------------
 
     # دریافت آمار مصرف
     yt_count = get_yt_downloads(user_id)
     music_count = get_music_downloads(user_id)
 
     # بررسی محدودیت‌ها
-    yt_limit = "10" if is_vip_status == 1 else "3"
-    music_limit = "20" if is_vip_status == 1 else "6"
+    yt_limit = "نامحدود" if is_vip == 1 else "3"
+    music_limit = "نامحدود" if is_vip == 1 else "6"
 
-    # ساختار متن
-    profile_text = f"""🪪 **مشخصات شما**
+    # ساختار متن نهایی
+    # متغیر vip_duration_text فقط در صورتی که کاربر vip باشد، مقدار می‌گیرد
+    profile_text = f"""
+🪪 **مشخصات شما**
 🆔 ایدی عددی: `{user_id}`
 👤 یوزرنیم: {username_str}
-📊 وضعیت اشتراک: {vip_str} {vip_days_text}
+📊 وضعیت اشتراک: {vip_status_text}{vip_duration_text}
 📆 اولین استفاده: {join_date}
 
 ⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
-• یوتیوب  / دانلود: $ {yt_count}/{yt_limit} $
-• موسیقی / دانلود: $ {music_count}/{music_limit} $
+• یوتیوب | دانلود: $ {yt_count} / {yt_limit} $
+• موسیقی | دانلود: $ {music_count} / {music_limit} $
 """
 
-    await update.message.reply_text(profile_text, parse_mode="Markdown")
+    await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")
 
 
 # پشتیبانی end
