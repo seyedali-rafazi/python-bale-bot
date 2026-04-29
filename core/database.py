@@ -3,8 +3,20 @@
 
 import sqlite3
 from datetime import datetime
+import pytz
 
 DB_NAME = "bot_data.db"
+TEHRAN_TZ = pytz.timezone("Asia/Tehran")
+
+
+def get_tehran_today():  # ## تغییر ##: ساخت یک تابع کمکی برای گرفتن تاریخ تهران
+    """تاریخ امروز را بر اساس منطقه زمانی تهران برمی‌گرداند."""
+    return datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d")
+
+
+def get_tehran_now_full():  # ## تغییر ##: تابع کمکی برای تاریخ و زمان کامل
+    """تاریخ و زمان کامل را بر اساس منطقه زمانی تهران برمی‌گرداند."""
+    return datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def init_db():
@@ -37,21 +49,6 @@ def init_db():
         cursor.execute("ALTER TABLE users ADD COLUMN music_date TEXT")
     # ----------------------------------------
 
-    # 2. ساخت جدول آمار استفاده روزانه
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS usage_stats (
-            user_id TEXT,
-            action TEXT,
-            date TEXT,
-            count INTEGER DEFAULT 1,
-            PRIMARY KEY (user_id, action, date)
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-
-# ... (بقیه توابع قبلی شما مثل add_user, is_vip, set_vip, yt_downloads و غیره سر جای خود بمانند) ...
 
 # ----------- بخش مربوط به دانلودهای موسیقی -----------
 
