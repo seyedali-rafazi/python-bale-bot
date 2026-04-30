@@ -10,6 +10,7 @@ import asyncio
 from dotenv import load_dotenv
 import boto3
 from botocore.config import Config
+import sys
 
 
 load_dotenv()
@@ -24,12 +25,6 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
-
-
-import boto3
-import os
-import sys
-from botocore.config import Config
 
 
 # کلاس جدید برای نمایش درصد پیشرفت
