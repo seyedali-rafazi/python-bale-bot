@@ -8,15 +8,15 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 
-# --- تنظیمات صف ---
-# تعداد پردازش‌های همزمان (می‌توانید به 2 یا 3 افزایش دهید)
-MAX_CONCURRENT = 1
+# --- تنظیمات پردازش ---
+# اسکرپ کردن تلگرام سبک است و سرور خود تلگرام فایل را دانلود می‌کند، پس ظرفیت می‌تواند بالاتر باشد
+MAX_CONCURRENT = 10
 processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-waiting_count = 0  # تعداد افراد حاضر در صف
 
 
 async def fetch_url_background(url: str):
-    response = await asyncio.to_thread(requests.get, url)
+    # بهینه‌سازی مهم: اضافه کردن timeout برای جلوگیری از قفل شدن همیشگی تردها در صورت قطعی شبکه
+    response = await asyncio.to_thread(requests.get, url, timeout=15)
     return response
 
 
@@ -28,41 +28,29 @@ async def handle_telegram_state(
     chat_id: str,
     state_data: dict,
 ):
-    global waiting_count
+    # محاسبه تعداد افراد در صف به روش ایمن
+    waiters = len(processing_semaphore._waiters) if processing_semaphore._waiters else 0
+    available = processing_semaphore._value
 
-    # محاسبه موقعیت فعلی در صف
-    current_position = waiting_count
-    waiting_count += 1  # اضافه شدن کاربر جدید به صف
-
-    if current_position >= MAX_CONCURRENT:
-        # اگر ظرفیت پر باشد، کاربر در صف می‌ماند
-        queue_number = current_position - MAX_CONCURRENT + 1
+    if available == 0:
         await update.message.reply_text(
-            f"⏳ ربات شلوغ است. شما در صف قرار گرفتید (نفر $ {queue_number} $ در صف). لطفاً صبور باشید..."
+            f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
         )
     else:
-        await update.message.reply_text("⏳ در حال پردازش درخواست شما ...")
+        await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
 
     try:
-        # ورود به دروازه پردازش (اگر پر باشد، کدهای زیر در اینجا متوقف می‌شوند تا نوبت کاربر برسد)
         async with processing_semaphore:
-            waiting_count -= 1  # کاربر از صف خارج و وارد پردازش شد
-
-            # اگر کاربر قبلاً در صف بوده، به او اطلاع می‌دهیم که نوبتش رسیده
-            if current_position >= MAX_CONCURRENT:
-                await update.message.reply_text(
-                    "✅ نوبت شما رسید! در حال دریافت اطلاعات..."
-                )
-
-            # ---------------------------------------------------------
-            # منطق اصلی کدهای شما از اینجا شروع می‌شود
-            # ---------------------------------------------------------
             if step == "waiting_tg_single":
                 link = text.strip()
                 try:
                     embed_url = link + "?embed=1"
                     res = await fetch_url_background(embed_url)
-                    soup = BeautifulSoup(res.text, "html.parser")
+
+                    # پارس کردن HTML (به صورت غیرهمگام اجرا می‌شود تا ایونت لوپ را بلاک نکند)
+                    soup = await asyncio.to_thread(
+                        BeautifulSoup, res.text, "html.parser"
+                    )
 
                     msg_div = soup.find("div", class_="tgme_widget_message_text")
                     msg_text = (
@@ -112,21 +100,25 @@ async def handle_telegram_state(
                     ):
                         await update.message.reply_text(msg_text)
 
+                except requests.exceptions.Timeout:
+                    await update.message.reply_text(
+                        "❌ ارتباط با سرور زمان‌بر شد. لطفاً دوباره تلاش کنید."
+                    )
                 except Exception as e:
                     print(f"Telegram Scraping Error: {e}")
                     await update.message.reply_text(
-                        "❌ خطا در دریافت! ممکن است حجم ویدیو بالا باشد یا لینک معتبر نباشد."
+                        "❌ خطا در دریافت! ممکن است لینک معتبر نباشد یا محتوا خصوصی باشد."
                     )
-
-                set_state(chat_id, "")
 
             elif step == "waiting_tg_latest":
                 channel_id = text.strip().replace("@", "").split("/")[-1]
                 try:
                     url = f"https://t.me/s/{channel_id}"
                     res = await fetch_url_background(url)
-                    soup = BeautifulSoup(res.text, "html.parser")
 
+                    soup = await asyncio.to_thread(
+                        BeautifulSoup, res.text, "html.parser"
+                    )
                     messages = soup.find_all("div", class_="tgme_widget_message")
                     latest_messages = messages[-5:]
 
@@ -167,12 +159,10 @@ async def handle_telegram_state(
                                     await update.message.reply_photo(
                                         photo=photo_url, caption=caption
                                     )
-
                                 if msg_text and (not photo_url or len(msg_text) > 1024):
                                     await update.message.reply_text(
                                         msg_text, parse_mode="Markdown"
                                     )
-
                             except Exception as send_err:
                                 print(f"Error sending media: {send_err}")
                                 if msg_text:
@@ -180,15 +170,20 @@ async def handle_telegram_state(
                                         msg_text, parse_mode="Markdown"
                                     )
 
+                except requests.exceptions.Timeout:
+                    await update.message.reply_text(
+                        "❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید."
+                    )
                 except Exception as e:
                     print(f"Telegram Latest Error: {e}")
                     await update.message.reply_text(
                         "❌ خطا در خواندن کانال! ممکن است آیدی اشتباه باشد."
                     )
 
-                set_state(chat_id, "")
-
     except Exception as general_err:
         print(f"Queue/Processing Error: {general_err}")
-        # در صورت بروز خطای پیش‌بینی نشده، کاربر از صف خارج شده است (چون در بلاک try است)
         await update.message.reply_text("❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.")
+
+    finally:
+        # اطمینان از خروج از استیت در هر شرایط (حتی ارورها)
+        set_state(chat_id, "")

@@ -41,32 +41,36 @@ def get_video_duration(file_path):
 # تبدیل به async و استفاده از asyncio.create_subprocess_exec
 async def split_video_if_needed(file_path):
     file_size = os.path.getsize(file_path)
-    if file_size <= SPLIT_SIZE_LIMIT:
-        return [file_path]
 
-    duration = get_video_duration(file_path)
-    if not duration:
-        return [file_path]
+    # تلگرام برای ربات‌های عادی محدودیت ۵۰ مگابایت دارد، اما برای پایداری بالا در ترافیک ۱۰۰۰ کاربر،
+    # همان ۱۵ مگابایت که مد نظر شماست عالی است (حدود ۱۵,۷۲۸,۶۴۰ بایت)
+    SAFE_LIMIT = 15 * 1024 * 1024
 
-    safe_split_size = 15 * 1024 * 1024
-    num_chunks = math.ceil(file_size / safe_split_size)
-    segment_time = duration / num_chunks
+    if file_size <= SAFE_LIMIT:
+        return [file_path]
 
     base_name, ext = os.path.splitext(file_path)
+    # الگوی نام‌گذاری برای پارت‌ها
     output_pattern = f"{base_name}_part%03d{ext}"
 
+    # استفاده از دستور دقیق ffmpeg برای تقسیم بر اساس حجم (Byte-level splitting)
+    # این دستور ویدیو را به قطعاتی تقسیم می‌کند که هر کدام حداکثر ۱۵ مگابایت باشند
     cmd = [
         "ffmpeg",
         "-i",
         file_path,
         "-c",
-        "copy",
+        "copy",  # کپی بدون تغییر انکودینگ برای سرعت بالا
+        "-map",
+        "0",
         "-f",
         "segment",
-        "-segment_time",
-        str(segment_time),
+        "-segment_size",
+        str(SAFE_LIMIT),  # تقسیم دقیق بر اساس حجم
         "-reset_timestamps",
         "1",
+        "-break_non_keyframes",
+        "1",  # جلوگیری از خرابی فایل در نقاط برش
         output_pattern,
     ]
 
@@ -77,12 +81,17 @@ async def split_video_if_needed(file_path):
         await process.communicate()
 
         if process.returncode == 0:
-            os.remove(file_path)
+            # حذف فایل اصلی حجیم
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+            # پیدا کردن و مرتب کردن پارت‌های تولید شده
             parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
             return parts
-        return [file_path]
+        else:
+            return [file_path]
     except Exception as e:
-        print(f"Error splitting video: {e}")
+        print(f"Error splitting video by size: {e}")
         return [file_path]
 
 
