@@ -26,34 +26,37 @@ MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 
-def upload_to_arvancloud(file_path, object_name=None):
-    if object_name is None:
-        object_name = file_path.split("/")[-1]
-
-    # تنظیمات کانفیگ برای دور زدن پروکسی سرور
-    my_config = Config(proxies={"http": None, "https": None}, signature_version="s3v4")
-
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=ARVAN_ENDPOINT,
-        aws_access_key_id=ARVAN_ACCESS_KEY,
-        aws_secret_access_key=ARVAN_SECRET_KEY,
-        config=my_config,
-        region_name="ir-thr-at1",  # ریجن آروان
-    )
-
+def upload_to_arvancloud(file_path, object_name):
     try:
-        print(f"Starting upload for {file_path}...")
-        s3_client.upload_file(file_path, ARVAN_BUCKET, object_name)
-        print("Upload successful!")
-
-        file_url = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
-        return file_url
+        print("Connecting to ArvanCloud...")
+        # تنظیمات جدید با اضافه شدن تایم‌اوت
+        my_config = Config(
+            proxies={'http': None, 'https': None},
+            signature_version='s3v4',
+            connect_timeout=10, # بعد از ۱۰ ثانیه اگر وصل نشد ارور بدهد
+            read_timeout=30
+        )
+        
+        s3 = boto3.client(
+            's3',
+            endpoint_url=ARVAN_ENDPOINT,
+            aws_access_key_id=ARVAN_ACCESS_KEY,
+            aws_secret_access_key=ARVAN_SECRET_KEY,
+            region_name="ir-thr-at1",
+            config=my_config
+        )
+        
+        print(f"Uploading {object_name}...")
+        s3.upload_file(file_path, ARVAN_BUCKET, object_name)
+        
+        link = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
+        print("Upload Successful!")
+        return link
 
     except Exception as e:
-        print(f"❌ Error uploading to ArvanCloud: {e}")
+        # چاپ ارور دقیق در کنسول برای عیب‌یابی
+        print(f"ArvanCloud Upload Error: {e}")
         return None
-
 
 def get_video_duration(file_path):
     try:
