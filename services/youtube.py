@@ -10,7 +10,7 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
-PROXY = os.getenv("PROXY")
+# PROXY = os.getenv("PROXY") # پراکسی غیرفعال شد
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -38,7 +38,6 @@ def get_video_duration(file_path):
         return 0
 
 
-# تبدیل به async و استفاده از asyncio.create_subprocess_exec
 async def split_video_if_needed(original_file_path):
     HARD_LIMIT = 14.5 * 1024 * 1024  # 14.5 MB
 
@@ -50,7 +49,6 @@ async def split_video_if_needed(original_file_path):
 
     part_counter = 1
 
-    # استخراج پسوند واقعی (حل مشکل پسوندهای .mp4.part)
     base_name, ext = os.path.splitext(original_file_path)
     if ext.lower() == ".part":
         base_name, ext = os.path.splitext(base_name)
@@ -64,7 +62,7 @@ async def split_video_if_needed(original_file_path):
             final_valid_parts.append(current_file)
             continue
 
-        duration = get_video_duration(current_file)  # تابع خودتان
+        duration = get_video_duration(current_file)
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
             continue
@@ -77,7 +75,6 @@ async def split_video_if_needed(original_file_path):
 
         segment_time = duration / num_chunks
 
-        # اینجا از پسوند واقعی که بالاتر پیدا کردیم استفاده می‌کنیم
         output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
         part_counter += 1
 
@@ -120,7 +117,6 @@ async def split_video_if_needed(original_file_path):
             print(f"Error in ffmpeg: {e}")
             final_valid_parts.append(current_file)
 
-    # فایل اصلی را فقط در صورتی پاک می‌کنیم که توی لیست فایل‌های نهایی نباشد
     if original_file_path not in final_valid_parts and os.path.exists(
         original_file_path
     ):
@@ -151,7 +147,8 @@ def download_youtube_video(url, progress_dict=None):
         progress_hook(d, progress_dict)
 
     ydl_opts = {
-        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
+        "source_address": "::",  # <-- استفاده مستقیم از IPv6
+        "extractor_args": {"youtube": ["client=ANDROID,IOS,TV"]},  # <-- شبیه‌سازی موبایل
         "format": "best[height<=720]/best[height<=480]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
@@ -195,8 +192,9 @@ def download_youtube_audio(video_id_or_url: str) -> str:
     req_id = uuid.uuid4().hex
 
     ydl_opts = {
+        "source_address": "::",  # <-- استفاده مستقیم از IPv6
+        "extractor_args": {"youtube": ["client=ANDROID,IOS,TV"]},  # <-- شبیه‌سازی موبایل
         "format": "bestaudio/best",
-        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
         "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",
         "postprocessors": [
             {
@@ -231,7 +229,8 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
-        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
+        "source_address": "::",  # <-- استفاده مستقیم از IPv6
+        "extractor_args": {"youtube": ["client=ANDROID,IOS,TV"]},  # <-- شبیه‌سازی موبایل
         "extract_flat": True,
         "quiet": True,
         "noplaylist": True,
