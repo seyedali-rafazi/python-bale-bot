@@ -48,6 +48,22 @@ def upload_to_arvancloud(file_path, object_name=None):
         object_name = os.path.basename(file_path)
 
     print("\nConnecting to ArvanCloud...")
+
+    # استفاده مستقیم از متغیرهایی که بالا لود کردی
+    endpoint = ARVAN_ENDPOINT
+    access_key = ARVAN_ACCESS_KEY
+    secret_key = ARVAN_SECRET_KEY
+    bucket_name = ARVAN_BUCKET
+
+    # چک خیلی مهم (جلوگیری از None)
+    if not all([endpoint, access_key, secret_key, bucket_name]):
+        print("❌ یکی از ENV ها مقدار ندارد:")
+        print("ENDPOINT:", endpoint)
+        print("ACCESS:", access_key)
+        print("SECRET:", secret_key)
+        print("BUCKET:", bucket_name)
+        return None
+
     my_config = Config(
         proxies={"http": None, "https": None},
         signature_version="s3v4",
@@ -58,29 +74,28 @@ def upload_to_arvancloud(file_path, object_name=None):
     try:
         s3 = boto3.client(
             "s3",
-            endpoint_url=os.getenv("ARVAN_ENDPOINT_URL"),
-            aws_access_key_id=os.getenv("ARVAN_ACCESS_KEY"),
-            aws_secret_access_key=os.getenv("ARVAN_SECRET_KEY"),
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
             config=my_config,
         )
 
-        bucket_name = os.getenv("ARVAN_BUCKET_NAME")
         print(f"Uploading {object_name}...")
 
-        # اضافه کردن Callback برای نمایش درصد پیشرفت
         s3.upload_file(
             file_path,
             bucket_name,
             object_name,
-            Callback=ProgressPercentage(file_path),  # این بخش اضافه شد
+            Callback=ProgressPercentage(file_path),
         )
 
-        print("\nUpload completed!")
-        file_url = f"{os.getenv('ARVAN_ENDPOINT_URL')}/{bucket_name}/{object_name}"
+        print("\n✅ Upload completed!")
+
+        file_url = f"{endpoint}/{bucket_name}/{object_name}"
         return file_url
 
     except Exception as e:
-        print(f"\nError uploading to ArvanCloud: {e}")
+        print(f"\n❌ Error uploading to ArvanCloud: {e}")
         return None
 
 
