@@ -45,21 +45,25 @@ async def split_video_if_needed(original_file_path):
     if os.path.getsize(original_file_path) <= HARD_LIMIT:
         return [original_file_path]
 
-    # صفی از فایل‌ها که باید بررسی/خرد شوند
     files_to_process = [original_file_path]
     final_valid_parts = []
 
     part_counter = 1
 
+    # استخراج پسوند واقعی (حل مشکل پسوندهای .mp4.part)
+    base_name, ext = os.path.splitext(original_file_path)
+    if ext.lower() == ".part":
+        base_name, ext = os.path.splitext(base_name)
+        if not ext:
+            ext = ".mp4"
+
     while files_to_process:
         current_file = files_to_process.pop(0)
 
-        # اگر حجم فایل اوکی بود، میره تو لیست نهایی
         if os.path.getsize(current_file) <= HARD_LIMIT:
             final_valid_parts.append(current_file)
             continue
 
-        # اگر حجم زیاد بود، باید خرد بشه
         duration = get_video_duration(current_file)  # تابع خودتان
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
@@ -67,14 +71,13 @@ async def split_video_if_needed(original_file_path):
 
         file_size = os.path.getsize(current_file)
 
-        # محاسبه تعداد تکه‌ها فقط برای همین فایل
         num_chunks = math.ceil(file_size / HARD_LIMIT)
         if num_chunks == 1:
-            num_chunks = 2  # حداقل باید دو تیکه بشه
+            num_chunks = 2
 
         segment_time = duration / num_chunks
 
-        base_name, ext = os.path.splitext(original_file_path)
+        # اینجا از پسوند واقعی که بالاتر پیدا کردیم استفاده می‌کنیم
         output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
         part_counter += 1
 
@@ -103,30 +106,26 @@ async def split_video_if_needed(original_file_path):
             await process.communicate()
 
             if process.returncode == 0:
-                # پیدا کردن پارت‌های جدیدی که الان ساخته شدن
                 new_parts = sorted(
                     glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
                 )
-
-                # این پارت‌های جدید رو می‌ذاریم تو صف تا تو دور بعدی حجمشون چک بشه
                 files_to_process.extend(new_parts)
 
-                # فایل فعلی رو پاک می‌کنیم (به شرطی که فایل اصلی کاربر نباشه)
                 if current_file != original_file_path and os.path.exists(current_file):
                     os.remove(current_file)
             else:
-                # اگر ارور داد، مجبوری همین فایل رو نگه می‌داریم
                 final_valid_parts.append(current_file)
 
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error in ffmpeg: {e}")
             final_valid_parts.append(current_file)
 
-    # در نهایت فایل اصلی را پاک میکنیم (چون پارت‌ها ساخته شدند)
-    if os.path.exists(original_file_path):
+    # فایل اصلی را فقط در صورتی پاک می‌کنیم که توی لیست فایل‌های نهایی نباشد
+    if original_file_path not in final_valid_parts and os.path.exists(
+        original_file_path
+    ):
         os.remove(original_file_path)
 
-    # مرتب‌سازی پارت‌های نهایی بر اساس نام
     return sorted(final_valid_parts)
 
 
