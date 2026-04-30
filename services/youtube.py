@@ -26,39 +26,66 @@ MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 
-def upload_to_arvancloud(file_path, object_name=None):  # اینجا تغییر کرد
-    try:
-        # اگر نام فایل داده نشد، خودش از مسیر فایل استخراج می‌کند
-        if object_name is None:
-            object_name = os.path.basename(file_path)
+import boto3
+import os
+import sys
+from botocore.config import Config
 
-        print("Connecting to ArvanCloud...")
-        my_config = Config(
-            proxies={"http": None, "https": None},
-            signature_version="s3v4",
-            connect_timeout=10,
-            read_timeout=30,
+
+# کلاس جدید برای نمایش درصد پیشرفت
+class ProgressPercentage(object):
+    def __init__(self, filename):
+        self._filename = filename
+        self._size = float(os.path.getsize(filename))
+        self._seen_so_far = 0
+
+    def __call__(self, bytes_amount):
+        self._seen_so_far += bytes_amount
+        percentage = (self._seen_so_far / self._size) * 100
+        sys.stdout.write(
+            f"\rآپلود {self._filename}  {self._seen_so_far} / {self._size}  ({percentage:.2f}%)"
         )
+        sys.stdout.flush()
 
+
+def upload_to_arvancloud(file_path, object_name=None):
+    if object_name is None:
+        object_name = os.path.basename(file_path)
+
+    print("\nConnecting to ArvanCloud...")
+    my_config = Config(
+        proxies={"http": None, "https": None},
+        signature_version="s3v4",
+        connect_timeout=10,
+        read_timeout=30,
+    )
+
+    try:
         s3 = boto3.client(
             "s3",
-            endpoint_url=ARVAN_ENDPOINT,
-            aws_access_key_id=ARVAN_ACCESS_KEY,
-            aws_secret_access_key=ARVAN_SECRET_KEY,
-            region_name="ir-thr-at1",
+            endpoint_url=os.getenv("ARVAN_ENDPOINT_URL"),
+            aws_access_key_id=os.getenv("ARVAN_ACCESS_KEY"),
+            aws_secret_access_key=os.getenv("ARVAN_SECRET_KEY"),
             config=my_config,
         )
 
+        bucket_name = os.getenv("ARVAN_BUCKET_NAME")
         print(f"Uploading {object_name}...")
-        s3.upload_file(file_path, ARVAN_BUCKET, object_name)
 
-        link = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
-        print("Upload Successful!")
-        return link
+        # اضافه کردن Callback برای نمایش درصد پیشرفت
+        s3.upload_file(
+            file_path,
+            bucket_name,
+            object_name,
+            Callback=ProgressPercentage(file_path),  # این بخش اضافه شد
+        )
+
+        print("\nUpload completed!")
+        file_url = f"{os.getenv('ARVAN_ENDPOINT_URL')}/{bucket_name}/{object_name}"
+        return file_url
 
     except Exception as e:
-        # چاپ ارور دقیق در کنسول برای عیب‌یابی
-        print(f"ArvanCloud Upload Error: {e}")
+        print(f"\nError uploading to ArvanCloud: {e}")
         return None
 
 
