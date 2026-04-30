@@ -26,29 +26,32 @@ MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 
-def upload_to_arvancloud(file_path, object_name):
+def upload_to_arvancloud(file_path, object_name=None):  # اینجا تغییر کرد
     try:
+        # اگر نام فایل داده نشد، خودش از مسیر فایل استخراج می‌کند
+        if object_name is None:
+            object_name = os.path.basename(file_path)
+
         print("Connecting to ArvanCloud...")
-        # تنظیمات جدید با اضافه شدن تایم‌اوت
         my_config = Config(
-            proxies={'http': None, 'https': None},
-            signature_version='s3v4',
-            connect_timeout=10, # بعد از ۱۰ ثانیه اگر وصل نشد ارور بدهد
-            read_timeout=30
+            proxies={"http": None, "https": None},
+            signature_version="s3v4",
+            connect_timeout=10,
+            read_timeout=30,
         )
-        
+
         s3 = boto3.client(
-            's3',
+            "s3",
             endpoint_url=ARVAN_ENDPOINT,
             aws_access_key_id=ARVAN_ACCESS_KEY,
             aws_secret_access_key=ARVAN_SECRET_KEY,
             region_name="ir-thr-at1",
-            config=my_config
+            config=my_config,
         )
-        
+
         print(f"Uploading {object_name}...")
         s3.upload_file(file_path, ARVAN_BUCKET, object_name)
-        
+
         link = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
         print("Upload Successful!")
         return link
@@ -57,6 +60,7 @@ def upload_to_arvancloud(file_path, object_name):
         # چاپ ارور دقیق در کنسول برای عیب‌یابی
         print(f"ArvanCloud Upload Error: {e}")
         return None
+
 
 def get_video_duration(file_path):
     try:
