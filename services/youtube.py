@@ -39,62 +39,95 @@ def get_video_duration(file_path):
 
 
 # تبدیل به async و استفاده از asyncio.create_subprocess_exec
-async def split_video_if_needed(file_path):
-    file_size = os.path.getsize(file_path)
+async def split_video_if_needed(original_file_path):
+    HARD_LIMIT = 14.5 * 1024 * 1024  # 14.5 MB
 
-    # حد امن برای هر پارت (۱۵ مگابایت)
-    SAFE_LIMIT = 15 * 1024 * 1024
+    if os.path.getsize(original_file_path) <= HARD_LIMIT:
+        return [original_file_path]
 
-    if file_size <= SAFE_LIMIT:
-        return [file_path]
+    # صفی از فایل‌ها که باید بررسی/خرد شوند
+    files_to_process = [original_file_path]
+    final_valid_parts = []
 
-    # گرفتن زمان ویدیو برای تقسیم دقیق زمانی
-    duration = get_video_duration(file_path)
-    if not duration or duration <= 0:
-        return [file_path]
+    part_counter = 1
 
-    # محاسبه زمان هر پارت بر اساس نسبت حجم به زمان
-    num_chunks = math.ceil(file_size / SAFE_LIMIT)
-    # کمی زمان را کمتر در نظر میگیریم تا مطمئن شویم حجم از 15 مگ بیشتر نمیشود
-    segment_time = (duration / num_chunks) * 0.95
+    while files_to_process:
+        current_file = files_to_process.pop(0)
 
-    base_name, ext = os.path.splitext(file_path)
-    output_pattern = f"{base_name}_part%03d{ext}"
+        # اگر حجم فایل اوکی بود، میره تو لیست نهایی
+        if os.path.getsize(current_file) <= HARD_LIMIT:
+            final_valid_parts.append(current_file)
+            continue
 
-    cmd = [
-        "ffmpeg",
-        "-i",
-        file_path,
-        "-c",
-        "copy",
-        "-f",
-        "segment",
-        "-segment_time",
-        str(segment_time),
-        "-reset_timestamps",
-        "1",
-        output_pattern,
-    ]
+        # اگر حجم زیاد بود، باید خرد بشه
+        duration = get_video_duration(current_file)  # تابع خودتان
+        if not duration or duration <= 0:
+            final_valid_parts.append(current_file)
+            continue
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-        )
-        await process.communicate()
+        file_size = os.path.getsize(current_file)
 
-        if process.returncode == 0:
-            # حذف فایل اصلی حجیم
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        # محاسبه تعداد تکه‌ها فقط برای همین فایل
+        num_chunks = math.ceil(file_size / HARD_LIMIT)
+        if num_chunks == 1:
+            num_chunks = 2  # حداقل باید دو تیکه بشه
 
-            # پیدا کردن و مرتب کردن پارت‌های تولید شده
-            parts = sorted(glob.glob(f"{base_name}_part*{ext}"))
-            return parts if parts else [file_path]
-        else:
-            return [file_path]
-    except Exception as e:
-        print(f"Error splitting video: {e}")
-        return [file_path]
+        segment_time = duration / num_chunks
+
+        base_name, ext = os.path.splitext(original_file_path)
+        output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
+        part_counter += 1
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            current_file,
+            "-c",
+            "copy",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(segment_time),
+            "-reset_timestamps",
+            "1",
+            output_pattern,
+        ]
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await process.communicate()
+
+            if process.returncode == 0:
+                # پیدا کردن پارت‌های جدیدی که الان ساخته شدن
+                new_parts = sorted(
+                    glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
+                )
+
+                # این پارت‌های جدید رو می‌ذاریم تو صف تا تو دور بعدی حجمشون چک بشه
+                files_to_process.extend(new_parts)
+
+                # فایل فعلی رو پاک می‌کنیم (به شرطی که فایل اصلی کاربر نباشه)
+                if current_file != original_file_path and os.path.exists(current_file):
+                    os.remove(current_file)
+            else:
+                # اگر ارور داد، مجبوری همین فایل رو نگه می‌داریم
+                final_valid_parts.append(current_file)
+
+        except Exception as e:
+            print(f"Error: {e}")
+            final_valid_parts.append(current_file)
+
+    # در نهایت فایل اصلی را پاک میکنیم (چون پارت‌ها ساخته شدند)
+    if os.path.exists(original_file_path):
+        os.remove(original_file_path)
+
+    # مرتب‌سازی پارت‌های نهایی بر اساس نام
+    return sorted(final_valid_parts)
 
 
 def progress_hook(d, progress_dict):
