@@ -2,22 +2,24 @@
 
 import re
 import asyncio
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 
 # --- تنظیمات پردازش ---
-# اسکرپ کردن تلگرام سبک است و سرور خود تلگرام فایل را دانلود می‌کند، پس ظرفیت می‌تواند بالاتر باشد
 MAX_CONCURRENT = 10
 processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
 
-async def fetch_url_background(url: str):
-    # بهینه‌سازی مهم: اضافه کردن timeout برای جلوگیری از قفل شدن همیشگی تردها در صورت قطعی شبکه
-    response = await asyncio.to_thread(requests.get, url, timeout=15)
-    return response
+async def fetch_url_async(url: str) -> str:
+    """دریافت محتوای صفحه به صورت کاملاً غیرهمگام بدون درگیر کردن Thread"""
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as response:
+            response.raise_for_status()  # اگر ارور 404 یا 500 بود خطا بدهد
+            return await response.text()
 
 
 async def handle_telegram_state(
@@ -28,11 +30,14 @@ async def handle_telegram_state(
     chat_id: str,
     state_data: dict,
 ):
-    # محاسبه تعداد افراد در صف به روش ایمن
-    waiters = len(processing_semaphore._waiters) if processing_semaphore._waiters else 0
-    available = processing_semaphore._value
+    # محاسبه تعداد افراد در صف (با احتیاط نسبت به تغییرات آپدیت‌های پایتون)
+    waiters = (
+        len(processing_semaphore._waiters)
+        if hasattr(processing_semaphore, "_waiters") and processing_semaphore._waiters
+        else 0
+    )
 
-    if available == 0:
+    if processing_semaphore.locked():
         await update.message.reply_text(
             f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
         )
@@ -45,11 +50,11 @@ async def handle_telegram_state(
                 link = text.strip()
                 try:
                     embed_url = link + "?embed=1"
-                    res = await fetch_url_background(embed_url)
+                    html_content = await fetch_url_async(embed_url)
 
-                    # پارس کردن HTML (به صورت غیرهمگام اجرا می‌شود تا ایونت لوپ را بلاک نکند)
+                    # پارس کردن HTML همچنان در Thread اجرا می‌شود چون BeautifulSoup همگام و پردازشی (CPU-bound) است
                     soup = await asyncio.to_thread(
-                        BeautifulSoup, res.text, "html.parser"
+                        BeautifulSoup, html_content, "html.parser"
                     )
 
                     msg_div = soup.find("div", class_="tgme_widget_message_text")
@@ -100,24 +105,29 @@ async def handle_telegram_state(
                     ):
                         await update.message.reply_text(msg_text)
 
-                except requests.exceptions.Timeout:
+                except asyncio.TimeoutError:
                     await update.message.reply_text(
                         "❌ ارتباط با سرور زمان‌بر شد. لطفاً دوباره تلاش کنید."
+                    )
+                except aiohttp.ClientError as e:
+                    print(f"Network Error: {e}")
+                    await update.message.reply_text(
+                        "❌ خطا در دریافت شبکه! ممکن است لینک معتبر نباشد."
                     )
                 except Exception as e:
                     print(f"Telegram Scraping Error: {e}")
                     await update.message.reply_text(
-                        "❌ خطا در دریافت! ممکن است لینک معتبر نباشد یا محتوا خصوصی باشد."
+                        "❌ خطا در دریافت! محتوا خصوصی است یا حذف شده است."
                     )
 
             elif step == "waiting_tg_latest":
                 channel_id = text.strip().replace("@", "").split("/")[-1]
                 try:
                     url = f"https://t.me/s/{channel_id}"
-                    res = await fetch_url_background(url)
+                    html_content = await fetch_url_async(url)
 
                     soup = await asyncio.to_thread(
-                        BeautifulSoup, res.text, "html.parser"
+                        BeautifulSoup, html_content, "html.parser"
                     )
                     messages = soup.find_all("div", class_="tgme_widget_message")
                     latest_messages = messages[-5:]
@@ -170,7 +180,7 @@ async def handle_telegram_state(
                                         msg_text, parse_mode="Markdown"
                                     )
 
-                except requests.exceptions.Timeout:
+                except asyncio.TimeoutError:
                     await update.message.reply_text(
                         "❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید."
                     )
@@ -185,5 +195,4 @@ async def handle_telegram_state(
         await update.message.reply_text("❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.")
 
     finally:
-        # اطمینان از خروج از استیت در هر شرایط (حتی ارورها)
         set_state(chat_id, "")

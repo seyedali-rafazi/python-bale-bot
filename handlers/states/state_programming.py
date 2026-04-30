@@ -1,4 +1,8 @@
+# handlers/states/state_programming.py
+
+import os
 import re
+import uuid
 import aiohttp
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -6,31 +10,48 @@ from telegram.ext import ContextTypes
 from core.state_manager import clear_state
 from ddgs import DDGS
 
+# کنترل تعداد درخواست‌های همزمان برای جلوگیری از پر شدن منابع و مسدود شدن IP
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(5)
+SEARCH_SEMAPHORE = asyncio.Semaphore(3)
+
 
 async def background_download(chat_id, bot, download_url, filename, caption):
+    temp_filepath = f"temp_{uuid.uuid4().hex}_{filename}"
     try:
-        # افزودن User-Agent برای جلوگیری از مسدود شدن توسط گوگل
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(download_url, headers=headers) as response:
-                if response.status == 200:
-                    file_bytes = await response.read()
-                    await bot.send_document(
-                        chat_id=chat_id,
-                        document=file_bytes,
-                        filename=filename,
-                        caption=caption,
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id,
-                        f"❌ خطا در دریافت فایل از سرور اصلی. کد خطا: {response.status}",
-                    )
+
+        async with DOWNLOAD_SEMAPHORE:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(download_url, headers=headers) as response:
+                    if response.status == 200:
+                        # دانلود فایل به صورت تکه‌ای (Chunk) روی هارد به جای پر کردن RAM
+                        with open(temp_filepath, "wb") as f:
+                            async for chunk in response.content.iter_chunked(
+                                1024 * 1024
+                            ):  # تکه‌های 1 مگابایتی
+                                f.write(chunk)
+
+                        # ارسال مستقیم فایل از روی هارد
+                        await bot.send_document(
+                            chat_id=chat_id,
+                            document=temp_filepath,
+                            filename=filename,
+                            caption=caption,
+                            read_timeout=120,
+                            write_timeout=120,
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id,
+                            f"❌ خطا در دریافت فایل. کد خطا: {response.status}",
+                        )
     except Exception as e:
         await bot.send_message(chat_id, f"❌ خطای غیرمنتظره در دانلود: {e}")
     finally:
+        if os.path.exists(temp_filepath):
+            os.remove(temp_filepath)
         clear_state(chat_id)
 
 
@@ -54,10 +75,7 @@ async def handle_programming_state(
                 await update.message.reply_text("❌ شناسه استخراج شده نامعتبر است.")
                 return
 
-            await update.message.reply_text(
-                "⏳ درخواست شما در صف دانلود (پس‌زمینه) قرار گرفت..."
-            )
-            # استفاده از پارامترهای جدیدتر برای دانلود
+            await update.message.reply_text("⏳ درخواست شما در صف دانلود قرار گرفت...")
             download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
 
             asyncio.create_task(
@@ -70,16 +88,19 @@ async def handle_programming_state(
                 )
             )
         else:
-            await update.message.reply_text("🔍 در حال جستجوی نام افزونه...")
+            await update.message.reply_text(
+                "🔍 در حال جستجوی نام افزونه (لطفا کمی صبر کنید)..."
+            )
             try:
-                # حذف کلمه site: برای نتایج بهتر در داک‌داک‌گو
                 query = f"chrome web store extension {text}"
 
                 def perform_search(q):
                     with DDGS() as ddgs:
                         return list(ddgs.text(q, max_results=5))
 
-                results = await asyncio.to_thread(perform_search, query)
+                # استفاده از قفل برای جلوگیری از اسپم شدن DuckDuckGo
+                async with SEARCH_SEMAPHORE:
+                    results = await asyncio.to_thread(perform_search, query)
 
                 if not results:
                     await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
@@ -118,7 +139,7 @@ async def handle_programming_state(
                         )
                     else:
                         await update.message.reply_text(
-                            "❌ شناسه‌ای در نتایج جستجو یافت نشد. لطفاً لینک یا ID دقیق را ارسال کنید."
+                            "❌ شناسه‌ای یافت نشد. لطفاً لینک دقیق را ارسال کنید."
                         )
             except Exception as e:
                 await update.message.reply_text(f"❌ خطا در جستجو: {e}")
@@ -177,7 +198,10 @@ async def handle_programming_state(
 
 async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass  # جلوگیری از کرش در صورت تایم‌اوت شدن کوئری
 
     data = query.data
     if data.startswith("dlchrome_"):

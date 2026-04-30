@@ -1,7 +1,13 @@
+# handlers/states/state_translation.py
+
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.translator import translate_text
+from core.state_manager import clear_state  # فرض بر اینکه این تابع را دارید
+
+# محدودکننده برای جلوگیری از بلاک شدن آی‌پی توسط گوگل (حداکثر 10 ترجمه همزمان)
+TRANSLATION_SEMAPHORE = asyncio.Semaphore(10)
 
 
 async def handle_translation_state(
@@ -12,16 +18,30 @@ async def handle_translation_state(
     chat_id: str,
     state_data: dict,
 ):
-    if step == "waiting_tr_fa_en":
-        await update.message.reply_text("⏳ در حال ترجمه به انگلیسی...")
-        # فراخوانی سرویس ترجمه
-        result = await asyncio.to_thread(translate_text, "fa", "en", text)
-        await update.message.reply_text(f"✅ **نتیجه ترجمه:**\n\n{result}")
-        return
+    try:
+        if step == "waiting_tr_fa_en":
+            source, target = "fa", "en"
+        elif step == "waiting_tr_en_fa":
+            source, target = "en", "fa"
+        else:
+            return
 
-    elif step == "waiting_tr_en_fa":
-        await update.message.reply_text("⏳ در حال ترجمه به فارسی...")
-        # فراخوانی سرویس ترجمه
-        result = await asyncio.to_thread(translate_text, "en", "fa", text)
-        await update.message.reply_text(f"✅ **نتیجه ترجمه:**\n\n{result}")
-        return
+        # ارسال پیام انتظار
+        wait_msg = await update.message.reply_text("⏳ در حال ترجمه...")
+
+        async with TRANSLATION_SEMAPHORE:
+            # فراخوانی سرویس ترجمه در ترد جداگانه تا ربات هنگ نکند
+            result = await asyncio.to_thread(translate_text, source, target, text)
+
+        # ویرایش پیام انتظار به جای ارسال یک پیام جدید (UX بهتر)
+        await wait_msg.edit_text(
+            f"✅ **نتیجه ترجمه:**\n\n`{result}`", parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        print(f"Translation Handler Error: {e}")
+        await update.message.reply_text("❌ خطای سیستمی رخ داد.")
+
+    finally:
+        # بسیار مهم: خروج کاربر از وضعیت ترجمه تا در پیام‌های بعدی گیر نکند
+        clear_state(chat_id)

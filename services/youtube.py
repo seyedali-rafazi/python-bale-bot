@@ -152,18 +152,18 @@ def download_youtube_video(url, progress_dict=None):
 
     ydl_opts = {
         "proxy": PROXY,
+        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
         "format": "best[height<=720]/best[height<=480]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
         "noprogress": True,
-        "max_filesize": MAX_DOWNLOAD_SIZE,  # بهینه سازی: جلوگیری از دانلود فایل حجیم توسط خود کتابخانه
+        "max_filesize": MAX_DOWNLOAD_SIZE,
         "noplaylist": True,
         "progress_hooks": [my_hook] if progress_dict else [],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # بهینه سازی: حذف extract_info اضافه (False) و دانلود مستقیم
             info = ydl.extract_info(url, download=True)
             video_id = info.get("id", "unknown")
 
@@ -171,9 +171,7 @@ def download_youtube_video(url, progress_dict=None):
             files = glob.glob(pattern)
 
             if not files:
-                return (
-                    "TOO_LARGE"  # اگر فایلی نیست، احتمالا به خاطر محدودیت حجم اسکیپ شده
-                )
+                return "TOO_LARGE"
 
             final_file = files[0]
             actual_size = os.path.getsize(final_file)
@@ -182,7 +180,6 @@ def download_youtube_video(url, progress_dict=None):
                 os.remove(final_file)
                 return "TOO_LARGE"
 
-            # تابع split حالا در هندلر صدا زده می‌شود نه اینجا
             return final_file
 
     except Exception as e:
@@ -200,6 +197,7 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
     ydl_opts = {
         "format": "bestaudio/best",
+        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
         "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",
         "postprocessors": [
             {
@@ -211,7 +209,7 @@ def download_youtube_audio(video_id_or_url: str) -> str:
         "proxy": PROXY,
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,  # بهینه سازی
+        "noplaylist": True,
         "max_filesize": MAX_DOWNLOAD_SIZE,
     }
 
@@ -236,9 +234,10 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
         "proxy": PROXY,
+        "source_address": "::",  # <-- اضافه شده برای استفاده از IPv6
         "extract_flat": True,
         "quiet": True,
-        "noplaylist": True,  # بهینه سازی: جلوگیری از لود پلی‌لیست‌ها
+        "noplaylist": True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
