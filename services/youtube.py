@@ -9,6 +9,8 @@ import math
 import asyncio
 from dotenv import load_dotenv
 import boto3
+from botocore.config import Config
+
 
 load_dotenv()
 PROXY = os.getenv("PROXY")
@@ -28,23 +30,28 @@ def upload_to_arvancloud(file_path, object_name=None):
     if object_name is None:
         object_name = file_path.split("/")[-1]
 
+    # تنظیمات کانفیگ برای دور زدن پروکسی سرور
+    my_config = Config(proxies={"http": None, "https": None}, signature_version="s3v4")
+
     s3_client = boto3.client(
         "s3",
         endpoint_url=ARVAN_ENDPOINT,
         aws_access_key_id=ARVAN_ACCESS_KEY,
         aws_secret_access_key=ARVAN_SECRET_KEY,
+        config=my_config,
+        region_name="ir-thr-at1",  # ریجن آروان
     )
 
     try:
-        print(f"Starting upload for {file_path}...")  # پیام شروع
+        print(f"Starting upload for {file_path}...")
         s3_client.upload_file(file_path, ARVAN_BUCKET, object_name)
-        print("Upload successful!")  # پیام موفقیت
+        print("Upload successful!")
 
         file_url = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
         return file_url
 
     except Exception as e:
-        print(f"❌ Error uploading to ArvanCloud: {e}")  # چاپ ارور در کنسول
+        print(f"❌ Error uploading to ArvanCloud: {e}")
         return None
 
 
