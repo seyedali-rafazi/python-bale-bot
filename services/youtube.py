@@ -24,30 +24,27 @@ MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 
-def upload_to_arvancloud(file_path):
-    if not all([ARVAN_ENDPOINT, ARVAN_ACCESS_KEY, ARVAN_SECRET_KEY, ARVAN_BUCKET]):
-        print("❌ تنظیمات ابر آروان در فایل .env یافت نشد.")
-        return None
+def upload_to_arvancloud(file_path, object_name=None):
+    if object_name is None:
+        object_name = file_path.split("/")[-1]
+
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=ARVAN_ENDPOINT,
+        aws_access_key_id=ARVAN_ACCESS_KEY,
+        aws_secret_access_key=ARVAN_SECRET_KEY,
+    )
 
     try:
-        s3 = boto3.resource(
-            "s3",
-            endpoint_url=ARVAN_ENDPOINT,
-            aws_access_key_id=ARVAN_ACCESS_KEY,
-            aws_secret_access_key=ARVAN_SECRET_KEY,
-        )
-        file_name = os.path.basename(file_path)
+        print(f"Starting upload for {file_path}...")  # پیام شروع
+        s3_client.upload_file(file_path, ARVAN_BUCKET, object_name)
+        print("Upload successful!")  # پیام موفقیت
 
-        # آپلود فایل
-        s3.Bucket(ARVAN_BUCKET).upload_file(file_path, file_name)
-
-        # ساخت لینک
-        domain = ARVAN_ENDPOINT.replace("https://", "").replace("http://", "")
-        link = f"https://{ARVAN_BUCKET}.{domain}/{file_name}"
-        return link
+        file_url = f"{ARVAN_ENDPOINT}/{ARVAN_BUCKET}/{object_name}"
+        return file_url
 
     except Exception as e:
-        print(f"❌ ArvanCloud upload error: {e}")
+        print(f"❌ Error uploading to ArvanCloud: {e}")  # چاپ ارور در کنسول
         return None
 
 
