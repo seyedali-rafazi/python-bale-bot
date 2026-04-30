@@ -13,6 +13,7 @@ from services.youtube import (
     download_youtube_audio,
     search_yt_videos,
     split_video_if_needed,
+    upload_to_arvancloud,
 )
 
 MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
@@ -29,7 +30,7 @@ def check_user_limit(chat_id: str) -> bool:
 async def background_yt_download(
     context: ContextTypes.DEFAULT_TYPE, url: str, chat_id: str, format_type: str
 ):
-    # بررسی وضعیت صف با استفاده از سمفور به جای متغیر سراسری ناامن
+    # بررسی وضعیت صف با استفاده از سمفور
     waiting_count = max(
         0,
         MAX_CONCURRENT_DOWNLOADS
@@ -53,6 +54,7 @@ async def background_yt_download(
     try:
         async with download_semaphore:
             progress_dict = {"text": "شروع پردازش...", "is_finished": False}
+            user_is_vip = is_vip(chat_id)
 
             async def update_progress_message():
                 last_text = ""
@@ -68,9 +70,7 @@ async def background_yt_download(
                             last_text = current_text
                         except Exception:
                             pass
-                    await asyncio.sleep(
-                        8
-                    )  # بهینه سازی: افزایش تاخیر به 8 ثانیه برای جلوگیری از FloodWait
+                    await asyncio.sleep(8)
 
             updater_task = asyncio.create_task(update_progress_message())
 
@@ -90,45 +90,67 @@ async def background_yt_download(
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
                         elif raw_file and isinstance(raw_file, str):
-                            # بهینه سازی: اجرای غیرهمگام FFmpeg برای شکستن ویدیو (جلوگیری از قفل شدن بات)
-                            await context.bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=status_msg.message_id,
-                                text="⏳ در حال آماده‌سازی و برش ویدیو...",
-                            )
-                            result = await split_video_if_needed(raw_file)
-                            downloaded_files = result
+                            if user_is_vip:
+                                downloaded_files.append(raw_file)
+                                await context.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=status_msg.message_id,
+                                    text="🌟 کاربر VIP: در حال آپلود ویدیو با سرعت بالا در سرور ابری...",
+                                )
+                                link = await asyncio.to_thread(
+                                    upload_to_arvancloud, raw_file
+                                )
 
-                            part_msg = (
-                                f" (شامل {len(result)} پارت به دلیل حجم بالا)"
-                                if len(result) > 1
-                                else ""
-                            )
-
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"📤 در حال آپلود ویدیو{part_msg}...",
-                            )
-
-                            for idx, file_path in enumerate(result, 1):
-                                if len(result) > 1:
+                                if link:
                                     await context.bot.send_message(
                                         chat_id=chat_id,
-                                        text=f"📤 ارسال پارت {idx} از {len(result)}...",
+                                        text=f"✅ ویدیو با موفقیت آماده شد!\n\n📥 لینک دانلود مستقیم (VIP):\n{link}",
                                     )
-                                with open(file_path, "rb") as vid:
-                                    await context.bot.send_video(
+                                    increment_yt_downloads(chat_id)
+                                else:
+                                    await context.bot.send_message(
                                         chat_id=chat_id,
-                                        video=vid,
-                                        read_timeout=300,
-                                        write_timeout=300,
-                                        connect_timeout=60,
+                                        text="❌ خطا در آپلود ویدیو در سرور ابری.",
                                     )
+                            else:
+                                await context.bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=status_msg.message_id,
+                                    text="⏳ در حال آماده‌سازی و برش ویدیو...",
+                                )
+                                result = await split_video_if_needed(raw_file)
+                                downloaded_files = result
 
-                            await context.bot.send_message(
-                                chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
-                            )
-                            increment_yt_downloads(chat_id)
+                                part_msg = (
+                                    f" (شامل {len(result)} پارت به دلیل حجم بالا)"
+                                    if len(result) > 1
+                                    else ""
+                                )
+
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=f"📤 در حال آپلود ویدیو{part_msg}...",
+                                )
+
+                                for idx, file_path in enumerate(result, 1):
+                                    if len(result) > 1:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=f"📤 ارسال پارت {idx} از {len(result)}...",
+                                        )
+                                    with open(file_path, "rb") as vid:
+                                        await context.bot.send_video(
+                                            chat_id=chat_id,
+                                            video=vid,
+                                            read_timeout=300,
+                                            write_timeout=300,
+                                            connect_timeout=60,
+                                        )
+
+                                await context.bot.send_message(
+                                    chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
+                                )
+                                increment_yt_downloads(chat_id)
 
                         else:
                             await context.bot.send_message(
@@ -159,24 +181,45 @@ async def background_yt_download(
                             and isinstance(file_path, str)
                             and os.path.exists(file_path)
                         ):
-                            await context.bot.send_message(
-                                chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
-                            )
-
-                            title = "صوت یوتیوب"
-                            perf = "ربات دانلودر"
-
-                            with open(file_path, "rb") as aud:
-                                await context.bot.send_audio(
+                            if user_is_vip:
+                                await context.bot.edit_message_text(
                                     chat_id=chat_id,
-                                    audio=aud,
-                                    title=title,
-                                    performer=perf,
-                                    read_timeout=300,
-                                    write_timeout=300,
-                                    connect_timeout=60,
+                                    message_id=status_msg.message_id,
+                                    text="🌟 کاربر VIP: در حال آپلود صوت در سرور ابری...",
                                 )
-                            increment_yt_downloads(chat_id)
+                                link = await asyncio.to_thread(
+                                    upload_to_arvancloud, file_path
+                                )
+                                if link:
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text=f"✅ فایل صوتی با موفقیت آماده شد!\n\n🎧 لینک دانلود مستقیم (VIP):\n{link}",
+                                    )
+                                    increment_yt_downloads(chat_id)
+                                else:
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text="❌ خطا در آپلود فایل صوتی.",
+                                    )
+                            else:
+                                await context.bot.send_message(
+                                    chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
+                                )
+
+                                title = "صوت یوتیوب"
+                                perf = "ربات دانلودر"
+
+                                with open(file_path, "rb") as aud:
+                                    await context.bot.send_audio(
+                                        chat_id=chat_id,
+                                        audio=aud,
+                                        title=title,
+                                        performer=perf,
+                                        read_timeout=300,
+                                        write_timeout=300,
+                                        connect_timeout=60,
+                                    )
+                                increment_yt_downloads(chat_id)
                         else:
                             await context.bot.send_message(
                                 chat_id=chat_id, text="❌ دانلود شکست خورد."

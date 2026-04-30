@@ -8,15 +8,47 @@ import subprocess
 import math
 import asyncio
 from dotenv import load_dotenv
+import boto3
 
 load_dotenv()
 PROXY = os.getenv("PROXY")
+ARVAN_ENDPOINT = os.getenv("ARVAN_ENDPOINT")
+ARVAN_ACCESS_KEY = os.getenv("ARVAN_ACCESS_KEY")
+ARVAN_SECRET_KEY = os.getenv("ARVAN_SECRET_KEY")
+ARVAN_BUCKET = os.getenv("ARVAN_BUCKET")
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
+
+
+def upload_to_arvancloud(file_path):
+    if not all([ARVAN_ENDPOINT, ARVAN_ACCESS_KEY, ARVAN_SECRET_KEY, ARVAN_BUCKET]):
+        print("❌ تنظیمات ابر آروان در فایل .env یافت نشد.")
+        return None
+
+    try:
+        s3 = boto3.resource(
+            "s3",
+            endpoint_url=ARVAN_ENDPOINT,
+            aws_access_key_id=ARVAN_ACCESS_KEY,
+            aws_secret_access_key=ARVAN_SECRET_KEY,
+        )
+        file_name = os.path.basename(file_path)
+
+        # آپلود فایل
+        s3.Bucket(ARVAN_BUCKET).upload_file(file_path, file_name)
+
+        # ساخت لینک
+        domain = ARVAN_ENDPOINT.replace("https://", "").replace("http://", "")
+        link = f"https://{ARVAN_BUCKET}.{domain}/{file_name}"
+        return link
+
+    except Exception as e:
+        print(f"❌ ArvanCloud upload error: {e}")
+        return None
 
 
 def get_video_duration(file_path):
