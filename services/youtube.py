@@ -2,17 +2,18 @@
 
 import os
 import glob
-import yt_dlp
 import uuid
-import subprocess
 import math
 import asyncio
+import subprocess
 from dotenv import load_dotenv
 
 load_dotenv()
-PROXY = os.getenv("PROXY")
 
+PROXY = os.getenv("PROXY")
 DOWNLOAD_DIR = "downloads"
+COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
@@ -38,7 +39,169 @@ def get_video_duration(file_path):
         return 0
 
 
-# تبدیل به async و استفاده از asyncio.create_subprocess_exec
+def _cookie_args():
+    """
+    اگر فایل کوکی وجود داشته باشد، آرگومان cookies را برمی‌گرداند.
+    """
+    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
+        return ["--cookies", COOKIE_FILE]
+
+    print(f"⚠️ Cookie file not found: {COOKIE_FILE}")
+    return []
+
+
+def _proxy_args():
+    """
+    اگر PROXY در env تعریف شده باشد، به yt-dlp پاس داده می‌شود.
+    """
+    if PROXY:
+        return ["--proxy", PROXY]
+
+    return []
+
+
+def _base_ytdlp_cmd():
+    """
+    آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
+    """
+    cmd = [
+        "yt-dlp",
+        "--force-ipv4",
+        "--js-runtimes",
+        "node",
+        "--remote-components",
+        "ejs:github",
+        "--extractor-args",
+        "youtube:player_client=web",
+        "--no-playlist",
+    ]
+
+    cmd.extend(_cookie_args())
+    cmd.extend(_proxy_args())
+
+    return cmd
+
+
+def _run_subprocess_and_capture(cmd, progress_dict=None):
+    """
+    اجرای yt-dlp با subprocess.
+    خروجی خط‌به‌خط خوانده می‌شود تا هم لاگ داشته باشیم، هم در صورت نیاز progress_dict آپدیت شود.
+    """
+    print("Running command:")
+    print(" ".join(cmd))
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    output_lines = []
+
+    for line in process.stdout:
+        line = line.rstrip()
+        output_lines.append(line)
+
+        print(line)
+
+        if progress_dict is not None:
+            # نمونه خروجی:
+            # [download]  45.3% of 6.88MiB at 1.23MiB/s ETA 00:03
+            if "[download]" in line and "%" in line:
+                progress_dict["text"] = f"📥 در حال دانلود...\n{line}"
+            elif "Destination:" in line:
+                progress_dict["text"] = "📥 شروع دانلود..."
+            elif "has already been downloaded" in line:
+                progress_dict["text"] = "✅ فایل از قبل دانلود شده است."
+            elif "100%" in line:
+                progress_dict["text"] = "✅ دانلود تکمیل شد! در حال آماده‌سازی فایل..."
+
+    process.wait()
+
+    full_output = "\n".join(output_lines)
+
+    if process.returncode != 0:
+        print("❌ yt-dlp failed")
+        print(full_output)
+        return False, full_output
+
+    return True, full_output
+
+
+def _find_downloaded_file(video_id, req_id, preferred_ext=None):
+    """
+    فایل دانلود شده را بر اساس id و req_id پیدا می‌کند.
+    """
+    if preferred_ext:
+        pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.{preferred_ext}")
+        files = glob.glob(pattern)
+        if files:
+            return files[0]
+
+    pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
+    files = glob.glob(pattern)
+
+    # فایل‌های موقت را حذف از انتخاب
+    files = [
+        f
+        for f in files
+        if not f.endswith(".part")
+        and not f.endswith(".ytdl")
+        and not f.endswith(".temp")
+    ]
+
+    if not files:
+        return None
+
+    # اگر چند فایل بود، بزرگ‌ترین را بردار
+    files.sort(key=lambda x: os.path.getsize(x), reverse=True)
+    return files[0]
+
+
+def _get_video_id_by_ytdlp(url):
+    """
+    گرفتن video id با yt-dlp.
+    برای ساخت نام فایل قابل پیش‌بینی.
+    """
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(
+        [
+            "--print",
+            "%(id)s",
+            "--skip-download",
+            url,
+        ]
+    )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            print("❌ Failed to get video id")
+            print(result.stderr)
+            return None
+
+        lines = [x.strip() for x in result.stdout.splitlines() if x.strip()]
+
+        if not lines:
+            return None
+
+        # آخرین خط معمولاً id است
+        return lines[-1]
+
+    except Exception as e:
+        print(f"❌ Error getting video id: {e}")
+        return None
+
+
 async def split_video_if_needed(original_file_path):
     HARD_LIMIT = 14.5 * 1024 * 1024  # 14.5 MB
 
@@ -50,7 +213,6 @@ async def split_video_if_needed(original_file_path):
 
     part_counter = 1
 
-    # استخراج پسوند واقعی (حل مشکل پسوندهای .mp4.part)
     base_name, ext = os.path.splitext(original_file_path)
     if ext.lower() == ".part":
         base_name, ext = os.path.splitext(base_name)
@@ -64,7 +226,7 @@ async def split_video_if_needed(original_file_path):
             final_valid_parts.append(current_file)
             continue
 
-        duration = get_video_duration(current_file)  # تابع خودتان
+        duration = get_video_duration(current_file)
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
             continue
@@ -77,7 +239,6 @@ async def split_video_if_needed(original_file_path):
 
         segment_time = duration / num_chunks
 
-        # اینجا از پسوند واقعی که بالاتر پیدا کردیم استفاده می‌کنیم
         output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
         part_counter += 1
 
@@ -120,7 +281,6 @@ async def split_video_if_needed(original_file_path):
             print(f"Error in ffmpeg: {e}")
             final_valid_parts.append(current_file)
 
-    # فایل اصلی را فقط در صورتی پاک می‌کنیم که توی لیست فایل‌های نهایی نباشد
     if original_file_path not in final_valid_parts and os.path.exists(
         original_file_path
     ):
@@ -129,68 +289,65 @@ async def split_video_if_needed(original_file_path):
     return sorted(final_valid_parts)
 
 
-def progress_hook(d, progress_dict):
-    if progress_dict is None:
-        return
-
-    if d["status"] == "downloading":
-        percent = d.get("_percent_str", "N/A").strip()
-        speed = d.get("_speed_str", "N/A").strip()
-        eta = d.get("_eta_str", "N/A").strip()
-        progress_dict["text"] = (
-            f"📥 در حال دانلود: {percent}\n🚀 سرعت: {speed}\n⏳ زمان باقیمانده: {eta}"
-        )
-    elif d["status"] == "finished":
-        progress_dict["text"] = "✅ دانلود تکمیل شد! در حال آماده‌سازی فایل..."
-
-
 def download_youtube_video(url, progress_dict=None):
+    """
+    دانلود ویدیو با subprocess.
+    اولویت با فرمت 18 است چون روی VPS تست شد و جواب داد.
+    """
     req_id = uuid.uuid4().hex
 
-    def my_hook(d):
-        progress_hook(d, progress_dict)
-
-    ydl_opts = {
-        "proxy": PROXY,
-        "format": "best[height<=720]/best[height<=480]/best[height<=360]/worst",
-        "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
-        "quiet": True,
-        "noprogress": True,
-        "max_filesize": MAX_DOWNLOAD_SIZE,  # بهینه سازی: جلوگیری از دانلود فایل حجیم توسط خود کتابخانه
-        "noplaylist": True,
-        "progress_hooks": [my_hook] if progress_dict else [],
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # بهینه سازی: حذف extract_info اضافه (False) و دانلود مستقیم
-            info = ydl.extract_info(url, download=True)
-            video_id = info.get("id", "unknown")
-
-            pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
-            files = glob.glob(pattern)
-
-            if not files:
-                return (
-                    "TOO_LARGE"  # اگر فایلی نیست، احتمالا به خاطر محدودیت حجم اسکیپ شده
-                )
-
-            final_file = files[0]
-            actual_size = os.path.getsize(final_file)
-
-            if actual_size > MAX_DOWNLOAD_SIZE:
-                os.remove(final_file)
-                return "TOO_LARGE"
-
-            # تابع split حالا در هندلر صدا زده می‌شود نه اینجا
-            return final_file
-
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    video_id = _get_video_id_by_ytdlp(url)
+    if not video_id:
+        print("❌ Could not detect video id")
         return None
+
+    output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
+
+    cmd = _base_ytdlp_cmd()
+
+    cmd.extend(
+        [
+            "-f",
+            "18/best[height<=720][ext=mp4]/best[height<=480][ext=mp4]/best[height<=360][ext=mp4]/best",
+            "--max-filesize",
+            str(MAX_DOWNLOAD_SIZE),
+            "-o",
+            output_template,
+            url,
+        ]
+    )
+
+    ok, output = _run_subprocess_and_capture(cmd, progress_dict=progress_dict)
+
+    if not ok:
+        if "File is larger than max-filesize" in output or "max-filesize" in output:
+            return "TOO_LARGE"
+
+        return None
+
+    final_file = _find_downloaded_file(video_id, req_id)
+
+    if not final_file or not os.path.exists(final_file):
+        print("❌ Download finished but file not found")
+        return None
+
+    actual_size = os.path.getsize(final_file)
+
+    if actual_size > MAX_DOWNLOAD_SIZE:
+        try:
+            os.remove(final_file)
+        except Exception:
+            pass
+
+        return "TOO_LARGE"
+
+    return final_file
 
 
 def download_youtube_audio(video_id_or_url: str) -> str:
+    """
+    دانلود صدا با subprocess و تبدیل به mp3.
+    """
     if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
         url = video_id_or_url
     else:
@@ -198,72 +355,116 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
     req_id = uuid.uuid4().hex
 
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": f"downloads/%(id)s_{req_id}.%(ext)s",
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }
-        ],
-        "proxy": PROXY,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,  # بهینه سازی
-        "max_filesize": MAX_DOWNLOAD_SIZE,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            video_id = info.get("id")
-
-            pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.mp3")
-            files = glob.glob(pattern)
-
-            if files and os.path.exists(files[0]):
-                return files[0]
-            else:
-                return None
-
-    except Exception as e:
-        print(f"❌ Error downloading audio: {e}")
+    video_id = _get_video_id_by_ytdlp(url)
+    if not video_id:
+        print("❌ Could not detect video id")
         return None
+
+    output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
+
+    cmd = _base_ytdlp_cmd()
+
+    cmd.extend(
+        [
+            "-f",
+            "bestaudio/best",
+            "--extract-audio",
+            "--audio-format",
+            "mp3",
+            "--audio-quality",
+            "192K",
+            "--max-filesize",
+            str(MAX_DOWNLOAD_SIZE),
+            "-o",
+            output_template,
+            url,
+        ]
+    )
+
+    ok, output = _run_subprocess_and_capture(cmd)
+
+    if not ok:
+        if "File is larger than max-filesize" in output or "max-filesize" in output:
+            return "TOO_LARGE"
+
+        return None
+
+    final_file = _find_downloaded_file(video_id, req_id, preferred_ext="mp3")
+
+    if not final_file or not os.path.exists(final_file):
+        print("❌ Audio download finished but mp3 file not found")
+        return None
+
+    actual_size = os.path.getsize(final_file)
+
+    if actual_size > MAX_DOWNLOAD_SIZE:
+        try:
+            os.remove(final_file)
+        except Exception:
+            pass
+
+        return "TOO_LARGE"
+
+    return final_file
 
 
 def search_yt_videos(query, max_results=5):
-    ydl_opts = {
-        "proxy": PROXY,
-        "extract_flat": True,
-        "quiet": True,
-        "noplaylist": True,  # بهینه سازی: جلوگیری از لود پلی‌لیست‌ها
-    }
+    """
+    سرچ یوتیوب با subprocess.
+    خروجی به صورت title و id گرفته می‌شود.
+    """
+    search_query = (
+        f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
+    )
+
+    cmd = _base_ytdlp_cmd()
+
+    cmd.extend(
+        [
+            "--flat-playlist",
+            "--print",
+            "%(title)s|||%(id)s",
+            "--skip-download",
+            search_query,
+        ]
+    )
+
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = (
-                f"ytsearch{max_results}:{query}"
-                if not query.startswith("http")
-                else query
-            )
-            info = ydl.extract_info(search_query, download=False)
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=90,
+        )
 
-            if "entries" in info:
-                entries = info["entries"][:max_results]
-            else:
-                entries = [info]
+        if result.returncode != 0:
+            print("❌ Error searching YT:")
+            print(result.stderr)
+            return []
 
-            results = []
-            for entry in entries:
-                if entry.get("id"):
-                    results.append(
-                        {
-                            "title": entry.get("title", "Unknown"),
-                            "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
-                        }
-                    )
-            return results
+        results = []
+
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            if "|||" not in line:
+                continue
+
+            title, video_id = line.split("|||", 1)
+
+            if video_id:
+                results.append(
+                    {
+                        "title": title or "Unknown",
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                    }
+                )
+
+        return results[:max_results]
+
     except Exception as e:
         print(f"Error searching YT: {e}")
         return []
