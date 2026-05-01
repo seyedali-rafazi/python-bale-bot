@@ -292,6 +292,32 @@ def increment_yt_downloads(user_id):
     conn.close()
 
 
+def decrement_yt_downloads(user_id):
+    """
+    در صورت بروز خطا در دانلود، یک واحد از مصرف امروز کاربر کم می‌کند
+    تا سهمیه‌اش نسوزد.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+
+    cursor.execute("SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+
+    if result:
+        count, db_date = result
+        # فقط در صورتی کم کن که تاریخ برای امروز باشه و حداقل 1 بار مصرف ثبت شده باشه
+        if db_date == today and count > 0:
+            new_count = count - 1
+            cursor.execute(
+                "UPDATE users SET yt_count = ? WHERE user_id = ?",
+                (new_count, user_id),
+            )
+
+    conn.commit()
+    conn.close()
+
+
 # -----------------------------------------------------
 
 
