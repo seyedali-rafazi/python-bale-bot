@@ -1,5 +1,7 @@
 # services/youtube.py
 
+# services/youtube.py
+
 import os
 import glob
 import uuid
@@ -10,7 +12,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROXY = os.getenv("PROXY")
 DOWNLOAD_DIR = "downloads"
 COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
 
@@ -50,19 +51,10 @@ def _cookie_args():
     return []
 
 
-def _proxy_args():
-    """
-    اگر PROXY در env تعریف شده باشد، به yt-dlp پاس داده می‌شود.
-    """
-    if PROXY:
-        return ["--proxy", PROXY]
-
-    return []
-
-
 def _base_ytdlp_cmd():
     """
     آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
+    بدون proxy، برای استفاده از مسیر شبکه خود سرور/WARP.
     """
     cmd = [
         "yt-dlp",
@@ -77,7 +69,6 @@ def _base_ytdlp_cmd():
     ]
 
     cmd.extend(_cookie_args())
-    cmd.extend(_proxy_args())
 
     return cmd
 
