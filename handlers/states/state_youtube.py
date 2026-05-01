@@ -14,6 +14,7 @@ from services.youtube import (
     search_yt_videos,
     split_video_if_needed,
 )
+from services.telegram_backup import download_from_telegram_bot
 
 MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -138,8 +139,45 @@ async def background_yt_download(
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
                         await context.bot.send_message(
-                            chat_id=chat_id, text=f"❌ خطا: {str(send_err)}"
+                            chat_id=chat_id,
+                            text="⚠️ دانلود مستقیم با مشکل مواجه شد (احتمال بن شدن پروکسی). در حال تلاش از طریق سرور بکاپ (تلگرام)... ⏳",
                         )
+
+                        try:
+                            # استفاده از بکاپ تلثون
+                            backup_file = await download_from_telegram_bot(url)
+
+                            if backup_file and os.path.exists(backup_file):
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="📤 فایل از سرور بکاپ دریافت شد، در حال آپلود...",
+                                )
+                                with open(backup_file, "rb") as vid:
+                                    await context.bot.send_video(
+                                        chat_id=chat_id,
+                                        video=vid,
+                                        read_timeout=300,
+                                        write_timeout=300,
+                                        connect_timeout=60,
+                                    )
+                                downloaded_files.append(
+                                    backup_file
+                                )  # اضافه کردن برای پاکسازی
+                                increment_yt_downloads(chat_id)
+                                await context.bot.send_message(
+                                    chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
+                                )
+                            else:
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ سرور بکاپ هم نتوانست ویدیو را دانلود کند.",
+                                )
+                        except Exception as backup_err:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"❌ خطای سرور بکاپ: {str(backup_err)}",
+                            )
+
                     finally:
                         for file_path in downloaded_files:
                             if os.path.exists(file_path):

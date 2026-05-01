@@ -151,7 +151,7 @@ def download_youtube_video(url, progress_dict=None):
         progress_hook(d, progress_dict)
 
     ydl_opts = {
-        "proxy": PROXY,
+        # "proxy": PROXY,
         "format": "best[height<=720]/best[height<=480]/best[height<=360]/worst",
         "outtmpl": os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s"),
         "quiet": True,
@@ -208,7 +208,7 @@ def download_youtube_audio(video_id_or_url: str) -> str:
                 "preferredquality": "192",
             }
         ],
-        "proxy": PROXY,
+        # "proxy": PROXY,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,  # بهینه سازی
@@ -235,7 +235,7 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
 def search_yt_videos(query, max_results=5):
     ydl_opts = {
-        "proxy": PROXY,
+        # "proxy": PROXY,
         "extract_flat": True,
         "quiet": True,
         "noplaylist": True,  # بهینه سازی: جلوگیری از لود پلی‌لیست‌ها
