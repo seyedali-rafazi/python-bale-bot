@@ -27,9 +27,7 @@ def check_user_limit(chat_id: str) -> bool:
     return usage < limit
 
 
-async def background_yt_download(
-    context: ContextTypes.DEFAULT_TYPE, url: str, chat_id: str, format_type: str
-):
+async def background_yt_download(context, url: str, chat_id: str, format_type: str):
     # بررسی وضعیت صف با استفاده از سمفور به جای متغیر سراسری ناامن
     waiting_count = max(
         0,
@@ -132,10 +130,11 @@ async def background_yt_download(
                             increment_yt_downloads(chat_id)
 
                         else:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ دانلود شکست خورد یا فایل پیدا نشد.",
+                            # 🟢 تغییر اینجا اعمال شد: به جای ارسال پیام شکست، ارور پرتاب می‌کنیم
+                            raise Exception(
+                                "yt-dlp returned None (YouTube bot block or download failed)"
                             )
+
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
                         await context.bot.send_message(
