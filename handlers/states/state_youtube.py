@@ -67,9 +67,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             last_text = current_text
                         except Exception:
                             pass
-                    await asyncio.sleep(
-                        8
-                    )  # بهینه سازی: افزایش تاخیر به 8 ثانیه برای جلوگیری از FloodWait
+                    await asyncio.sleep(8)
 
             updater_task = asyncio.create_task(update_progress_message())
 
@@ -89,14 +87,13 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
                         elif raw_file and isinstance(raw_file, str):
-                            # بهینه سازی: اجرای غیرهمگام FFmpeg برای شکستن ویدیو (جلوگیری از قفل شدن بات)
                             await context.bot.edit_message_text(
                                 chat_id=chat_id,
                                 message_id=status_msg.message_id,
                                 text="⏳ در حال آماده‌سازی و برش ویدیو...",
                             )
                             result = await split_video_if_needed(raw_file)
-                            downloaded_files = result
+                            downloaded_files.extend(result)
 
                             part_msg = (
                                 f" (شامل {len(result)} پارت به دلیل حجم بالا)"
@@ -130,7 +127,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             increment_yt_downloads(chat_id)
 
                         else:
-                            # 🟢 تغییر اینجا اعمال شد: به جای ارسال پیام شکست، ارور پرتاب می‌کنیم
                             raise Exception(
                                 "yt-dlp returned None (YouTube bot block or download failed)"
                             )
@@ -139,7 +135,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                         print(f"❌ Video process error: {send_err}")
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text="⚠️ دانلود مستقیم با مشکل مواجه شد (احتمال بن شدن پروکسی). در حال تلاش از طریق سرور بکاپ (تلگرام)... ⏳",
+                            text="⚠️ دانلود مستقیم با مشکل مواجه شد. در حال تلاش از طریق سرور بکاپ (تلگرام)... ⏳",
                         )
 
                         try:
@@ -149,19 +145,39 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             if backup_file and os.path.exists(backup_file):
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="📤 فایل از سرور بکاپ دریافت شد، در حال آپلود...",
+                                    text="⏳ فایل از سرور بکاپ دریافت شد، در حال آماده‌سازی و برش (در صورت نیاز)...",
                                 )
-                                with open(backup_file, "rb") as vid:
-                                    await context.bot.send_video(
-                                        chat_id=chat_id,
-                                        video=vid,
-                                        read_timeout=300,
-                                        write_timeout=300,
-                                        connect_timeout=60,
-                                    )
-                                downloaded_files.append(
-                                    backup_file
-                                )  # اضافه کردن برای پاکسازی
+
+                                # اعمال منطق قطعه قطعه کردن روی فایل دریافتی از بکاپ
+                                result = await split_video_if_needed(backup_file)
+                                downloaded_files.extend(result)
+
+                                part_msg = (
+                                    f" (شامل {len(result)} پارت به دلیل حجم بالا)"
+                                    if len(result) > 1
+                                    else ""
+                                )
+
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=f"📤 در حال آپلود ویدیو{part_msg}...",
+                                )
+
+                                for idx, file_path in enumerate(result, 1):
+                                    if len(result) > 1:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=f"📤 ارسال پارت {idx} از {len(result)}...",
+                                        )
+                                    with open(file_path, "rb") as vid:
+                                        await context.bot.send_video(
+                                            chat_id=chat_id,
+                                            video=vid,
+                                            read_timeout=300,
+                                            write_timeout=300,
+                                            connect_timeout=60,
+                                        )
+
                                 increment_yt_downloads(chat_id)
                                 await context.bot.send_message(
                                     chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
@@ -200,15 +216,12 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 chat_id=chat_id, text="📤 در حال آپلود فایل صوتی..."
                             )
 
-                            title = "صوت یوتیوب"
-                            perf = "ربات دانلودر"
-
                             with open(file_path, "rb") as aud:
                                 await context.bot.send_audio(
                                     chat_id=chat_id,
                                     audio=aud,
-                                    title=title,
-                                    performer=perf,
+                                    title="صوت یوتیوب",
+                                    performer="ربات دانلودر",
                                     read_timeout=300,
                                     write_timeout=300,
                                     connect_timeout=60,
