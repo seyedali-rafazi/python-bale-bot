@@ -22,7 +22,7 @@ download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
 def check_user_limit(chat_id: str) -> bool:
     vip_status = is_vip(chat_id)
-    limit = 20 if vip_status else 4
+    limit = 20 if vip_status else 2
     usage = get_yt_downloads(chat_id)
     return usage < limit
 
@@ -135,7 +135,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                         print(f"❌ Video process error: {send_err}")
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text="⚠️ دانلود مستقیم با مشکل مواجه شد. در حال تلاش از طریق سرور بکاپ (تلگرام)... ⏳",
+                            text="⚠️ دانلود مستقیم با مشکل مواجه شد. در حال تلاش از طریق سرور بکاپ ... ⏳",
                         )
 
                         try:
@@ -346,7 +346,7 @@ async def handle_youtube_state(
         if text.startswith("📥 دانلود ویدیو "):
             if not check_user_limit(chat_id):
                 await update.message.reply_text(
-                    "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                    "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
                 )
                 return
 
@@ -392,7 +392,7 @@ async def handle_youtube_state(
 
         if not check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 
@@ -408,7 +408,7 @@ async def handle_youtube_state(
 
         if not check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 4 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 
