@@ -129,6 +129,8 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
                             decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                            return  # <--- اضافه شدن return برای خروج از تابع
+
                         elif raw_file and isinstance(raw_file, str):
                             await context.bot.edit_message_text(
                                 chat_id=chat_id,
@@ -208,6 +210,18 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
 
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
+                        
+                        # <--- بررسی خطای حجم برای جلوگیری از ورود به بکاپ --->
+                        error_text = str(send_err).lower()
+                        if "too large" in error_text or "max-filesize" in error_text:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
+                            )
+                            decrement_yt_downloads(chat_id)
+                            return  # جلوگیری از رفتن به بکاپ
+                        # <--------------------------------------------------->
+
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ دانلود مستقیم با مشکل مواجه شد. در حال تلاش از طریق سرور بکاپ ... ⏳",
