@@ -8,95 +8,15 @@ import subprocess
 import math
 import asyncio
 from dotenv import load_dotenv
-import boto3
-from botocore.config import Config
-import sys
-
 
 load_dotenv()
 PROXY = os.getenv("PROXY")
-ARVAN_ENDPOINT = os.getenv("ARVAN_ENDPOINT")
-ARVAN_ACCESS_KEY = os.getenv("ARVAN_ACCESS_KEY")
-ARVAN_SECRET_KEY = os.getenv("ARVAN_SECRET_KEY")
-ARVAN_BUCKET = os.getenv("ARVAN_BUCKET")
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
-
-
-# کلاس جدید برای نمایش درصد پیشرفت
-class ProgressPercentage(object):
-    def __init__(self, filename):
-        self._filename = filename
-        self._size = float(os.path.getsize(filename))
-        self._seen_so_far = 0
-
-    def __call__(self, bytes_amount):
-        self._seen_so_far += bytes_amount
-        percentage = (self._seen_so_far / self._size) * 100
-        sys.stdout.write(
-            f"\rآپلود {self._filename}  {self._seen_so_far} / {self._size}  ({percentage:.2f}%)"
-        )
-        sys.stdout.flush()
-
-
-def upload_to_arvancloud(file_path, object_name=None):
-    if object_name is None:
-        object_name = os.path.basename(file_path)
-
-    print("\nConnecting to ArvanCloud...")
-
-    # استفاده مستقیم از متغیرهایی که بالا لود کردی
-    endpoint = ARVAN_ENDPOINT
-    access_key = ARVAN_ACCESS_KEY
-    secret_key = ARVAN_SECRET_KEY
-    bucket_name = ARVAN_BUCKET
-
-    # چک خیلی مهم (جلوگیری از None)
-    if not all([endpoint, access_key, secret_key, bucket_name]):
-        print("❌ یکی از ENV ها مقدار ندارد:")
-        print("ENDPOINT:", endpoint)
-        print("ACCESS:", access_key)
-        print("SECRET:", secret_key)
-        print("BUCKET:", bucket_name)
-        return None
-
-    my_config = Config(
-        proxies={"http": None, "https": None},
-        signature_version="s3v4",
-        connect_timeout=10,
-        read_timeout=30,
-    )
-
-    try:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=my_config,
-        )
-
-        print(f"Uploading {object_name}...")
-
-        s3.upload_file(
-            file_path,
-            bucket_name,
-            object_name,
-            Callback=ProgressPercentage(file_path),
-        )
-
-        print("\n✅ Upload completed!")
-
-        file_url = f"{endpoint}/{bucket_name}/{object_name}"
-        return file_url
-
-    except Exception as e:
-        print(f"\n❌ Error uploading to ArvanCloud: {e}")
-        return None
 
 
 def get_video_duration(file_path):
