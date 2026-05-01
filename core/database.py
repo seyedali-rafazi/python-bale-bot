@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
+import json  # <-- اضافه شده برای ذخیره لیست فایل‌ها
 
 DB_NAME = "bot_data.db"
 TEHRAN_TZ = pytz.timezone("Asia/Tehran")
@@ -55,6 +56,14 @@ def init_db():
             payload TEXT,
             provider_charge_id TEXT,
             date TEXT
+        )
+    """)
+
+    # --- جدول جدید برای کش کردن ویدیوهای یوتیوب (هیچ آسیبی به داده‌های قبلی نمی‌زند) ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS youtube_cache (
+            video_id TEXT PRIMARY KEY,
+            file_ids TEXT
         )
     """)
 
@@ -333,3 +342,40 @@ def get_all_users():
     users = [row[0] for row in cursor.fetchall()]
     conn.close()
     return users
+
+
+# ----------- بخش جدید: کش (Cache) یوتیوب -----------
+
+
+def get_cached_video(video_id: str) -> list:
+    """
+    آیدی یوتیوب را می‌گیرد و لیست file_id های موجود در کانال را برمی‌گرداند.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_ids FROM youtube_cache WHERE video_id = ?", (video_id,))
+    result = cursor.fetchone()
+    conn.close()
+
+    if result and result[0]:
+        return json.loads(result[0])
+    return []
+
+
+def save_cached_video(video_id: str, file_ids: list):
+    """
+    آیدی یوتیوب و لیست file_id ها را به صورت JSON ذخیره می‌کند.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    file_ids_json = json.dumps(file_ids)
+
+    # استفاده از INSERT OR REPLACE تا در صورت وجود آپدیت شود
+    cursor.execute(
+        "INSERT OR REPLACE INTO youtube_cache (video_id, file_ids) VALUES (?, ?)",
+        (video_id, file_ids_json),
+    )
+
+    conn.commit()
+    conn.close()

@@ -7,7 +7,14 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
-from core.database import is_vip, get_yt_downloads, increment_yt_downloads
+from core.database import (
+    is_vip,
+    get_yt_downloads,
+    increment_yt_downloads,
+    get_cached_video,
+    save_cached_video,
+)
+
 from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
@@ -15,9 +22,11 @@ from services.youtube import (
     split_video_if_needed,
 )
 from services.telegram_backup import download_from_telegram_bot
+import re
 
 MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+STORAGE_CHANNEL_ID = "@digiacharstorage"  # کانال ارشیو
 
 
 def check_user_limit(chat_id: str) -> bool:
@@ -27,8 +36,41 @@ def check_user_limit(chat_id: str) -> bool:
     return usage < limit
 
 
+def extract_yt_id(url: str):
+    """استخراج سریع آیدی ویدیو از لینک یوتیوب برای ساخت کلید کش"""
+    match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
+    return match.group(1) if match else url
+
+
 async def background_yt_download(context, url: str, chat_id: str, format_type: str):
-    # بررسی وضعیت صف با استفاده از سمفور به جای متغیر سراسری ناامن
+    video_id = extract_yt_id(url)
+    cache_key = f"{video_id}_{format_type}"
+
+    # ------------------ 1. بررسی کش (Cache) ------------------
+    cached_files = get_cached_video(cache_key)
+    if cached_files:
+        await context.bot.send_message(
+            chat_id=chat_id, text="✅ این فایل در سرور موجود است. در حال ارسال فوری..."
+        )
+        for idx, file_id in enumerate(cached_files, 1):
+            if len(cached_files) > 1:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📤 ارسال پارت {idx} از {len(cached_files)}...",
+                )
+            try:
+                if format_type == "video":
+                    await context.bot.send_video(chat_id=chat_id, video=file_id)
+                else:
+                    await context.bot.send_audio(chat_id=chat_id, audio=file_id)
+            except Exception as e:
+                print(f"❌ Error sending cached file {file_id}: {e}")
+
+        increment_yt_downloads(chat_id)
+        return
+    # ---------------------------------------------------------
+
+    # بررسی وضعیت صف با استفاده از سمفور
     waiting_count = max(
         0,
         MAX_CONCURRENT_DOWNLOADS
@@ -75,7 +117,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                 if format_type == "video":
                     downloaded_files = []
                     try:
-                        # دانلود ویدیو به صورت خام
                         raw_file = await asyncio.to_thread(
                             download_youtube_video, url, progress_dict
                         )
@@ -103,9 +144,10 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
 
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text=f"📤 در حال آپلود ویدیو{part_msg}...",
+                                text=f"📤 در حال آپلود ویدیو در سرور{part_msg}...",
                             )
 
+                            uploaded_file_ids = []
                             for idx, file_path in enumerate(result, 1):
                                 if len(result) > 1:
                                     await context.bot.send_message(
@@ -113,13 +155,26 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                         text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                     )
                                 with open(file_path, "rb") as vid:
-                                    await context.bot.send_video(
-                                        chat_id=chat_id,
+                                    # 1. ارسال به کانال آرشیو
+                                    channel_msg = await context.bot.send_video(
+                                        chat_id=STORAGE_CHANNEL_ID,
                                         video=vid,
+                                        caption=f"Video ID: {video_id} | Part {idx}/{len(result)}",
                                         read_timeout=300,
                                         write_timeout=300,
                                         connect_timeout=60,
                                     )
+                                    file_id = channel_msg.video.file_id
+                                    uploaded_file_ids.append(file_id)
+
+                                    # 2. ارسال به کاربر با استفاده از file_id
+                                    await context.bot.send_video(
+                                        chat_id=chat_id, video=file_id
+                                    )
+
+                            # 3. ذخیره در کش
+                            if uploaded_file_ids:
+                                save_cached_video(cache_key, uploaded_file_ids)
 
                             await context.bot.send_message(
                                 chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
@@ -145,24 +200,13 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             if backup_file and os.path.exists(backup_file):
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="⏳ فایل از سرور بکاپ دریافت شد، در حال آماده‌سازی و برش (در صورت نیاز)...",
+                                    text="⏳ فایل از سرور بکاپ دریافت شد، در حال آماده‌سازی...",
                                 )
 
-                                # اعمال منطق قطعه قطعه کردن روی فایل دریافتی از بکاپ
                                 result = await split_video_if_needed(backup_file)
                                 downloaded_files.extend(result)
 
-                                part_msg = (
-                                    f" (شامل {len(result)} پارت به دلیل حجم بالا)"
-                                    if len(result) > 1
-                                    else ""
-                                )
-
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text=f"📤 در حال آپلود ویدیو{part_msg}...",
-                                )
-
+                                uploaded_file_ids = []
                                 for idx, file_path in enumerate(result, 1):
                                     if len(result) > 1:
                                         await context.bot.send_message(
@@ -170,13 +214,25 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                             text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                         )
                                     with open(file_path, "rb") as vid:
-                                        await context.bot.send_video(
-                                            chat_id=chat_id,
+                                        # ارسال به کانال آرشیو
+                                        channel_msg = await context.bot.send_video(
+                                            chat_id=STORAGE_CHANNEL_ID,
                                             video=vid,
+                                            caption=f"Video ID: {video_id} (Backup) | Part {idx}/{len(result)}",
                                             read_timeout=300,
                                             write_timeout=300,
                                             connect_timeout=60,
                                         )
+                                        file_id = channel_msg.video.file_id
+                                        uploaded_file_ids.append(file_id)
+
+                                        # ارسال به کاربر
+                                        await context.bot.send_video(
+                                            chat_id=chat_id, video=file_id
+                                        )
+
+                                if uploaded_file_ids:
+                                    save_cached_video(cache_key, uploaded_file_ids)
 
                                 increment_yt_downloads(chat_id)
                                 await context.bot.send_message(
@@ -217,15 +273,27 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             )
 
                             with open(file_path, "rb") as aud:
-                                await context.bot.send_audio(
-                                    chat_id=chat_id,
+                                # 1. ارسال به کانال آرشیو
+                                channel_msg = await context.bot.send_audio(
+                                    chat_id=STORAGE_CHANNEL_ID,
                                     audio=aud,
                                     title="صوت یوتیوب",
                                     performer="ربات دانلودر",
+                                    caption=f"Audio ID: {video_id}",
                                     read_timeout=300,
                                     write_timeout=300,
                                     connect_timeout=60,
                                 )
+                                file_id = channel_msg.audio.file_id
+
+                                # 2. ارسال به کاربر
+                                await context.bot.send_audio(
+                                    chat_id=chat_id, audio=file_id
+                                )
+
+                                # 3. ذخیره در کش
+                                save_cached_video(cache_key, [file_id])
+
                             increment_yt_downloads(chat_id)
                         else:
                             await context.bot.send_message(
