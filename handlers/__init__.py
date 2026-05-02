@@ -1,7 +1,7 @@
 # handlers/__init__.py
 
 import re
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     MessageHandler,
     CommandHandler,
@@ -9,6 +9,7 @@ from telegram.ext import (
     ApplicationHandlerStop,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
+    TypeHandler,
 )
 from core.constants import *
 from .commands import cmd_start, cmd_tr
@@ -68,51 +69,58 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
-async def check_membership_middleware(update, context):
-    # --- اضافه شده: توقف قطعی پردازش پیام‌های کانال (جلوگیری از لوپ بی‌نهایت ارور) ---
+async def check_membership_middleware(update: Update, context):
+    # توقف پردازش پیام‌های کانال (جلوگیری از لوپ)
     if update.channel_post or getattr(update.effective_chat, "type", "") == "channel":
         raise ApplicationHandlerStop()
-    # --------------------------------------------------------------------------
 
-    if not update.effective_user or not update.message:
+    # اگر آپدیت یوزر نداشت کاری نکن
+    if not update.effective_user:
         return
 
-    user_id = update.effective_user.id
+    # چک کردن فقط در پی‌وی ربات انجام شود
+    if getattr(update.effective_chat, "type", "") != "private":
+        return
 
     # اگر آیدی کانال تنظیم نشده بود، کاری نکن
     if not CHANNEL_ID:
         return
 
+    user_id = update.effective_user.id
+    is_member = False
+
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
-            return  # کاربر عضو است، ادامه کار ربات
-    except Exception as e:
-        # اگر خطایی رخ داد (مثلا سرور تلگرام مشکل داشت یا لیست در دسترس نبود)
-        # به جای جلوگیری از کار ربات، اجازه می‌دهیم کاربر ادامه دهد
-        print(f"Membership check failed (ignored): {e}")
-        return
+            is_member = True
+    except Exception:
+        # اگر اروری رخ داد (مثل User not found)، یعنی کاربر در کانال نیست
+        is_member = False
 
-    # اگر به اینجا رسیدیم یعنی ارتبا‌ط با سرور موفق بوده اما کاربر وضعیتش عضو نیست (مثلا left کرده است)
+    if is_member:
+        return  # کاربر عضو است، ادامه کار ربات
+
+    # --- اگر به اینجا رسیدیم یعنی کاربر عضو نیست ---
     keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
-    await update.message.reply_text(
-        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
-        "پس از عضویت در کانال، لطفاً دستور /start را برای ربات ارسال کنید.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    # متوقف کردن ادامه پردازش (تا ربات جواب دیگری ندهد)
+    msg = "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\nپس از عضویت، لطفاً دوباره تلاش کنید."
+
+    if update.callback_query:
+        await update.callback_query.answer("باید در کانال عضو شوید!", show_alert=True)
+        await context.bot.send_message(
+            chat_id=user_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif update.message:
+        await update.message.reply_text(
+            msg, reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # متوقف کردن ادامه پردازش (تا ربات کار دیگری نکند)
     raise ApplicationHandlerStop()
 
 
 def register_all_handlers(application):
     # این خط باعث می‌شود قبل از هر دستوری، جوین اجباری چک شود (گروه 1-)
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & ~filters.UpdateType.EDITED_MESSAGE,
-            check_membership_middleware,
-        ),
-        group=-1,
-    )
+    application.add_handler(TypeHandler(Update, check_membership_middleware), group=-1)
 
     # دستورات ادمین
     application.add_handler(CommandHandler("stats", cmd_stats))
