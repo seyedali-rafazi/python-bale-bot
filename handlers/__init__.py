@@ -1,7 +1,7 @@
 # handlers/__init__.py
 
 import re
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     MessageHandler,
     CommandHandler,
@@ -9,7 +9,6 @@ from telegram.ext import (
     ApplicationHandlerStop,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
-    TypeHandler,
 )
 from core.constants import *
 from .commands import cmd_start, cmd_tr
@@ -50,13 +49,7 @@ from .menus import (
     btn_music_playlist_req,
 )
 from .states import process_state_input, process_photo_input
-from core.admin import (
-    cmd_stats,
-    cmd_setvip,
-    cmd_messageuser,
-    cmd_reset_limits,
-    cmd_toggle_yt,
-)
+from core.admin import cmd_stats, cmd_setvip, cmd_messageuser, cmd_reset_limits
 import os
 from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
@@ -69,65 +62,48 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
-async def check_membership_middleware(update: Update, context):
-    # توقف پردازش پیام‌های کانال (جلوگیری از لوپ)
-    if update.channel_post or getattr(update.effective_chat, "type", "") == "channel":
-        raise ApplicationHandlerStop()
-
-    # اگر آپدیت یوزر نداشت کاری نکن
-    if not update.effective_user:
+async def check_membership_middleware(update, context):
+    if not update.effective_user or not update.message:
         return
 
-    # چک کردن فقط در پی‌وی ربات انجام شود
-    if getattr(update.effective_chat, "type", "") != "private":
-        return
+    user_id = update.effective_user.id
 
     # اگر آیدی کانال تنظیم نشده بود، کاری نکن
     if not CHANNEL_ID:
         return
 
-    user_id = update.effective_user.id
-    is_member = False
-
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
-            is_member = True
-    except Exception:
-        # اگر اروری رخ داد (مثل User not found)، یعنی کاربر در کانال نیست
-        is_member = False
+            return  # کاربر عضو است، ادامه کار ربات
+    except Exception as e:
+        # اگر خطایی رخ داد (مثلا سرور تلگرام مشکل داشت یا لیست در دسترس نبود)
+        # به جای جلوگیری از کار ربات، اجازه می‌دهیم کاربر ادامه دهد
+        print(f"Membership check failed (ignored): {e}")
+        return
 
-    if is_member:
-        return  # کاربر عضو است، ادامه کار ربات
-
-    # --- اگر به اینجا رسیدیم یعنی کاربر عضو نیست ---
+    # اگر به اینجا رسیدیم یعنی ارتبا‌ط با سرور موفق بوده اما کاربر وضعیتش عضو نیست (مثلا left کرده است)
     keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
-    msg = "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\nپس از عضویت، لطفاً دوباره تلاش کنید."
-
-    if update.callback_query:
-        await update.callback_query.answer("باید در کانال عضو شوید!", show_alert=True)
-        await context.bot.send_message(
-            chat_id=user_id, text=msg, reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif update.message:
-        await update.message.reply_text(
-            msg, reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    # متوقف کردن ادامه پردازش (تا ربات کار دیگری نکند)
+    await update.message.reply_text(
+        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
+        "پس از عضویت در کانال، لطفاً دستور /start را برای ربات ارسال کنید.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    # متوقف کردن ادامه پردازش (تا ربات جواب دیگری ندهد)
     raise ApplicationHandlerStop()
 
 
 def register_all_handlers(application):
     # این خط باعث می‌شود قبل از هر دستوری، جوین اجباری چک شود (گروه 1-)
-    application.add_handler(TypeHandler(Update, check_membership_middleware), group=-1)
+    application.add_handler(
+        MessageHandler(filters.ALL, check_membership_middleware), group=-1
+    )
 
     # دستورات ادمین
     application.add_handler(CommandHandler("stats", cmd_stats))
     application.add_handler(CommandHandler("setvip", cmd_setvip))
     application.add_handler(CommandHandler("messageuser", cmd_messageuser))
     application.add_handler(CommandHandler("resetlimits", cmd_reset_limits))
-    application.add_handler(CommandHandler("toggle_yt", cmd_toggle_yt))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
@@ -311,19 +287,12 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
     )
-
-    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - فقط چت خصوصی
+    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-            process_state_input,
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input)
     )
 
-    # پردازش عکس‌ها - فقط چت خصوصی
+    # پردازش عکس‌ها (پشتیبانی همزمان از عکس عادی و عکسِ ارسال‌شده به صورت فایل)
     application.add_handler(
-        MessageHandler(
-            (filters.PHOTO | filters.Document.IMAGE) & filters.ChatType.PRIVATE,
-            process_photo_input,
-        )
+        MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_photo_input)
     )

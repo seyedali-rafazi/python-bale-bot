@@ -24,7 +24,6 @@ from services.youtube import (
 )
 from services.telegram_backup import download_from_telegram_bot
 import re
-from handlers.error_handler import send_custom_error_to_admin
 
 MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -69,10 +68,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                 error_msg = f"❌ Error sending cached file {file_id}: {e}"
                 print(error_msg)
                 # 🟢 ارسال خطا به ادمین 🟢
-                await send_custom_error_to_admin(
-                    context,
-                    f"خطا در ارسال فایل کش شده برای کاربر {chat_id}:\n{error_msg}",
-                )
+                await send_custom_error_to_admin(context, f"خطا در ارسال فایل کش شده برای کاربر {chat_id}:\n{error_msg}")
 
         return
     # ---------------------------------------------------------
@@ -189,10 +185,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                             warn_msg = f"⚠️ Error sending part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
                                             print(warn_msg)
                                             # 🟢 ارسال هشدار تلاش مجدد به ادمین 🟢
-                                            await send_custom_error_to_admin(
-                                                context,
-                                                f"مشکل در آپلود پارت {idx} (تلاش مجدد):\n{e}",
-                                            )
+                                            await send_custom_error_to_admin(context, f"مشکل در آپلود پارت {idx} (تلاش مجدد):\n{e}")
                                             await asyncio.sleep(3)
                                         else:
                                             raise Exception(
@@ -214,11 +207,8 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
                         # 🟢 ارسال خطای پردازش به ادمین 🟢
-                        await send_custom_error_to_admin(
-                            context,
-                            f"خطا در دانلود مستقیم (انتقال به بکاپ):\n{send_err}",
-                        )
-
+                        await send_custom_error_to_admin(context, f"خطا در دانلود مستقیم (انتقال به بکاپ):\n{send_err}")
+                        
                         error_text = str(send_err).lower()
                         if "too large" in error_text or "max-filesize" in error_text:
                             await context.bot.send_message(
@@ -277,10 +267,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                                 warn_msg = f"⚠️ Error sending backup part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
                                                 print(warn_msg)
                                                 # 🟢 ارسال هشدار تلاش مجدد بکاپ به ادمین 🟢
-                                                await send_custom_error_to_admin(
-                                                    context,
-                                                    f"مشکل در آپلود پارت بکاپ {idx} (تلاش مجدد):\n{e}",
-                                                )
+                                                await send_custom_error_to_admin(context, f"مشکل در آپلود پارت بکاپ {idx} (تلاش مجدد):\n{e}")
                                                 await asyncio.sleep(3)
                                             else:
                                                 raise Exception(
@@ -302,12 +289,8 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                         except Exception as backup_err:
                             err_msg = f"❌ خطای سرور بکاپ: {str(backup_err)}"
                             # 🟢 ارسال خطای سرور بکاپ به ادمین 🟢
-                            await send_custom_error_to_admin(
-                                context, f"سرور بکاپ با خطا مواجه شد:\n{err_msg}"
-                            )
-                            await context.bot.send_message(
-                                chat_id=chat_id, text=err_msg
-                            )
+                            await send_custom_error_to_admin(context, f"سرور بکاپ با خطا مواجه شد:\n{err_msg}")
+                            await context.bot.send_message(chat_id=chat_id, text=err_msg)
                             decrement_yt_downloads(chat_id)
 
                     finally:
@@ -359,9 +342,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                     except Exception as send_err:
                         print(f"❌ Audio process error: {send_err}")
                         # 🟢 ارسال خطای دانلود صوت به ادمین 🟢
-                        await send_custom_error_to_admin(
-                            context, f"خطا در دانلود یا ارسال صوت:\n{send_err}"
-                        )
+                        await send_custom_error_to_admin(context, f"خطا در دانلود یا ارسال صوت:\n{send_err}")
                         await context.bot.send_message(
                             chat_id=chat_id, text=f"❌ خطا: {str(send_err)}"
                         )
@@ -376,9 +357,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
             except Exception as e:
                 print(f"❌ Error in background task: {e}")
                 # 🟢 ارسال خطای کلی تسک به ادمین 🟢
-                await send_custom_error_to_admin(
-                    context, f"خطای پیش‌بینی نشده در Background Task:\n{e}"
-                )
+                await send_custom_error_to_admin(context, f"خطای پیش‌بینی نشده در Background Task:\n{e}")
                 progress_dict["is_finished"] = True
                 await context.bot.send_message(
                     chat_id=chat_id, text=f"❌ خطا: {str(e)}"
@@ -394,7 +373,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
         # 🟢 ارسال خطای سمفور به ادمین 🟢
         await send_custom_error_to_admin(context, f"خطای Semaphore:\n{e}")
         decrement_yt_downloads(chat_id)
-
 
 async def handle_youtube_state(
     update: Update,
