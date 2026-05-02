@@ -67,3 +67,19 @@ async def global_error_handler(
             )
         except Exception as e:
             print(f"خطا در ارسال پیام ارور به کانال/ادمین: {e}")
+
+
+async def send_custom_error_to_admin(
+    context: ContextTypes.DEFAULT_TYPE, custom_message: str
+):
+    """ارسال خطاهای گرفته شده توسط try..except به ادمین"""
+    if ERROR_CHANNEL_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=ERROR_CHANNEL_ID,
+                text=f"⚠️ <b>خطای داخلی ربات (Catch شده):</b>\n\n{custom_message}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+

@@ -24,6 +24,7 @@ from services.youtube import (
 )
 from services.telegram_backup import download_from_telegram_bot
 import re
+from handlers.error_handler import send_custom_error_to_admin
 
 MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
 download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -65,9 +66,14 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                 else:
                     await context.bot.send_audio(chat_id=chat_id, audio=file_id)
             except Exception as e:
-                print(f"❌ Error sending cached file {file_id}: {e}")
+                error_msg = f"❌ Error sending cached file {file_id}: {e}"
+                print(error_msg)
+                # 🟢 ارسال خطا به ادمین 🟢
+                await send_custom_error_to_admin(
+                    context,
+                    f"خطا در ارسال فایل کش شده برای کاربر {chat_id}:\n{error_msg}",
+                )
 
-        # در اینجا increment حذف شد چون قبل از ورود به این تابع کم شده است
         return
     # ---------------------------------------------------------
 
@@ -128,8 +134,8 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 chat_id=chat_id,
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
-                            decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
-                            return  # <--- اضافه شدن return برای خروج از تابع
+                            decrement_yt_downloads(chat_id)
+                            return
 
                         elif raw_file and isinstance(raw_file, str):
                             await context.bot.edit_message_text(
@@ -159,12 +165,10 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                         text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                     )
 
-                                # سیستم تلاش مجدد (Retry) برای آپلود هر پارت
                                 max_retries = 3
                                 for attempt in range(max_retries):
                                     try:
                                         with open(file_path, "rb") as vid:
-                                            # 1. ارسال به کانال آرشیو
                                             channel_msg = await context.bot.send_video(
                                                 chat_id=STORAGE_CHANNEL_ID,
                                                 video=vid,
@@ -176,32 +180,31 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                             file_id = channel_msg.video.file_id
                                             uploaded_file_ids.append(file_id)
 
-                                            # 2. ارسال به کاربر با استفاده از file_id
                                             await context.bot.send_video(
                                                 chat_id=chat_id, video=file_id
                                             )
-                                        break  # اگر موفق بود از حلقه Retry خارج شو
+                                        break
                                     except Exception as e:
                                         if attempt < max_retries - 1:
-                                            print(
-                                                f"⚠️ Error sending part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
+                                            warn_msg = f"⚠️ Error sending part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
+                                            print(warn_msg)
+                                            # 🟢 ارسال هشدار تلاش مجدد به ادمین 🟢
+                                            await send_custom_error_to_admin(
+                                                context,
+                                                f"مشکل در آپلود پارت {idx} (تلاش مجدد):\n{e}",
                                             )
-                                            await asyncio.sleep(
-                                                3
-                                            )  # 3 ثانیه صبر و تلاش مجدد
+                                            await asyncio.sleep(3)
                                         else:
                                             raise Exception(
                                                 f"خطا در ارسال پارت {idx} پس از ۳ بار تلاش: {e}"
                                             )
 
-                            # 3. ذخیره در کش
                             if uploaded_file_ids:
                                 save_cached_video(cache_key, uploaded_file_ids)
 
                             await context.bot.send_message(
                                 chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
                             )
-                            # increment_yt_downloads حذف شد
 
                         else:
                             raise Exception(
@@ -210,8 +213,12 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
 
                     except Exception as send_err:
                         print(f"❌ Video process error: {send_err}")
-                        
-                        # <--- بررسی خطای حجم برای جلوگیری از ورود به بکاپ --->
+                        # 🟢 ارسال خطای پردازش به ادمین 🟢
+                        await send_custom_error_to_admin(
+                            context,
+                            f"خطا در دانلود مستقیم (انتقال به بکاپ):\n{send_err}",
+                        )
+
                         error_text = str(send_err).lower()
                         if "too large" in error_text or "max-filesize" in error_text:
                             await context.bot.send_message(
@@ -219,8 +226,7 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 text="⚠️ حجم این ویدیو بیشتر از ۳۰۰ مگابایته و امکان پردازش نداره.",
                             )
                             decrement_yt_downloads(chat_id)
-                            return  # جلوگیری از رفتن به بکاپ
-                        # <--------------------------------------------------->
+                            return
 
                         await context.bot.send_message(
                             chat_id=chat_id,
@@ -228,7 +234,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                         )
 
                         try:
-                            # استفاده از بکاپ تلثون
                             backup_file = await download_from_telegram_bot(url)
 
                             if backup_file and os.path.exists(backup_file):
@@ -248,12 +253,10 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                             text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                         )
 
-                                    # سیستم تلاش مجدد (Retry) برای آپلود بکاپ
                                     max_retries = 3
                                     for attempt in range(max_retries):
                                         try:
                                             with open(file_path, "rb") as vid:
-                                                # ارسال به کانال آرشیو
                                                 channel_msg = await context.bot.send_video(
                                                     chat_id=STORAGE_CHANNEL_ID,
                                                     video=vid,
@@ -265,15 +268,18 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                                 file_id = channel_msg.video.file_id
                                                 uploaded_file_ids.append(file_id)
 
-                                                # ارسال به کاربر
                                                 await context.bot.send_video(
                                                     chat_id=chat_id, video=file_id
                                                 )
                                             break
                                         except Exception as e:
                                             if attempt < max_retries - 1:
-                                                print(
-                                                    f"⚠️ Error sending backup part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
+                                                warn_msg = f"⚠️ Error sending backup part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
+                                                print(warn_msg)
+                                                # 🟢 ارسال هشدار تلاش مجدد بکاپ به ادمین 🟢
+                                                await send_custom_error_to_admin(
+                                                    context,
+                                                    f"مشکل در آپلود پارت بکاپ {idx} (تلاش مجدد):\n{e}",
                                                 )
                                                 await asyncio.sleep(3)
                                             else:
@@ -284,7 +290,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 if uploaded_file_ids:
                                     save_cached_video(cache_key, uploaded_file_ids)
 
-                                # increment_yt_downloads حذف شد
                                 await context.bot.send_message(
                                     chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
                                 )
@@ -293,13 +298,17 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                     chat_id=chat_id,
                                     text="❌ سرور بکاپ هم نتوانست ویدیو را دانلود کند.",
                                 )
-                                decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                                decrement_yt_downloads(chat_id)
                         except Exception as backup_err:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"❌ خطای سرور بکاپ: {str(backup_err)}",
+                            err_msg = f"❌ خطای سرور بکاپ: {str(backup_err)}"
+                            # 🟢 ارسال خطای سرور بکاپ به ادمین 🟢
+                            await send_custom_error_to_admin(
+                                context, f"سرور بکاپ با خطا مواجه شد:\n{err_msg}"
                             )
-                            decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                            await context.bot.send_message(
+                                chat_id=chat_id, text=err_msg
+                            )
+                            decrement_yt_downloads(chat_id)
 
                     finally:
                         for file_path in downloaded_files:
@@ -325,7 +334,6 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                             )
 
                             with open(file_path, "rb") as aud:
-                                # 1. ارسال به کانال آرشیو
                                 channel_msg = await context.bot.send_audio(
                                     chat_id=STORAGE_CHANNEL_ID,
                                     audio=aud,
@@ -338,26 +346,26 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
                                 )
                                 file_id = channel_msg.audio.file_id
 
-                                # 2. ارسال به کاربر
                                 await context.bot.send_audio(
                                     chat_id=chat_id, audio=file_id
                                 )
-
-                                # 3. ذخیره در کش
                                 save_cached_video(cache_key, [file_id])
 
-                            # increment_yt_downloads حذف شد
                         else:
                             await context.bot.send_message(
                                 chat_id=chat_id, text="❌ دانلود شکست خورد."
                             )
-                            decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                            decrement_yt_downloads(chat_id)
                     except Exception as send_err:
                         print(f"❌ Audio process error: {send_err}")
+                        # 🟢 ارسال خطای دانلود صوت به ادمین 🟢
+                        await send_custom_error_to_admin(
+                            context, f"خطا در دانلود یا ارسال صوت:\n{send_err}"
+                        )
                         await context.bot.send_message(
                             chat_id=chat_id, text=f"❌ خطا: {str(send_err)}"
                         )
-                        decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                        decrement_yt_downloads(chat_id)
                     finally:
                         if file_path and os.path.exists(file_path):
                             try:
@@ -367,11 +375,15 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
 
             except Exception as e:
                 print(f"❌ Error in background task: {e}")
+                # 🟢 ارسال خطای کلی تسک به ادمین 🟢
+                await send_custom_error_to_admin(
+                    context, f"خطای پیش‌بینی نشده در Background Task:\n{e}"
+                )
                 progress_dict["is_finished"] = True
                 await context.bot.send_message(
                     chat_id=chat_id, text=f"❌ خطا: {str(e)}"
                 )
-                decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+                decrement_yt_downloads(chat_id)
 
             finally:
                 progress_dict["is_finished"] = True
@@ -379,7 +391,9 @@ async def background_yt_download(context, url: str, chat_id: str, format_type: s
 
     except Exception as e:
         print(f"Semaphore Error: {e}")
-        decrement_yt_downloads(chat_id)  # برگرداندن سهمیه
+        # 🟢 ارسال خطای سمفور به ادمین 🟢
+        await send_custom_error_to_admin(context, f"خطای Semaphore:\n{e}")
+        decrement_yt_downloads(chat_id)
 
 
 async def handle_youtube_state(
