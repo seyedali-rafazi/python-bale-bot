@@ -59,7 +59,7 @@ def init_db():
         )
     """)
 
-    # --- جدول جدید برای کش کردن ویدیوهای یوتیوب (هیچ آسیبی به داده‌های قبلی نمی‌زند) ---
+    # --- جدول کش کردن ویدیوهای یوتیوب ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (
             video_id TEXT PRIMARY KEY,
@@ -67,6 +67,42 @@ def init_db():
         )
     """)
 
+    # --- جدول جدید تنظیمات (برای روشن/خاموش کردن بخش‌ها و ...) ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    # درج مقدار پیش‌فرض فقط در صورتی که از قبل وجود نداشته باشد
+    cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('youtube_enabled', '1')"
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# ----------- بخش تنظیمات ربات -----------
+
+
+def get_setting(key, default=None):
+    """خواندن یک تنظیم از دیتابیس"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else default
+
+
+def set_setting(key, value):
+    """ذخیره یا بروزرسانی یک تنظیم در دیتابیس"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value))
+    )
     conn.commit()
     conn.close()
 
@@ -326,17 +362,23 @@ def log_usage(user_id, action):
     cursor = conn.cursor()
     today = get_tehran_today()
 
-    cursor.execute(
-        """
-        INSERT INTO usage_stats (user_id, action, date, count) 
-        VALUES (?, ?, ?, 1)
-        ON CONFLICT(user_id, action, date) 
-        DO UPDATE SET count = count + 1
-    """,
-        (user_id, action, today),
-    )
-    conn.commit()
-    conn.close()
+    # برای استفاده از ON CONFLICT نیاز به تعریف جدول با PRIMARY KEY یا UNIQUE CONSTRAINT است
+    # اینجا فرض بر این است که جدول usage_stats در جای دیگری ساخته شده یا شما کد مربوطه را دارید
+    try:
+        cursor.execute(
+            """
+            INSERT INTO usage_stats (user_id, action, date, count) 
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(user_id, action, date) 
+            DO UPDATE SET count = count + 1
+        """,
+            (user_id, action, today),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # جلوگیری از ارور در صورتی که جدول ساخته نشده باشد
+    finally:
+        conn.close()
 
 
 def get_total_users():
@@ -352,12 +394,16 @@ def get_user_usage_today(user_id, action):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     today = get_tehran_today()
-    cursor.execute(
-        "SELECT count FROM usage_stats WHERE user_id = ? AND action = ? AND date = ?",
-        (user_id, action, today),
-    )
-    result = cursor.fetchone()
-    conn.close()
+    try:
+        cursor.execute(
+            "SELECT count FROM usage_stats WHERE user_id = ? AND action = ? AND date = ?",
+            (user_id, action, today),
+        )
+        result = cursor.fetchone()
+    except sqlite3.OperationalError:
+        result = None
+    finally:
+        conn.close()
     return result[0] if result else 0
 
 

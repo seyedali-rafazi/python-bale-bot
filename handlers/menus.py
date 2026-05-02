@@ -26,6 +26,7 @@ from core.database import (
     get_music_downloads,
 )
 from datetime import datetime
+from core.database import get_setting
 
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,6 +39,13 @@ async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # بررسی فعال بودن یوتیوب
+    if get_setting("youtube_enabled", "1") == "0":
+        await update.message.reply_text(
+            "❌ بخش یوتیوب فعلاً توسط ادمین غیرفعال شده است."
+        )
+        return
+
     await update.message.reply_text(
         "📺 به بخش پیشرفته یوتیوب خوش آمدید. یک گزینه را انتخاب کنید:",
         reply_markup=get_youtube_menu_keyboard(),

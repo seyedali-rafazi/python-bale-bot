@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import asyncio
 import sqlite3
 from core.database import DB_NAME
+from core.database import get_setting, set_setting
 
 load_dotenv()
 # آیدی عددی ادمین را در فایل .env قرار دهید
@@ -113,3 +114,19 @@ async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text("✅ محدودیت‌های تمامی کاربران با موفقیت ریست شد.")
+
+
+async def cmd_toggle_yt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    # دریافت وضعیت فعلی
+    current_status = get_setting("youtube_enabled", "1")
+
+    # تغییر وضعیت
+    new_status = "0" if current_status == "1" else "1"
+    set_setting("youtube_enabled", new_status)
+
+    status_text = "فعال ✅" if new_status == "1" else "غیرفعال ❌"
+    await update.message.reply_text(f"وضعیت دانلودر یوتیوب: {status_text}")

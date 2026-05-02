@@ -49,7 +49,13 @@ from .menus import (
     btn_music_playlist_req,
 )
 from .states import process_state_input, process_photo_input
-from core.admin import cmd_stats, cmd_setvip, cmd_messageuser, cmd_reset_limits
+from core.admin import (
+    cmd_stats,
+    cmd_setvip,
+    cmd_messageuser,
+    cmd_reset_limits,
+    cmd_toggle_yt,
+)
 import os
 from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
@@ -104,6 +110,7 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("setvip", cmd_setvip))
     application.add_handler(CommandHandler("messageuser", cmd_messageuser))
     application.add_handler(CommandHandler("resetlimits", cmd_reset_limits))
+    application.add_handler(CommandHandler("toggle_yt", cmd_toggle_yt))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
