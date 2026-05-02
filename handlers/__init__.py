@@ -69,8 +69,8 @@ CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 async def check_membership_middleware(update, context):
-    # --- اضافه شده: جلوگیری از پردازش پیام‌های داخل کانال (جلوگیری از لوپ خطا) ---
-    if update.effective_chat and update.effective_chat.type == "channel":
+    # --- اضافه شده: توقف قطعی پردازش پیام‌های کانال (جلوگیری از لوپ بی‌نهایت ارور) ---
+    if update.channel_post or getattr(update.effective_chat, "type", "") == "channel":
         raise ApplicationHandlerStop()
     # --------------------------------------------------------------------------
 
@@ -303,12 +303,19 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
     )
-    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
+
+    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - فقط چت خصوصی
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input)
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            process_state_input,
+        )
     )
 
-    # پردازش عکس‌ها (پشتیبانی همزمان از عکس عادی و عکسِ ارسال‌شده به صورت فایل)
+    # پردازش عکس‌ها - فقط چت خصوصی
     application.add_handler(
-        MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_photo_input)
+        MessageHandler(
+            (filters.PHOTO | filters.Document.IMAGE) & filters.ChatType.PRIVATE,
+            process_photo_input,
+        )
     )
