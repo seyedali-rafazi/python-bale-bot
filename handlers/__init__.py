@@ -69,11 +69,13 @@ CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 async def check_membership_middleware(update, context):
-    # --- اضافه شده: جلوگیری از پردازش پیام‌های داخل کانال (جلوگیری از لوپ خطا) ---
-    if update.effective_chat and update.effective_chat.type == "channel":
+    # --- کد اصلاح شده: این شرط باید اولین چیز در تابع باشد ---
+    # اگر آپدیت از نوع "پست کانال" است، پردازش را کاملا متوقف کن
+    if update.channel_post:
         raise ApplicationHandlerStop()
-    # --------------------------------------------------------------------------
+    # ---------------------------------------------------------
 
+    # حالا بقیه کد برای بررسی پیام‌های کاربران اجرا می‌شود
     if not update.effective_user or not update.message:
         return
 
