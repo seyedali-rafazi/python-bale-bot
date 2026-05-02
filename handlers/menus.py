@@ -342,7 +342,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # بررسی محدودیت‌ها
     yt_limit = "20" if is_vip == 1 else "2"
     music_limit = "20" if is_vip == 1 else "6"
-    pinterest_limit = "30" if is_vip == 1 else "5"  # محاسبه سقف پینترست
+    pinterest_limit = "30" if is_vip == 1 else "2"  # محاسبه سقف پینترست
 
     # ساختار متن نهایی
     profile_text = f"""

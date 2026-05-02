@@ -34,13 +34,15 @@ async def handle_pinterest_state(
     limit = 30 if is_vip(user_id) else 5
 
     if usage >= limit:
-        await update.message.reply_text("❌ محدودیت روزانه شما به پایان رسیده است!")
+        await update.message.reply_text(
+            "❌ محدودیت روزانه شما به پایان رسیده است . محدودیت ها 12 شب به وقت تهران ریست میشود . کاربران رایگان میتوانند با خرید اشتراک محدودیت خودشون افزایش بدهند!"
+        )
         set_state(chat_id, "")
         return
 
     msg = await update.message.reply_text("⏳ در حال جستجو و دریافت تصاویر...")
 
-    # مشکل اول: افزایش تعداد نتایج جستجو برای داشتن عکس برای دفعات بعدی
+    # افزایش تعداد نتایج جستجو برای داشتن عکس برای دفعات بعدی
     images_urls = search_pinterest_images(text, max_results=50)
 
     if not images_urls:
@@ -83,6 +85,12 @@ async def handle_pinterest_state(
                 text="برای دریافت عکس‌های بیشتر کلیک کنید:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
+        else:
+            # تغییر جدید: اگر از همان سرچ اول عکس‌های کمی پیدا شده بود
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
+            )
     except Exception as e:
         print(f"Error: {e}")
         await context.bot.send_message(
@@ -100,12 +108,12 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     usage = get_pinterest_downloads(user_id)
     limit = 30 if is_vip(user_id) else 5
 
-    # مشکل سوم: بررسی محدودیت روزانه در دفعات بعدی
+    # بررسی محدودیت روزانه در دفعات بعدی
     if usage >= limit:
         await query.edit_message_text("❌ محدودیت روزانه شما به پایان رسیده است!")
         return
 
-    # مشکل دوم: حذف پیغام حاوی دکمه قدیمی
+    # حذف پیغام حاوی دکمه قدیمی
     await query.message.delete()
 
     msg = await context.bot.send_message(
@@ -115,8 +123,11 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     images = context.user_data.get("pin_images", [])
     index = context.user_data.get("pin_index", 0)
 
+    # تغییر جدید: پیام اتمام در صورت زدن دکمه اضافی
     if index >= len(images):
-        await msg.edit_text("❌ عکس بیشتری وجود ندارد.")
+        await msg.edit_text(
+            "✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید."
+        )
         return
 
     media_group = []
@@ -141,12 +152,12 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
             chat_id=query.message.chat_id, media=media_group
         )
 
-        # مشکل سوم: اضافه شدن به شمارش مصرف کاربر
+        # اضافه شدن به شمارش مصرف کاربر
         increment_pinterest_downloads(user_id)
 
         context.user_data["pin_index"] = index + 10  # آپدیت کردن ایندکس لینک‌ها
 
-        # مشکل دوم: ارسال مجدد دکمه در زیر عکس‌های سری جدید
+        # ارسال مجدد دکمه در زیر عکس‌های سری جدید
         if context.user_data["pin_index"] < len(images):
             keyboard = [
                 [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
@@ -155,6 +166,12 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
                 chat_id=query.message.chat_id,
                 text="برای دریافت عکس‌های بیشتر کلیک کنید:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            # تغییر جدید: ارسال پیام اتمام وقتی که لیست عکس‌ها تمام شد
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
             )
     except Exception as e:
         print(f"Error: {e}")
