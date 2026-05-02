@@ -69,6 +69,11 @@ CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 async def check_membership_middleware(update, context):
+    # --- اضافه شده: جلوگیری از پردازش پیام‌های داخل کانال (جلوگیری از لوپ خطا) ---
+    if update.effective_chat and update.effective_chat.type == "channel":
+        raise ApplicationHandlerStop()
+    # --------------------------------------------------------------------------
+
     if not update.effective_user or not update.message:
         return
 
