@@ -1,7 +1,7 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
-from core.database import get_pinterest_usage, increment_pinterest_usage, is_vip
+from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
 from services.pinterest import search_pinterest_images
 
 
@@ -10,7 +10,7 @@ async def handle_pinterest_state(
 ):
     user_id = str(update.effective_user.id)
 
-    usage = get_pinterest_usage(user_id)
+    usage = get_pinterest_downloads(user_id)
     user_is_vip = is_vip(user_id)
     limit = 30 if user_is_vip else 5
 
@@ -29,7 +29,7 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    increment_pinterest_usage(user_id)
+    increment_pinterest_downloads(user_id)
 
     # ذخیره تصاویر در context برای دکمه 'عکس‌های بیشتر'
     context.user_data["pin_images"] = images
