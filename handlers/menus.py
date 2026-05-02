@@ -22,8 +22,8 @@ from core.keyboards import (
 from core.database import (
     get_user_info,
     get_yt_downloads,
-    get_user_usage_today,
     get_music_downloads,
+    get_pinterest_downloads,
 )
 from datetime import datetime
 from core.database import get_setting
@@ -313,45 +313,38 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     username_str = f"@{username}" if username else "ندارد"
 
-    # ------------------- بخش اصلاح شده -------------------
-
     vip_status_text = "🆓 رایگان"
-    vip_duration_text = ""  # متنی برای نمایش مدت زمان باقی‌مانده
+    vip_duration_text = ""
 
     if is_vip == 1:
         vip_status_text = "💎 ویژه (پرو)"
         if vip_expire_date:
             try:
-                # کلید حل مشکل: تاریخ در دیتابیس با فرمت ISO ذخیره شده است
-                # پس باید با fromisoformat خوانده شود
                 expire_dt = datetime.fromisoformat(vip_expire_date)
                 now = datetime.now()
 
                 if expire_dt > now:
                     remaining_time = expire_dt - now
-                    # افزودن 1 به remaining_time.days باعث می‌شود روز آخر هم "1 روز" نمایش داده شود
                     remaining_days = remaining_time.days + 1
                     vip_duration_text = f"\n⏳ اعتبار اشتراک: {remaining_days} روز"
                 else:
                     vip_duration_text = "\n⏳ اعتبار اشتراک: منقضی شده"
 
             except Exception as e:
-                # این لاگ برای خطایابی خودتان در کنسول مفید است
                 print(f"Error parsing date for user {user_id}: {e}")
                 vip_duration_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا)"
-
-    # ------------------- پایان بخش اصلاح شده -------------------
 
     # دریافت آمار مصرف
     yt_count = get_yt_downloads(user_id)
     music_count = get_music_downloads(user_id)
+    pinterest_count = get_pinterest_downloads(user_id)  # دریافت مصرف پینترست
 
     # بررسی محدودیت‌ها
     yt_limit = "20" if is_vip == 1 else "2"
     music_limit = "20" if is_vip == 1 else "6"
+    pinterest_limit = "30" if is_vip == 1 else "5"  # محاسبه سقف پینترست
 
     # ساختار متن نهایی
-    # متغیر vip_duration_text فقط در صورتی که کاربر vip باشد، مقدار می‌گیرد
     profile_text = f"""
 🪪 **مشخصات شما**
 🆔 ایدی عددی: `{user_id}`
@@ -362,6 +355,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⏳ **مصرف امروز (به وقت ایران؛ ریست نیمه‌شب):**
 • یوتیوب | دانلود: $ {yt_count} / {yt_limit} $
 • موسیقی | دانلود: $ {music_count} / {music_limit} $
+• پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
 """
 
     await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")
