@@ -47,6 +47,7 @@ from .menus import (
     btn_music_album_req,
     btn_music_artist_req,
     btn_music_playlist_req,
+    btn_pinterest_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip, cmd_messageuser, cmd_reset_limits
@@ -55,6 +56,7 @@ from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
 from .payment import btn_buy_vip, precheckout_callback, successful_payment_callback
+from handlers.states.state_pinterest import handle_more_pins_callback
 
 
 load_dotenv()
@@ -272,7 +274,6 @@ def register_all_handlers(application):
             pattern=r"^(album_|playlist_|artist_|toptracks_|dltrack_)",
         )
     )
-
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BUY_VIP)}$"), btn_buy_vip)
     )
@@ -280,6 +281,17 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
     )
+
+    # هندلر های پینترست
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PINTEREST)}$"), btn_pinterest_req
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_more_pins_callback, pattern="^more_pins$")
+    )
+
     # هندلر پشتیبانی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)

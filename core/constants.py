@@ -54,3 +54,8 @@ BTN_MUSIC_PLAYLIST = "🎧 پلی‌لیست‌های اسپاتیفای"
 
 BTN_MUSIC_SEARCH = "🔍 جستجوی آهنگ (نام/خواننده)"
 BTN_MUSIC_SPOTIFY = "🎧 دانلود از اسپاتیفای (با لینک)"
+
+
+# پینترست
+BTN_PINTEREST = "📌 پینترست (جستجوی عکس)"
+BTN_MORE_PINS = "عکس‌های بیشتر ➕"

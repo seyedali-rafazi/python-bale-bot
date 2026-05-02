@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
-import json  # <-- اضافه شده برای ذخیره لیست فایل‌ها
+import json
 
 DB_NAME = "bot_data.db"
 TEHRAN_TZ = pytz.timezone("Asia/Tehran")
@@ -42,10 +42,14 @@ def init_db():
         cursor.execute("ALTER TABLE users ADD COLUMN music_count INTEGER DEFAULT 0")
     if "music_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN music_date TEXT")
-
-    # --- ستون جدید برای اشتراک ---
     if "vip_expire_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN vip_expire_date TEXT")
+
+    # --- ستون‌های جدید برای پینترست ---
+    if "pinterest_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN pinterest_count INTEGER DEFAULT 0")
+    if "pinterest_date" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN pinterest_date TEXT")
 
     # جدول تراکنش‌ها
     cursor.execute("""
@@ -59,7 +63,7 @@ def init_db():
         )
     """)
 
-    # --- جدول کش کردن ویدیوهای یوتیوب ---
+    # جدول کش کردن ویدیوهای یوتیوب
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (
             video_id TEXT PRIMARY KEY,
@@ -67,14 +71,13 @@ def init_db():
         )
     """)
 
-    # --- جدول جدید تنظیمات (برای روشن/خاموش کردن بخش‌ها و ...) ---
+    # جدول تنظیمات
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     """)
-    # درج مقدار پیش‌فرض فقط در صورتی که از قبل وجود نداشته باشد
     cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('youtube_enabled', '1')"
     )
@@ -87,7 +90,6 @@ def init_db():
 
 
 def get_setting(key, default=None):
-    """خواندن یک تنظیم از دیتابیس"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
@@ -97,7 +99,6 @@ def get_setting(key, default=None):
 
 
 def set_setting(key, value):
-    """ذخیره یا بروزرسانی یک تنظیم در دیتابیس"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
@@ -107,7 +108,7 @@ def set_setting(key, value):
     conn.close()
 
 
-# ----------- بخش مربوط به  تراکنش ها -----------
+# ----------- بخش مربوط به تراکنش ها -----------
 
 
 def add_transaction(user_id, amount, payload, provider_charge_id):
@@ -142,7 +143,6 @@ def is_vip(user_id):
     if vip_status == 1:
         if expire_date_str:
             expire_date = datetime.fromisoformat(expire_date_str)
-            # اگر منقضی شده بود
             if datetime.now() > expire_date:
                 cursor.execute(
                     "UPDATE users SET is_vip = 0, vip_expire_date = NULL WHERE user_id = ?",
@@ -159,7 +159,6 @@ def is_vip(user_id):
 
 
 def add_vip_time(user_id, days: int):
-    """تمدید اشتراک (افزودن روز به تاریخ قبلی یا از همین لحظه)"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
@@ -217,7 +216,7 @@ def get_music_downloads(user_id):
     if result:
         count, db_date = result
         if db_date != today:
-            return 0  # روز جدید شده است
+            return 0
         return count
     return 0
 
@@ -255,10 +254,10 @@ def add_user(user_id, username):
 
     cursor.execute(
         """
-        INSERT OR IGNORE INTO users (user_id, username, is_vip, join_date, yt_count, yt_date) 
-        VALUES (?, ?, 0, ?, 0, ?)
+        INSERT OR IGNORE INTO users (user_id, username, is_vip, join_date, yt_count, yt_date, pinterest_count, pinterest_date) 
+        VALUES (?, ?, 0, ?, 0, ?, 0, ?)
     """,
-        (user_id, username, join_date, today),
+        (user_id, username, join_date, today, today),
     )
 
     conn.commit()
@@ -300,7 +299,7 @@ def get_yt_downloads(user_id):
     if result:
         count, db_date = result
         if db_date != today:
-            return 0  # اگر روز جدید شده، مصرف 0 در نظر گرفته می‌شود
+            return 0
         return count
     return 0
 
@@ -329,10 +328,6 @@ def increment_yt_downloads(user_id):
 
 
 def decrement_yt_downloads(user_id):
-    """
-    در صورت بروز خطا در دانلود، یک واحد از مصرف امروز کاربر کم می‌کند
-    تا سهمیه‌اش نسوزد.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     today = get_tehran_today()
@@ -342,13 +337,61 @@ def decrement_yt_downloads(user_id):
 
     if result:
         count, db_date = result
-        # فقط در صورتی کم کن که تاریخ برای امروز باشه و حداقل 1 بار مصرف ثبت شده باشه
         if db_date == today and count > 0:
             new_count = count - 1
             cursor.execute(
                 "UPDATE users SET yt_count = ? WHERE user_id = ?",
                 (new_count, user_id),
             )
+
+    conn.commit()
+    conn.close()
+
+
+# ----------- بخش مربوط به پینترست -----------
+
+
+def get_pinterest_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+
+    cursor.execute(
+        "SELECT pinterest_count, pinterest_date FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        count, db_date = result
+        if db_date != today:
+            return 0
+        return count
+    return 0
+
+
+def increment_pinterest_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+
+    cursor.execute(
+        "SELECT pinterest_count, pinterest_date FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    result = cursor.fetchone()
+
+    if result:
+        count, db_date = result
+        if db_date != today:
+            new_count = 1
+        else:
+            new_count = count + 1
+        cursor.execute(
+            "UPDATE users SET pinterest_count = ?, pinterest_date = ? WHERE user_id = ?",
+            (new_count, today, user_id),
+        )
 
     conn.commit()
     conn.close()
@@ -361,9 +404,6 @@ def log_usage(user_id, action):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     today = get_tehran_today()
-
-    # برای استفاده از ON CONFLICT نیاز به تعریف جدول با PRIMARY KEY یا UNIQUE CONSTRAINT است
-    # اینجا فرض بر این است که جدول usage_stats در جای دیگری ساخته شده یا شما کد مربوطه را دارید
     try:
         cursor.execute(
             """
@@ -376,7 +416,7 @@ def log_usage(user_id, action):
         )
         conn.commit()
     except sqlite3.OperationalError:
-        pass  # جلوگیری از ارور در صورتی که جدول ساخته نشده باشد
+        pass
     finally:
         conn.close()
 
@@ -420,9 +460,6 @@ def get_all_users():
 
 
 def get_cached_video(video_id: str) -> list:
-    """
-    آیدی یوتیوب را می‌گیرد و لیست file_id های موجود در کانال را برمی‌گرداند.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT file_ids FROM youtube_cache WHERE video_id = ?", (video_id,))
@@ -435,19 +472,12 @@ def get_cached_video(video_id: str) -> list:
 
 
 def save_cached_video(video_id: str, file_ids: list):
-    """
-    آیدی یوتیوب و لیست file_id ها را به صورت JSON ذخیره می‌کند.
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-
     file_ids_json = json.dumps(file_ids)
-
-    # استفاده از INSERT OR REPLACE تا در صورت وجود آپدیت شود
     cursor.execute(
         "INSERT OR REPLACE INTO youtube_cache (video_id, file_ids) VALUES (?, ?)",
         (video_id, file_ids_json),
     )
-
     conn.commit()
     conn.close()
