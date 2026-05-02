@@ -1,4 +1,4 @@
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 
 def search_pinterest_images(query, max_results=10):
