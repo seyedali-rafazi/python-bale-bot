@@ -69,13 +69,11 @@ CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 async def check_membership_middleware(update, context):
-    # --- کد اصلاح شده: این شرط باید اولین چیز در تابع باشد ---
-    # اگر آپدیت از نوع "پست کانال" است، پردازش را کاملا متوقف کن
-    if update.channel_post:
+    # --- اضافه شده: جلوگیری از پردازش پیام‌های داخل کانال (جلوگیری از لوپ خطا) ---
+    if update.effective_chat and update.effective_chat.type == "channel":
         raise ApplicationHandlerStop()
-    # ---------------------------------------------------------
+    # --------------------------------------------------------------------------
 
-    # حالا بقیه کد برای بررسی پیام‌های کاربران اجرا می‌شود
     if not update.effective_user or not update.message:
         return
 
@@ -109,7 +107,11 @@ async def check_membership_middleware(update, context):
 def register_all_handlers(application):
     # این خط باعث می‌شود قبل از هر دستوری، جوین اجباری چک شود (گروه 1-)
     application.add_handler(
-        MessageHandler(filters.ALL, check_membership_middleware), group=-1
+        MessageHandler(
+            filters.ChatType.PRIVATE & ~filters.UpdateType.EDITED_MESSAGE,
+            check_membership_middleware,
+        ),
+        group=-1,
     )
 
     # دستورات ادمین
