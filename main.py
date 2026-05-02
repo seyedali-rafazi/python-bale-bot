@@ -8,6 +8,7 @@ import os
 import time
 from dotenv import load_dotenv
 from core.database import init_db
+from handlers.error_handler import global_error_handler
 
 load_dotenv()
 BALE_TOKEN = os.getenv("BALE_TOKEN")
@@ -61,6 +62,8 @@ def main():
 
     # ثبت تمام هندلرها از پوشه handlers
     register_all_handlers(application)
+
+    application.add_error_handler(global_error_handler)
 
     print("✅ ربات با معماری جدید با موفقیت راه‌اندازی شد...")
     application.run_polling()
