@@ -105,7 +105,10 @@ async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor = conn.cursor()
 
     # صفر کردن تعداد دفعات استفاده برای همه کاربران
-    cursor.execute("UPDATE users SET yt_count = 0, music_count = 0")
+
+    cursor.execute(
+        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
+    )
 
     # در صورت نیاز به پاک کردن جدول لاگ مصرف روزانه
     # cursor.execute("DELETE FROM usage_stats")
