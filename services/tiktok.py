@@ -10,6 +10,9 @@ load_dotenv()
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# محدودیت: حداکثر ۲ درخواست همزمان به API سایت tikwm برای جلوگیری از بن شدن IP
+TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
+
 
 async def download_tiktok_video(url: str):
     """دانلود غیرهمزمان ویدیوی تیک‌تاک"""
@@ -57,35 +60,40 @@ async def download_tiktok_video(url: str):
 
 
 async def search_tiktok_videos(query: str, max_results: int = 10):
-    """جستجوی غیرهمزمان در تیک تاک"""
-    url = f"https://www.tiktok.com/tag/{query.replace(' ', '')}"
+    """جستجوی غیرهمزمان در تیک‌تاک با aiohttp و API tikwm"""
+    url = f"https://www.tikwm.com/api/feed/search?keywords={query}&count={max_results}"
+    results = []
 
-    cmd = [
-        "yt-dlp",
-        "--flat-playlist",
-        "--print",
-        "%(title)s|||%(webpage_url)s",
-        "--playlist-end",
-        str(max_results),
-        url,
-    ]
+    # اعمال محدودیت برای جلوگیری از بن شدن
+    async with TIKWM_API_SEMAPHORE:
+        await asyncio.sleep(1)  # ۱ ثانیه تاخیر اجباری بین درخواست‌ها
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        # بررسی موفق بودن دریافت دیتا
+                        if data.get("code") == 0 and "data" in data:
+                            for item in data.get("data", []):
+                                title = item.get("title", "بدون کپشن")
+                                if not title or title.strip() == "":
+                                    title = "بدون کپشن"
+                                title = title[:50] + ("..." if len(title) > 50 else "")
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        # اعمال تایم‌اوت 30 ثانیه‌ای برای جستجو
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
+                                video_id = item.get("video_id") or item.get("id")
+                                author = item.get("author", {}).get("unique_id", "user")
+                                link = (
+                                    f"https://www.tiktok.com/@{author}/video/{video_id}"
+                                )
 
-        results = []
-        for line in stdout.decode().splitlines():
-            if "|||" in line:
-                title, link = line.split("|||", 1)
-                results.append({"title": title[:50] + "...", "url": link})
-        return results
-    except Exception as e:
-        print(f"Error searching TikTok: {e}")
-        return []
+                                results.append({"title": title, "url": link})
+
+                                if len(results) >= max_results:
+                                    break
+        except Exception as e:
+            print(f"Search API Error: {e}")
+
+    return results
 
 
 async def get_tiktok_trends():
@@ -93,19 +101,24 @@ async def get_tiktok_trends():
     url = "https://www.tikwm.com/api/feed/list?region=US&count=10"
     results = []
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("code") == 0:
-                        for item in data.get("data", []):
-                            title = item.get("title", "بدون کپشن")[:50]
-                            video_id = item.get("video_id") or item.get("id")
-                            author = item.get("author", {}).get("unique_id", "user")
-                            link = f"https://www.tiktok.com/@{author}/video/{video_id}"
-                            results.append({"title": title, "url": link})
-    except Exception as e:
-        print(f"Trend API Error: {e}")
+    # اعمال محدودیت برای جلوگیری از بن شدن
+    async with TIKWM_API_SEMAPHORE:
+        await asyncio.sleep(1)  # ۱ ثانیه تاخیر اجباری بین درخواست‌ها
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("code") == 0:
+                            for item in data.get("data", []):
+                                title = item.get("title", "بدون کپشن")[:50]
+                                video_id = item.get("video_id") or item.get("id")
+                                author = item.get("author", {}).get("unique_id", "user")
+                                link = (
+                                    f"https://www.tiktok.com/@{author}/video/{video_id}"
+                                )
+                                results.append({"title": title, "url": link})
+        except Exception as e:
+            print(f"Trend API Error: {e}")
 
     return results
