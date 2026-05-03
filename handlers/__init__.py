@@ -52,6 +52,7 @@ from .menus import (
     btn_tt_link_req,
     btn_tt_search_req,
     btn_tt_trend_req,
+    btn_tt_explore_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import (
@@ -318,7 +319,11 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_TREND)}$"), btn_tt_trend_req)
     )
-
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_TT_EXPLORE)}$"), btn_tt_explore_req
+        )
+    )
     # هندلر پشتیبانی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)

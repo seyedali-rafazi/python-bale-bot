@@ -51,6 +51,24 @@ def init_db():
     if "pinterest_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN pinterest_date TEXT")
 
+    # --- ستون‌های جدید برای تیکتاک ---
+    if "tt_dl_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN tt_dl_count INTEGER DEFAULT 0")
+    if "tt_dl_date" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN tt_dl_date TEXT")
+    if "tt_exp_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN tt_exp_count INTEGER DEFAULT 0")
+    if "tt_exp_date" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN tt_exp_date TEXT")
+
+    # جدول جدید برای ذخیره ویدیوهای اکسپلور تیک‌تاک
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tiktok_explore (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT UNIQUE
+        )
+    """)
+
     # جدول تراکنش‌ها
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
@@ -481,3 +499,99 @@ def save_cached_video(video_id: str, file_ids: list):
     )
     conn.commit()
     conn.close()
+
+
+# ----------- بخش جدید: تیک تاک -----------
+
+
+def get_tt_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute(
+        "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        count, db_date = result
+        if db_date != today:
+            return 0
+        return count
+    return 0
+
+
+def increment_tt_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute(
+        "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
+    )
+    result = cursor.fetchone()
+    if result:
+        count, db_date = result
+        new_count = 1 if db_date != today else count + 1
+        cursor.execute(
+            "UPDATE users SET tt_dl_count = ?, tt_dl_date = ? WHERE user_id = ?",
+            (new_count, today, user_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_tt_explores(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute(
+        "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        count, db_date = result
+        if db_date != today:
+            return 0
+        return count
+    return 0
+
+
+def increment_tt_explores(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute(
+        "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
+    )
+    result = cursor.fetchone()
+    if result:
+        count, db_date = result
+        new_count = 1 if db_date != today else count + 1
+        cursor.execute(
+            "UPDATE users SET tt_exp_count = ?, tt_exp_date = ? WHERE user_id = ?",
+            (new_count, today, user_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def add_tiktok_explore_video(file_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO tiktok_explore (file_id) VALUES (?)", (file_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_random_tiktok_explore_videos(limit=5):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT file_id FROM tiktok_explore ORDER BY RANDOM() LIMIT ?", (limit,)
+    )
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return results

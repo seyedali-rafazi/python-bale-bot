@@ -25,6 +25,10 @@ from core.database import (
     get_yt_downloads,
     get_music_downloads,
     get_pinterest_downloads,
+    is_vip,
+    get_tt_explores,
+    increment_tt_explores,
+    get_random_tiktok_explore_videos,
 )
 from datetime import datetime
 from core.database import get_setting
@@ -486,6 +490,32 @@ async def btn_tt_trend_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from handlers.states.state_tiktok import process_tiktok_trends
 
     await process_tiktok_trends(update, context)
+
+
+async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    chat_id = str(update.effective_chat.id)
+
+    vip = is_vip(user_id)
+    max_exp = 10 if vip else 1
+    current_exp = get_tt_explores(user_id)
+
+    if current_exp >= max_exp:
+        await update.message.reply_text(
+            "❌ محدودیت روزانه اکسپلور تیک‌تاک شما به پایان رسیده است."
+        )
+        return
+
+    videos = get_random_tiktok_explore_videos(5)
+    if not videos:
+        await update.message.reply_text("❌ هنوز ویدیویی در اکسپلور ذخیره نشده است.")
+        return
+
+    increment_tt_explores(user_id)
+    await update.message.reply_text("🌍 در حال ارسال ویدیوهای اکسپلور...")
+
+    for vid in videos:
+        await context.bot.send_video(chat_id=chat_id, video=vid)
 
 
 #  تیک تاک end

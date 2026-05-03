@@ -10,12 +10,30 @@ from services.tiktok import (
     search_tiktok_videos,
     get_tiktok_trends,
 )
+from core.database import (
+    is_vip,
+    get_tt_downloads,
+    increment_tt_downloads,
+    add_tiktok_explore_video,
+)
 
 # نام کانالی که ویدیوها به عنوان آرشیو در آن ذخیره می‌شوند
-STORAGE_CHANNEL_ID = "@digiacharstorage"
+STORAGE_CHANNEL_ID = "@digitiktoksection"
 
 # محدودکننده دانلود همزمان (صف ۳ تایی)
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
+
+
+async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
+    vip = is_vip(user_id)
+    max_dl = 15 if vip else 1
+    current_dl = get_tt_downloads(user_id)
+    if current_dl >= max_dl:
+        await update.message.reply_text(
+            "❌ محدودیت دانلود روزانه تیک‌تاک شما به پایان رسیده است."
+        )
+        return False
+    return True
 
 
 async def background_tt_download(
@@ -64,6 +82,9 @@ async def background_tt_download(
                     write_timeout=300,
                 )
                 file_id = channel_msg.video.file_id
+
+                # ذخیره ویدیو در دیتابیس اکسپلور
+                add_tiktok_explore_video(file_id)
 
         # 3. ارسال file_id برای کاربر نهایی (سرعت بالا در ارسال)
         await context.bot.send_video(
@@ -120,12 +141,18 @@ async def handle_tiktok_state(
     chat_id: str,
     state_data: dict,
 ):
+    user_id_str = str(update.effective_user.id)
 
     # 1. گرفتن لینک مستقیم تیک‌تاک
     if step == "waiting_tt_link":
         if "tiktok.com" not in text and "tiktok" not in text:
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
+
+        # بررسی محدودیت دانلود و افزایش شمارنده
+        if not await check_tt_dl_limit(update, user_id_str):
+            return
+        increment_tt_downloads(user_id_str)
 
         asyncio.create_task(
             background_tt_download(context, text, chat_id, "دانلود مستقیم با لینک")
@@ -160,7 +187,7 @@ async def handle_tiktok_state(
         )
         return
 
-    # 3. انتخاب ویدیو از لیست
+    # 3. انتخاب ویدیو از لیست (ترند یا جستجو)
     elif step == "waiting_tt_selection":
         if text.startswith("📥 دانلود تیک‌تاک "):
             try:
@@ -172,6 +199,11 @@ async def handle_tiktok_state(
                         f"❌ لطفاً عددی بین $1$ تا ${len(videos)}$ وارد کنید."
                     )
                     return
+
+                # بررسی محدودیت دانلود و افزایش شمارنده
+                if not await check_tt_dl_limit(update, user_id_str):
+                    return
+                increment_tt_downloads(user_id_str)
 
                 selected_video = videos[index]
                 asyncio.create_task(
