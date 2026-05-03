@@ -42,7 +42,7 @@ async def handle_telegram_state(
             f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
         )
     else:
-        await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
+        await update.message.reply_text("⏳ در حال دریافت اطلاعات از بله...")
 
     try:
         async with processing_semaphore:
@@ -182,7 +182,7 @@ async def handle_telegram_state(
 
                 except asyncio.TimeoutError:
                     await update.message.reply_text(
-                        "❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید."
+                        "❌ ارتباط با سرور بله قطع شد. لطفاً بعدا تلاش کنید."
                     )
                 except Exception as e:
                     print(f"Telegram Latest Error: {e}")

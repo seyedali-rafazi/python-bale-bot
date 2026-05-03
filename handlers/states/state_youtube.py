@@ -1,7 +1,5 @@
 # handlers/states/state_youtube.py
 
-# handlers/states/state_youtube.py
-
 import os
 import asyncio
 import re
@@ -14,7 +12,7 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 from core.state_manager import set_state, get_state
-from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
+from core.constants import BTN_YT_VIDEO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
 from core.database import (
     is_vip,
@@ -40,8 +38,14 @@ except ImportError:
     # در صورتی که فایل هنوز ساخته نشده خطا ندهد
     upload_to_s3 = None
 
-MAX_CONCURRENT_DOWNLOADS = 3  # تعداد دانلودهای همزمان
-download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+# --- تغییرات جدید: تعریف صف‌های مجزا ---
+MAX_NORMAL_DOWNLOADS = 2  # تعداد دانلود همزمان برای کاربران عادی
+MAX_VIP_DOWNLOADS = 2  # تعداد دانلود همزمان برای کاربران ویژه (Pro)
+
+normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
+vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
+# ---------------------------------------
+
 STORAGE_CHANNEL_ID = "@digiacharstorage"  # کانال ارشیو
 
 
@@ -90,13 +94,17 @@ async def background_yt_download(
             return
     # ---------------------------------------------------------
 
-    # بررسی وضعیت صف با استفاده از سمفور
+    # --- تغییرات جدید: تشخیص صف کاربر ---
+    user_is_vip = is_vip(chat_id)
+    active_semaphore = vip_semaphore if user_is_vip else normal_semaphore
+    max_concurrent = MAX_VIP_DOWNLOADS if user_is_vip else MAX_NORMAL_DOWNLOADS
+    # ------------------------------------
+
+    # بررسی وضعیت صف با استفاده از سمفور انتخاب شده
     waiting_count = max(
         0,
-        MAX_CONCURRENT_DOWNLOADS
-        - download_semaphore._value
-        + len(download_semaphore._waiters)
-        if download_semaphore._waiters
+        max_concurrent - active_semaphore._value + len(active_semaphore._waiters)
+        if active_semaphore._waiters
         else 0,
     )
 
@@ -112,7 +120,8 @@ async def background_yt_download(
         )
 
     try:
-        async with download_semaphore:
+        # تغییر مهم: استفاده از active_semaphore به جای download_semaphore قبلی
+        async with active_semaphore:
             progress_dict = {"text": "شروع پردازش...", "is_finished": False}
 
             async def update_progress_message():
@@ -168,7 +177,7 @@ async def background_yt_download(
                             if destination == "server":
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="☁️ در حال آپلود ویدیو در فضای ابری پارس‌پک...",
+                                    text="☁️ در حال آپلود ویدیو در فضای ابری ...",
                                 )
                                 s3_links = []
                                 for file_path in result:
@@ -206,7 +215,7 @@ async def background_yt_download(
 
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text=f"📤 در حال آپلود ویدیو در تلگرام{part_msg}...",
+                                    text=f"📤 در حال آپلود ویدیو در بله{part_msg}...",
                                 )
 
                                 uploaded_file_ids = []
@@ -594,7 +603,7 @@ async def handle_youtube_state(
             [
                 [
                     InlineKeyboardButton(
-                        "📤 آپلود مستقیم (تلگرام)", callback_data="ytdest_telegram"
+                        "📤 آپلود مستقیم (بله)", callback_data="ytdest_telegram"
                     )
                 ],
                 [
@@ -628,7 +637,7 @@ async def handle_youtube_state(
             [
                 [
                     InlineKeyboardButton(
-                        "📤 آپلود مستقیم (تلگرام)", callback_data="ytdest_telegram"
+                        "📤 آپلود مستقیم (بله)", callback_data="ytdest_telegram"
                     )
                 ],
                 [
