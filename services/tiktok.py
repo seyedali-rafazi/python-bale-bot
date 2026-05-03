@@ -77,9 +77,15 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                                     )
 
                                     video_id = item.get("video_id") or item.get("id")
-                                    author = item.get("author", {}).get(
-                                        "unique_id", "user"
-                                    )
+
+                                    # بررسی نوع author
+                                    author_data = item.get("author", {})
+                                    if isinstance(author_data, dict):
+                                        author = author_data.get("unique_id", "user")
+                                    else:
+                                        # اگر author یک رشته است
+                                        author = author_data if author_data else "user"
+
                                     link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
                                     results.append({"title": title, "url": link})
