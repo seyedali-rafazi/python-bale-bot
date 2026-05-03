@@ -109,8 +109,8 @@ async def handle_tiktok_state(
     state_data: dict,
 ):
 
-    # 1. گرفتن لینک مستقیم تیک‌تاک
-    if step == "waiting_tiktok_link":
+    # 1. گرفتن لینک مستقیم تیک‌تاک (نام استپ اصلاح شد)
+    if step == "waiting_tt_link":
         print(f"📩 [TikTok State] Received link: {text}")
 
         # بررسی معتبر بودن لینک
@@ -119,7 +119,7 @@ async def handle_tiktok_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        # شروع فرآیند دانلود (این خط در کد شما جا افتاده بود!)
+        # شروع فرآیند دانلود
         asyncio.create_task(
             background_tt_download(context, text, chat_id, "دانلود مستقیم با لینک")
         )
