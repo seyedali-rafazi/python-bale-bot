@@ -58,13 +58,16 @@ def _base_ytdlp_cmd():
     """
     cmd = [
         "yt-dlp",
-        "--force-ipv4",
+        # 1. اگر سرورتان IPv6 دارد، خط زیر را فعال کنید (بسیار موثر است)
+        # در غیر این صورت اگر ارور شبکه گرفتید، این خط را کامنت کنید.
+        "--force-ipv6",
         "--js-runtimes",
         "node",
         "--remote-components",
         "ejs:github",
+        # 2. تغییر کلاینت از وب به موبایل و تلویزیون برای دور زدن ربات‌گیر یوتیوب
         "--extractor-args",
-        "youtube:player_client=web",
+        "youtube:client=ANDROID,IOS,TV_EMBED",
         "--no-playlist",
     ]
 
