@@ -111,13 +111,19 @@ async def handle_tiktok_state(
 
     # 1. گرفتن لینک مستقیم تیک‌تاک
     if step == "waiting_tiktok_link":
-        print(f"📩 [TikTok State] Received link: {text}")  # این خط را اضافه کنید
+        print(f"📩 [TikTok State] Received link: {text}")
 
-        # اگر لینک‌های کوتاه مثل vm.tiktok.com یا vt.tiktok.com دارید، شرط باید اینگونه باشد:
+        # بررسی معتبر بودن لینک
         if "tiktok.com" not in text and "tiktok" not in text:
-            print("❌ [TikTok State] Link marked as invalid!")  # این خط را اضافه کنید
+            print("❌ [TikTok State] Link marked as invalid!")
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
+
+        # شروع فرآیند دانلود (این خط در کد شما جا افتاده بود!)
+        asyncio.create_task(
+            background_tt_download(context, text, chat_id, "دانلود مستقیم با لینک")
+        )
+        return
 
     # 2. گرفتن موضوع و جستجو ($10$ ویدیو)
     elif step == "waiting_tt_search":

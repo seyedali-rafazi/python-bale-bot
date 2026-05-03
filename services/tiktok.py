@@ -52,3 +52,36 @@ def download_tiktok_video(url: str):
             f"❌ [TikTok Service] Command succeeded but no file found matching: tt_{req_id}.*"
         )
         return None
+
+
+def search_tiktok_videos(query: str, max_results: int = 10):
+    """جستجو در تیک تاک بر اساس هشتگ/موضوع"""
+    url = f"https://www.tiktok.com/tag/{query.replace(' ', '')}"
+
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--print",
+        "%(title)s|||%(webpage_url)s",
+        "--playlist-end",
+        str(max_results),
+        url,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30
+        )
+        results = []
+        for line in result.stdout.splitlines():
+            if "|||" in line:
+                title, link = line.split("|||", 1)
+                results.append({"title": title[:50] + "...", "url": link})
+        return results
+    except Exception as e:
+        print(f"Error searching TikTok: {e}")
+        return []
+
+
+def get_tiktok_trends():
+    return search_tiktok_videos("fyp", 10)
