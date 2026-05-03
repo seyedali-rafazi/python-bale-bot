@@ -93,6 +93,7 @@ def get_programming_menu_keyboard():
 
 def get_tiktok_menu_keyboard():
     keyboard = [
+        [KeyboardButton(BTN_TT_EXPLORE)],
         [KeyboardButton(BTN_TT_LINK)],
         [KeyboardButton(BTN_TT_SEARCH), KeyboardButton(BTN_TT_TREND)],
         [KeyboardButton(BTN_BACK)],
