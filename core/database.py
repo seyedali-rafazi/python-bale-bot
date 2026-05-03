@@ -595,3 +595,17 @@ def get_random_tiktok_explore_videos(limit=5):
     results = [row[0] for row in cursor.fetchall()]
     conn.close()
     return results
+
+def reset_user_limits(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE users 
+        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0, tt_exp_count = 0
+        WHERE user_id = ?
+        """,
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()

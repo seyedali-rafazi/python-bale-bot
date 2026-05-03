@@ -61,6 +61,7 @@ from core.admin import (
     cmd_messageuser,
     cmd_reset_limits,
     cmd_toggle_yt,
+    cmd_resetuser,
 )
 import os
 from dotenv import load_dotenv
@@ -119,6 +120,7 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("messageuser", cmd_messageuser))
     application.add_handler(CommandHandler("resetlimits", cmd_reset_limits))
     application.add_handler(CommandHandler("limit_yt", cmd_toggle_yt))
+    application.add_handler(CommandHandler("resetuser", cmd_resetuser)) 
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))

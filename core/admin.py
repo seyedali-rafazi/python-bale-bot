@@ -2,13 +2,20 @@
 
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.database import get_total_users, set_vip, get_all_users, get_total_vip_users
+from core.database import (
+    get_total_users,
+    set_vip,
+    get_all_users,
+    get_total_vip_users,
+    reset_user_limits,
+)
 import os
 from dotenv import load_dotenv
 import asyncio
 import sqlite3
 from core.database import DB_NAME
 from core.database import get_setting, set_setting
+
 
 load_dotenv()
 # آیدی عددی ادمین را در فایل .env قرار دهید
@@ -133,3 +140,23 @@ async def cmd_toggle_yt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_text = "فعال ✅" if new_status == "1" else "غیرفعال ❌"
     await update.message.reply_text(f"وضعیت دانلودر یوتیوب: {status_text}")
+
+
+async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ فرمت اشتباه است. مثال:\n`/resetuser 123456789`"
+        )
+        return
+
+    target_user = context.args[0]
+
+    reset_user_limits(target_user)
+
+    await update.message.reply_text(
+        f"✅ محدودیت‌های کاربر $ {target_user} $ با موفقیت ریست شد."
+    )
