@@ -131,7 +131,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
 
 async def get_tiktok_trends(count: int = 10):
     """گرفتن ویدیوهای ترند"""
-    url = f"https://www.tikwm.com/api/feed/list?count={count}"
+    url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
 
     results = []
 
