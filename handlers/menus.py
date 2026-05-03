@@ -29,9 +29,10 @@ from core.database import (
     get_tt_explores,
     increment_tt_explores,
     get_random_tiktok_explore_videos,
+    get_setting,
+    get_tt_downloads,
 )
 from datetime import datetime
-from core.database import get_setting
 
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -343,11 +344,15 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     yt_count = get_yt_downloads(user_id)
     music_count = get_music_downloads(user_id)
     pinterest_count = get_pinterest_downloads(user_id)  # دریافت مصرف پینترست
+    tt_dl_count = get_tt_downloads(user_id)
+    tt_exp_count = get_tt_explores(user_id)
 
     # بررسی محدودیت‌ها
     yt_limit = "20" if is_vip == 1 else "2"
     music_limit = "20" if is_vip == 1 else "6"
-    pinterest_limit = "30" if is_vip == 1 else "2"  # محاسبه سقف پینترست
+    pinterest_limit = "30" if is_vip == 1 else "2"
+    tt_dl_limit = "15" if is_vip == 1 else "1"
+    tt_exp_limit = "10" if is_vip == 1 else "1"
 
     # ساختار متن نهایی
     profile_text = f"""
@@ -361,6 +366,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • یوتیوب | دانلود: $ {yt_count} / {yt_limit} $
 • موسیقی | دانلود: $ {music_count} / {music_limit} $
 • پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
+• تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
+• تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
 """
 
     await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")
