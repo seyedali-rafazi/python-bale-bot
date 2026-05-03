@@ -68,6 +68,7 @@ from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
 from .payment import btn_buy_vip, precheckout_callback, successful_payment_callback
 from handlers.states.state_pinterest import handle_more_pins_callback
+from handlers.states.state_youtube import youtube_destination_callback
 
 
 load_dotenv()
@@ -189,6 +190,9 @@ def register_all_handlers(application):
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_YT_LINK_MP3)}$"), btn_yt_link_mp3_req
         )
+    )
+    application.add_handler(
+        CallbackQueryHandler(youtube_destination_callback, pattern="^ytdest_")
     )
 
     #  هندلرهای منوی اینستاگرام
