@@ -87,24 +87,42 @@ async def check_membership_middleware(update, context):
     if not CHANNEL_ID:
         return
 
+    # ==========================================
+    # برای غیرفعال کردن موقتِ کل قفل کانال (تا زمان رفع اختلال سرور)،
+    # کافیست علامت # را از ابتدای خط زیر بردارید:
+    # return
+    # ==========================================
+
+    # --- بخش کش کردن (فعلاً کامنت شده است) ---
+    # last_check_time = context.user_data.get("last_membership_check", 0)
+    # current_time = time.time()
+    #
+    # if current_time - last_check_time < 86400:
+    #     return  # کاربر قبلاً تایید شده است، ادامه کار ربات
+    # -----------------------------------------
+
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
-            return  # کاربر عضو است، ادامه کار ربات
+            # --- بخش ذخیره در کش (فعلاً کامنت شده است) ---
+            # context.user_data["last_membership_check"] = time.time()
+            # ---------------------------------------------
+
+            return  # ادامه کار ربات
+
     except Exception as e:
-        # اگر خطایی رخ داد (مثلا سرور تلگرام مشکل داشت یا لیست در دسترس نبود)
-        # به جای جلوگیری از کار ربات، اجازه می‌دهیم کاربر ادامه دهد
+        # اگر خطایی رخ داد (مثلا سرور مشکل داشت)
         print(f"Membership check failed (ignored): {e}")
         return
 
-    # اگر به اینجا رسیدیم یعنی ارتبا‌ط با سرور موفق بوده اما کاربر وضعیتش عضو نیست (مثلا left کرده است)
+    # اگر کاربر عضو نبود (یا سرور به اشتباه گفت عضو نیست)
     keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
     await update.message.reply_text(
         "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
         "پس از عضویت در کانال، لطفاً دستور /start را برای ربات ارسال کنید.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    # متوقف کردن ادامه پردازش (تا ربات جواب دیگری ندهد)
+    # متوقف کردن ادامه پردازش
     raise ApplicationHandlerStop()
 
 
@@ -120,7 +138,7 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("messageuser", cmd_messageuser))
     application.add_handler(CommandHandler("resetlimits", cmd_reset_limits))
     application.add_handler(CommandHandler("limit_yt", cmd_toggle_yt))
-    application.add_handler(CommandHandler("resetuser", cmd_resetuser)) 
+    application.add_handler(CommandHandler("resetuser", cmd_resetuser))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
