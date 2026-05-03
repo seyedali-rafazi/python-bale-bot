@@ -16,7 +16,9 @@ def download_tiktok_video(url: str):
 
     cmd = [
         "yt-dlp",
-        "--force-ipv6",  # در صورت مشکل در سرور، این خط را حذف کنید
+        # "--force-ipv6", # این خط حذف شد تا مشکل دانلود حل شود
+        "--add-header",
+        "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "-f",
         "bestvideo+bestaudio/best",
         "-o",
@@ -32,7 +34,6 @@ def download_tiktok_video(url: str):
         print(f"❌ TikTok DL Error: {process.stderr}")
         return None
 
-    # پیدا کردن فایل دانلودی
     import glob
 
     files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
@@ -41,11 +42,12 @@ def download_tiktok_video(url: str):
 
 def search_tiktok_videos(query: str, max_results: int = 10):
     """جستجو در تیک تاک بر اساس هشتگ/موضوع"""
-    # از آنجایی که تیک‌تاک سرچ رسمی ندارد، هشتگ‌ها بهترین گزینه برای yt-dlp هستند.
     url = f"https://www.tiktok.com/tag/{query.replace(' ', '')}"
 
     cmd = [
         "yt-dlp",
+        "--add-header",
+        "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "--flat-playlist",
         "--print",
         "%(title)s|||%(webpage_url)s",
@@ -70,7 +72,4 @@ def search_tiktok_videos(query: str, max_results: int = 10):
 
 
 def get_tiktok_trends():
-    """گرفتن ویدیوهای ترند (شبیه‌سازی شده از طریق صفحه اصلی/explore)"""
-    # اگر yt-dlp روی ترندها بسته بود، می‌توانید اینجا API جایگزین بگذارید
-    # فعلا از هشتگ ترند fyp استفاده میکنیم که همیشه ویدیوهای ترند دارد.
     return search_tiktok_videos("fyp", 10)

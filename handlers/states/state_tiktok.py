@@ -111,7 +111,8 @@ async def handle_tiktok_state(
 
     # 1. گرفتن لینک مستقیم تیک‌تاک
     if step == "waiting_tt_link":
-        if "tiktok.com" not in text:
+        # تغییر در این خط انجام شده است
+        if "tiktok" not in text.lower():
             await update.message.reply_text(
                 "❌ لینک نامعتبر است. لطفاً یک لینک معتبر از تیک‌تاک ارسال کنید."
             )
