@@ -8,6 +8,7 @@ import aiohttp
 from dotenv import load_dotenv
 
 load_dotenv()
+
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
@@ -15,8 +16,9 @@ TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
 
 
 async def download_tiktok_video(url: str):
-    """دانلود غیرهمزمان ویدیوی تیک‌تاک"""
-    print(f"🎬 [TikTok Service] Start downloading: {url}")
+    """دانلود ویدیوی تیک‌تاک"""
+    print(f"[TikTok] Start downloading: {url}")
+
     req_id = uuid.uuid4().hex
     output_template = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.%(ext)s")
 
@@ -31,105 +33,151 @@ async def download_tiktok_video(url: str):
     ]
 
     process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
 
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
-        print(
-            f"❌ [TikTok Service] Process Failed with return code {process.returncode}"
-        )
+        print(f"[TikTok] Download failed: {stderr.decode()}")
         return None
 
     files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
-    if files:
-        return files[0]
-    else:
-        return None
+    return files[0] if files else None
 
 
 async def search_tiktok_videos(query: str, max_results: int = 10):
-    """جستجوی غیرهمزمان در تیک‌تاک با aiohttp و API tikwm"""
+    """جستجوی ویدیو در تیک‌تاک"""
     url = f"https://www.tikwm.com/api/feed/search?keywords={query}&count={max_results}"
+
     results = []
 
     async with TIKWM_API_SEMAPHORE:
         await asyncio.sleep(1)
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=15) as response:
-                    if response.status == 200:
-                        text_data = await response.text()
-                        try:
-                            data = json.loads(text_data)
-                            if (
-                                isinstance(data, dict)
-                                and data.get("code") == 0
-                                and "data" in data
-                            ):
-                                for item in data.get("data", []):
-                                    title = item.get("title", "بدون کپشن")
-                                    if not title or title.strip() == "":
-                                        title = "بدون کپشن"
-                                    title = title[:50] + (
-                                        "..." if len(title) > 50 else ""
-                                    )
+                    if response.status != 200:
+                        return results
 
-                                    video_id = item.get("video_id") or item.get("id")
+                    text_data = await response.text()
 
-                                    # بررسی نوع author
-                                    author_data = item.get("author", {})
-                                    if isinstance(author_data, dict):
-                                        author = author_data.get("unique_id", "user")
-                                    else:
-                                        # اگر author یک رشته است
-                                        author = author_data if author_data else "user"
+                    try:
+                        data = json.loads(text_data)
+                    except json.JSONDecodeError:
+                        print("[TikTok] JSON decode error")
+                        return results
 
-                                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                    if not isinstance(data, dict):
+                        return results
 
-                                    results.append({"title": title, "url": link})
+                    if data.get("code") != 0:
+                        return results
 
-                                    if len(results) >= max_results:
-                                        break
-                            else:
-                                print(
-                                    f"API returned unexpected data: {text_data[:100]}"
-                                )
-                        except json.JSONDecodeError:
-                            print(f"Failed to parse JSON. Response: {text_data[:100]}")
+                    data_block = data.get("data")
+
+                    if not isinstance(data_block, dict):
+                        return results
+
+                    videos = data_block.get("videos")
+
+                    if not isinstance(videos, list):
+                        return results
+
+                    for item in videos:
+                        if not isinstance(item, dict):
+                            continue
+
+                        title = item.get("title") or "بدون کپشن"
+                        title = title.strip()
+                        if not title:
+                            title = "بدون کپشن"
+
+                        if len(title) > 50:
+                            title = title[:50] + "..."
+
+                        video_id = item.get("video_id") or item.get("id")
+                        if not video_id:
+                            continue
+
+                        author_data = item.get("author")
+
+                        if isinstance(author_data, dict):
+                            author = (
+                                author_data.get("unique_id")
+                                or author_data.get("id")
+                                or "user"
+                            )
+                        elif isinstance(author_data, str):
+                            author = author_data
+                        else:
+                            author = "user"
+
+                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+                        results.append({"title": title, "url": link})
+
+                        if len(results) >= max_results:
+                            break
+
         except Exception as e:
-            print(f"Search API Error: {e}")
+            print(f"[TikTok] Search API Error: {e}")
 
     return results
 
 
-async def get_tiktok_trends():
-    """دریافت غیرهمزمان ترندهای تیک‌تاک با aiohttp"""
-    url = "https://www.tikwm.com/api/feed/list?region=US&count=10"
+async def get_tiktok_trends(count: int = 10):
+    """گرفتن ویدیوهای ترند"""
+    url = f"https://www.tikwm.com/api/feed/list?count={count}"
+
     results = []
 
     async with TIKWM_API_SEMAPHORE:
         await asyncio.sleep(1)
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        text_data = await response.text()
-                        try:
-                            data = json.loads(text_data)
-                            if isinstance(data, dict) and data.get("code") == 0:
-                                for item in data.get("data", []):
-                                    title = item.get("title", "بدون کپشن")[:50]
-                                    video_id = item.get("video_id") or item.get("id")
-                                    author = item.get("author", {}).get(
-                                        "unique_id", "user"
-                                    )
-                                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
-                                    results.append({"title": title, "url": link})
-                        except json.JSONDecodeError:
-                            print(f"Failed to parse JSON. Response: {text_data[:100]}")
+                async with session.get(url, timeout=15) as response:
+                    if response.status != 200:
+                        return results
+
+                    data = await response.json()
+
+                    if not isinstance(data, dict):
+                        return results
+
+                    data_block = data.get("data")
+
+                    if not isinstance(data_block, list):
+                        return results
+
+                    for item in data_block:
+                        if not isinstance(item, dict):
+                            continue
+
+                        title = item.get("title") or "Trending video"
+                        video_id = item.get("video_id")
+
+                        author_data = item.get("author")
+                        if isinstance(author_data, dict):
+                            author = author_data.get("unique_id", "user")
+                        else:
+                            author = "user"
+
+                        if not video_id:
+                            continue
+
+                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+                        results.append({"title": title, "url": link})
+
+                        if len(results) >= count:
+                            break
+
         except Exception as e:
-            print(f"Trend API Error: {e}")
+            print(f"[TikTok] Trends API Error: {e}")
 
     return results
