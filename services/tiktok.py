@@ -2,6 +2,7 @@
 import os
 import uuid
 import subprocess
+import glob
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,11 +17,8 @@ def download_tiktok_video(url: str):
 
     cmd = [
         "yt-dlp",
-        # "--force-ipv6", # این خط حذف شد تا مشکل دانلود حل شود
-        "--add-header",
-        "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "-f",
-        "bestvideo+bestaudio/best",
+        "bv*+ba/b",  # دقیقاً مشابه دستوری که در ترمینال کار کرد
         "-o",
         output_template,
         "--no-playlist",
@@ -34,8 +32,6 @@ def download_tiktok_video(url: str):
         print(f"❌ TikTok DL Error: {process.stderr}")
         return None
 
-    import glob
-
     files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
     return files[0] if files else None
 
@@ -46,8 +42,7 @@ def search_tiktok_videos(query: str, max_results: int = 10):
 
     cmd = [
         "yt-dlp",
-        "--add-header",
-        "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        # هدر از اینجا هم حذف شد
         "--flat-playlist",
         "--print",
         "%(title)s|||%(webpage_url)s",
