@@ -48,6 +48,10 @@ from .menus import (
     btn_music_artist_req,
     btn_music_playlist_req,
     btn_pinterest_req,
+    btn_tiktok_req,
+    btn_tt_link_req,
+    btn_tt_search_req,
+    btn_tt_trend_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import cmd_stats, cmd_setvip, cmd_messageuser, cmd_reset_limits
@@ -290,6 +294,22 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(handle_more_pins_callback, pattern="^more_pins$")
+    )
+
+    # هندلر های تیک تاک
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_TIKTOK)}$"), btn_tiktok_req)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_LINK)}$"), btn_tt_link_req)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_TT_SEARCH)}$"), btn_tt_search_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_TREND)}$"), btn_tt_trend_req)
     )
 
     # هندلر پشتیبانی

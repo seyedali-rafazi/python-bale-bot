@@ -18,6 +18,7 @@ from core.keyboards import (
     get_insta_menu_keyboard,
     get_translation_menu_keyboard,
     get_programming_menu_keyboard,
+    get_tiktok_menu_keyboard,
 )
 from core.database import (
     get_user_info,
@@ -447,3 +448,44 @@ async def btn_pinterest_req(update, context):
 
 
 #  پینترست end
+
+#  تیک تاک start
+
+
+async def btn_tiktok_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎵 به بخش تیک‌تاک خوش آمدید. لطفاً یک گزینه را انتخاب کنید:",
+        reply_markup=get_tiktok_menu_keyboard(),
+    )
+
+
+async def btn_tt_link_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_tt_link")
+    await update.message.reply_text(
+        "🔗 لطفاً لینک ویدیوی تیک‌تاک (یا یوزر لینک) را بفرستید:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+async def btn_tt_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_tt_search")
+    await update.message.reply_text(
+        "🔍 لطفاً کلمه کلیدی یا موضوع مورد نظر خود را برای جستجو بفرستید:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
+
+
+async def btn_tt_trend_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # مستقیم به تابع پردازش ترند ارجاع می‌دهیم
+    from handlers.states.state_tiktok import process_tiktok_trends
+
+    await process_tiktok_trends(update, context)
+
+
+#  تیک تاک end

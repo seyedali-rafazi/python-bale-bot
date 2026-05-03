@@ -13,6 +13,7 @@ from .state_telegram import handle_telegram_state
 from .state_translation import handle_translation_state
 from .state_weather import handle_weather_state
 from .state_pinterest import handle_pinterest_state
+from .state_tiktok import handle_tiktok_state
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -65,6 +66,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step.startswith("waiting_pinterest"):
         await handle_pinterest_state(update, context, text, chat_id)
+
+    elif step.startswith("waiting_tt"):
+        await handle_tiktok_state(update, context, step, text, chat_id, state_data)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -7,6 +7,7 @@ from .constants import *
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROFILE), KeyboardButton(BTN_BUY_VIP)],
+        [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_DL_YOUTUBE)],
         [
             KeyboardButton(BTN_DL_INSTA),
@@ -85,6 +86,15 @@ def get_programming_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROG_CHROME), KeyboardButton(BTN_PROG_FIREFOX)],
         [KeyboardButton(BTN_PROG_VSCODE)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_tiktok_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_TT_LINK)],
+        [KeyboardButton(BTN_TT_SEARCH), KeyboardButton(BTN_TT_TREND)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
