@@ -31,6 +31,7 @@ from core.database import (
     get_random_tiktok_explore_videos,
     get_setting,
     get_tt_downloads,
+    delete_invalid_video_from_db,
 )
 from datetime import datetime
 
@@ -513,16 +514,40 @@ async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    videos = get_random_tiktok_explore_videos(5)
+    # دریافت تعداد بیشتری ویدیو (مثلا ۲۰ تا) به جای ۵ تا
+    videos = get_random_tiktok_explore_videos(20)
     if not videos:
         await update.message.reply_text("❌ هنوز ویدیویی در اکسپلور ذخیره نشده است.")
         return
 
-    increment_tt_explores(user_id)
     await update.message.reply_text("🌍 در حال ارسال ویدیوهای اکسپلور...")
 
+    sent_count = 0
+
     for vid in videos:
-        await context.bot.send_video(chat_id=chat_id, video=vid)
+        # اگر ۵ ویدیو سالم ارسال شد، حلقه را متوقف کن
+        if sent_count >= 5:
+            break
+
+        try:
+            # تلاش برای ارسال ویدیو
+            await context.bot.send_video(chat_id=chat_id, video=vid)
+            sent_count += 1
+
+        except Exception as e:
+            # اگر ارسال خطا داد، یعنی file_id منقضی شده است
+            print(f"Error sending video {vid}: {e}")
+
+            # ⚠️ مهم: تابعی بنویسید که این file_id را از دیتابیس شما پاک کند
+            delete_invalid_video_from_db(vid)
+
+    # اگر حداقل یک ویدیو با موفقیت ارسال شد، سهمیه کاربر را ثبت کن
+    if sent_count > 0:
+        increment_tt_explores(user_id)
+    else:
+        await update.message.reply_text(
+            "❌ متاسفانه ویدیوهای موجود منقضی شده‌اند. در حال پاکسازی دیتابیس..."
+        )
 
 
 #  تیک تاک end

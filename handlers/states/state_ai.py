@@ -1,14 +1,11 @@
 # handlers/states/state_ai.py
 
-import os
 import asyncio
-import uuid
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from services.ai import ask_chatbot, generate_image, perform_ocr, text_to_speech
 
-# محدودکننده‌های ترافیک برای جلوگیری از مسدود شدن APIها
 ai_text_semaphore = asyncio.Semaphore(15)
 ai_media_semaphore = asyncio.Semaphore(5)
 
@@ -25,24 +22,19 @@ async def handle_ai_state(
         if step == "waiting_ai_chat":
             msg = await update.message.reply_text("⏳ در حال پردازش...")
             async with ai_text_semaphore:
-                answer = await asyncio.to_thread(ask_chatbot, text)
-            # ویرایش پیام قبلی به جای ارسال پیام جدید برای خلوت ماندن چت
+                # فراخوانی مستقیم تابع Async
+                answer = await ask_chatbot(text)
             await msg.edit_text(answer)
 
         elif step == "waiting_ai_tts":
             msg = await update.message.reply_text("⏳ در حال تبدیل متن به صدا...")
-            unique_id = uuid.uuid4().hex
             async with ai_media_semaphore:
-                file_path = await asyncio.to_thread(text_to_speech, text, unique_id)
+                audio_fp = await text_to_speech(text)
 
-            if file_path and os.path.exists(file_path):
-                try:
-                    with open(file_path, "rb") as aud:
-                        await context.bot.send_audio(chat_id=chat_id, audio=aud)
-                    await msg.delete()
-                finally:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+            if audio_fp:
+                # ارسال مستقیم از حافظه رم
+                await context.bot.send_audio(chat_id=chat_id, audio=audio_fp)
+                await msg.delete()
             else:
                 await msg.edit_text("❌ خطا در تولید صدا.")
 
@@ -50,18 +42,12 @@ async def handle_ai_state(
             msg = await update.message.reply_text(
                 "⏳ در حال تولید عکس (ممکن است طول بکشد)..."
             )
-            unique_id = uuid.uuid4().hex
             async with ai_media_semaphore:
-                file_path = await asyncio.to_thread(generate_image, text, unique_id)
+                img_fp = await generate_image(text)
 
-            if file_path and os.path.exists(file_path):
-                try:
-                    with open(file_path, "rb") as img:
-                        await context.bot.send_photo(chat_id=chat_id, photo=img)
-                    await msg.delete()
-                finally:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+            if img_fp:
+                await context.bot.send_photo(chat_id=chat_id, photo=img_fp)
+                await msg.delete()
             else:
                 await msg.edit_text(
                     "❌ خطا در تولید عکس. لطفاً متن دیگری را امتحان کنید."
@@ -71,15 +57,13 @@ async def handle_ai_state(
         print(f"AI State Error: {e}")
         await update.message.reply_text("❌ خطای سیستمی در پردازش درخواست شما رخ داد.")
     finally:
-        # بسیار مهم: همیشه وضعیت کاربر را در نهایت پاک کنید
         set_state(chat_id, "")
 
 
 async def handle_ai_photo(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: str
 ):
-    msg = await update.message.reply_text("⏳ در حال دانلود و پردازش عکس...")
-    file_path = None
+    msg = await update.message.reply_text("⏳ در حال دریافت و پردازش عکس...")
     try:
         if update.message.photo:
             file_id = update.message.photo[-1].file_id
@@ -89,14 +73,13 @@ async def handle_ai_photo(
             await msg.edit_text("❌ فرمت فایل پشتیبانی نمی‌شود.")
             return
 
-        unique_id = uuid.uuid4().hex
-        file_path = f"temp_ocr_{unique_id}.jpg"
-
+        # دانلود فایل به صورت آرایه بایت در رم (بدون دخالت هارد دیسک)
         file = await context.bot.get_file(file_id)
-        await file.download_to_drive(file_path)
+        image_byte_array = await file.download_as_bytearray()
+        image_bytes = bytes(image_byte_array)
 
         async with ai_media_semaphore:
-            extracted_text = await asyncio.to_thread(perform_ocr, file_path)
+            extracted_text = await perform_ocr(image_bytes)
 
         await msg.edit_text(
             f"✅ **متن استخراج شده:**\n\n{extracted_text}", parse_mode="Markdown"
@@ -106,6 +89,4 @@ async def handle_ai_photo(
         print(f"OCR Handler Error: {e}")
         await msg.edit_text(f"❌ خطایی در پردازش عکس رخ داد.")
     finally:
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
         set_state(chat_id, "")

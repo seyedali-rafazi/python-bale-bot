@@ -596,6 +596,18 @@ def get_random_tiktok_explore_videos(limit=5):
     conn.close()
     return results
 
+
+def delete_invalid_video_from_db(file_id: str):
+    """
+    حذف ویدیوهای منقضی شده یا نامعتبر از دیتابیس اکسپلور تیک‌تاک
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tiktok_explore WHERE file_id = ?", (file_id,))
+    conn.commit()
+    conn.close()
+
+
 def reset_user_limits(user_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -605,7 +617,7 @@ def reset_user_limits(user_id):
         SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0, tt_exp_count = 0
         WHERE user_id = ?
         """,
-        (user_id,)
+        (user_id,),
     )
     conn.commit()
     conn.close()

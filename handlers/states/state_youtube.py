@@ -90,6 +90,7 @@ async def background_yt_download(
                         await context.bot.send_video(chat_id=chat_id, video=file_id)
                     else:
                         await context.bot.send_audio(chat_id=chat_id, audio=file_id)
+                    await asyncio.sleep(1)  # وقفه کوتاه بین ارسال پارت‌ها از کش
                 except Exception as e:
                     error_msg = f"❌ Error sending cached file {file_id}: {e}"
                     print(error_msg)
@@ -123,7 +124,6 @@ async def background_yt_download(
         )
 
     try:
-        # تغییر مهم: استفاده از active_semaphore به جای download_semaphore قبلی
         async with active_semaphore:
             progress_dict = {"text": "شروع پردازش...", "is_finished": False}
 
@@ -169,7 +169,6 @@ async def background_yt_download(
                                 text="⏳ در حال آماده‌سازی ویدیو...",
                             )
 
-                            # اگر آپلود تلگرام باشد، فایل را برش می‌زنیم. برای سرور نیازی به برش نیست.
                             if destination == "telegram":
                                 result = await split_video_if_needed(raw_file)
                             else:
@@ -230,24 +229,37 @@ async def background_yt_download(
                                         )
 
                                     max_retries = 3
+                                    current_file_id = None  # جلوگیری از آپلود مجدد
+
                                     for attempt in range(max_retries):
                                         try:
-                                            with open(file_path, "rb") as vid:
-                                                channel_msg = await context.bot.send_video(
-                                                    chat_id=STORAGE_CHANNEL_ID,
-                                                    video=vid,
-                                                    caption=f"Video ID: {video_id} | Part {idx}/{len(result)}",
-                                                    read_timeout=300,
-                                                    write_timeout=300,
-                                                    connect_timeout=60,
-                                                )
-                                                file_id = channel_msg.video.file_id
-                                                uploaded_file_ids.append(file_id)
+                                            # مرحله ۱: آپلود در کانال (اگر قبلا آپلود نشده باشد)
+                                            if not current_file_id:
+                                                with open(file_path, "rb") as vid:
+                                                    channel_msg = await context.bot.send_video(
+                                                        chat_id=STORAGE_CHANNEL_ID,
+                                                        video=vid,
+                                                        caption=f"Video ID: {video_id} | Part {idx}/{len(result)}",
+                                                        read_timeout=300,
+                                                        write_timeout=300,
+                                                        connect_timeout=60,
+                                                    )
+                                                    current_file_id = (
+                                                        channel_msg.video.file_id
+                                                    )
 
-                                                await context.bot.send_video(
-                                                    chat_id=chat_id, video=file_id
-                                                )
+                                            # مرحله ۲: ارسال به کاربر با استفاده از file_id
+                                            await context.bot.send_video(
+                                                chat_id=chat_id, video=current_file_id
+                                            )
+
+                                            # ثبت نهایی در لیست
+                                            uploaded_file_ids.append(current_file_id)
+                                            await asyncio.sleep(
+                                                2
+                                            )  # وقفه برای حفظ ترتیب
                                             break
+
                                         except Exception as e:
                                             if attempt < max_retries - 1:
                                                 warn_msg = f"⚠️ Error sending part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
@@ -316,24 +328,34 @@ async def background_yt_download(
                                         )
 
                                     max_retries = 3
+                                    current_file_id = None  # جلوگیری از آپلود مجدد
+
                                     for attempt in range(max_retries):
                                         try:
-                                            with open(file_path, "rb") as vid:
-                                                channel_msg = await context.bot.send_video(
-                                                    chat_id=STORAGE_CHANNEL_ID,
-                                                    video=vid,
-                                                    caption=f"Video ID: {video_id} (Backup) | Part {idx}/{len(result)}",
-                                                    read_timeout=300,
-                                                    write_timeout=300,
-                                                    connect_timeout=60,
-                                                )
-                                                file_id = channel_msg.video.file_id
-                                                uploaded_file_ids.append(file_id)
+                                            if not current_file_id:
+                                                with open(file_path, "rb") as vid:
+                                                    channel_msg = await context.bot.send_video(
+                                                        chat_id=STORAGE_CHANNEL_ID,
+                                                        video=vid,
+                                                        caption=f"Video ID: {video_id} (Backup) | Part {idx}/{len(result)}",
+                                                        read_timeout=300,
+                                                        write_timeout=300,
+                                                        connect_timeout=60,
+                                                    )
+                                                    current_file_id = (
+                                                        channel_msg.video.file_id
+                                                    )
 
-                                                await context.bot.send_video(
-                                                    chat_id=chat_id, video=file_id
-                                                )
+                                            await context.bot.send_video(
+                                                chat_id=chat_id, video=current_file_id
+                                            )
+
+                                            uploaded_file_ids.append(current_file_id)
+                                            await asyncio.sleep(
+                                                2
+                                            )  # وقفه برای حفظ ترتیب
                                             break
+
                                         except Exception as e:
                                             if attempt < max_retries - 1:
                                                 warn_msg = f"⚠️ Error sending backup part {idx}, retrying ({attempt + 1}/{max_retries})... Error: {e}"
