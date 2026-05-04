@@ -264,7 +264,8 @@ async def split_video_if_needed(original_file_path):
                 new_parts = sorted(
                     glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
                 )
-                files_to_process.extend(new_parts)
+                # اصلاح اول: اضافه کردن پارت‌های جدید به ابتدای صف
+                files_to_process = new_parts + files_to_process
 
                 if current_file != original_file_path and os.path.exists(current_file):
                     os.remove(current_file)
@@ -280,7 +281,8 @@ async def split_video_if_needed(original_file_path):
     ):
         os.remove(original_file_path)
 
-    return sorted(final_valid_parts)
+    # اصلاح دوم: حذف sorted برای حفظ ترتیب زمانی
+    return final_valid_parts
 
 
 def download_youtube_video(url, progress_dict=None):
