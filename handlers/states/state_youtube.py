@@ -228,7 +228,7 @@ async def background_yt_download(
                                             text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                         )
 
-                                    max_retries = 3
+                                    max_retries = 1
                                     current_file_id = None  # جلوگیری از آپلود مجدد
 
                                     for attempt in range(max_retries):
@@ -240,8 +240,8 @@ async def background_yt_download(
                                                         chat_id=STORAGE_CHANNEL_ID,
                                                         video=vid,
                                                         caption=f"Video ID: {video_id} | Part {idx}/{len(result)}",
-                                                        read_timeout=1200,
-                                                        write_timeout=1200,
+                                                        read_timeout=2000,
+                                                        write_timeout=2000,
                                                         connect_timeout=100,
                                                     )
                                                     current_file_id = (
@@ -327,7 +327,7 @@ async def background_yt_download(
                                             text=f"📤 ارسال پارت {idx} از {len(result)}...",
                                         )
 
-                                    max_retries = 3
+                                    max_retries = 1
                                     current_file_id = None  # جلوگیری از آپلود مجدد
 
                                     for attempt in range(max_retries):
@@ -338,8 +338,8 @@ async def background_yt_download(
                                                         chat_id=STORAGE_CHANNEL_ID,
                                                         video=vid,
                                                         caption=f"Video ID: {video_id} (Backup) | Part {idx}/{len(result)}",
-                                                        read_timeout=1200,
-                                                        write_timeout=1200,
+                                                        read_timeout=2000,
+                                                        write_timeout=2000,
                                                         connect_timeout=100,
                                                     )
                                                     current_file_id = (
