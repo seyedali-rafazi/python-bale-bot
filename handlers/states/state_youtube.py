@@ -30,6 +30,9 @@ from services.youtube import (
     split_video_if_needed,
 )
 from services.telegram_backup import download_from_telegram_bot
+from core.keyboards import get_main_menu_keyboard
+from core.state_manager import clear_state
+
 
 # ایمپورت سرویس S3 پارس‌پک (باید فایل آن را ساخته باشید)
 try:
@@ -667,7 +670,6 @@ async def youtube_destination_callback(
     if data not in ["ytdest_telegram", "ytdest_server"]:
         return
 
-    # دریافت وضعیت کاربر تا بفهمیم چه لینکی و چه فرمتی را می‌خواست
     user_state = get_state(chat_id)
     if not user_state or user_state.get("step") != "waiting_yt_destination":
         await query.edit_message_text(
@@ -678,24 +680,30 @@ async def youtube_destination_callback(
     url = user_state.get("yt_url")
     format_type = user_state.get("format")
 
-    # بررسی دسترسی پرو برای آپلود سرور
     if data == "ytdest_server":
         if not is_vip(chat_id):
             await query.edit_message_text(
-                "❌ این قابلیت فقط مخصوص کاربران ویژه (Pro ⭐️) می‌باشد.\nبرای استفاده از این قابلیت حساب خود را ارتقا دهید."
+                "❌ این قابلیت فقط مخصوص کاربران ویژه (Pro ⭐️) می‌باشد."
             )
             return
         destination = "server"
     else:
         destination = "telegram"
 
+    # ✅ حذف دکمه‌های شیشه‌ای
     await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
 
-    # کسر سهمیه و شروع دانلود
-    increment_yt_downloads(chat_id)
+    # ✅ پاک کردن state
 
-    # استیت کاربر را آزاد می‌کنیم یا به حالت اولیه برمی‌گردانیم
-    set_state(chat_id, "normal")
+    clear_state(chat_id)
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="🔙 بازگشت به منوی اصلی",
+        reply_markup=get_main_menu_keyboard(),
+    )
+
+    increment_yt_downloads(chat_id)
 
     asyncio.create_task(
         background_yt_download(context, url, chat_id, format_type, destination)
