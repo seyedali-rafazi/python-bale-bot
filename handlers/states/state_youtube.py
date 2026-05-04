@@ -240,9 +240,9 @@ async def background_yt_download(
                                                         chat_id=STORAGE_CHANNEL_ID,
                                                         video=vid,
                                                         caption=f"Video ID: {video_id} | Part {idx}/{len(result)}",
-                                                        read_timeout=300,
-                                                        write_timeout=300,
-                                                        connect_timeout=60,
+                                                        read_timeout=1200,
+                                                        write_timeout=1200,
+                                                        connect_timeout=100,
                                                     )
                                                     current_file_id = (
                                                         channel_msg.video.file_id
@@ -338,9 +338,9 @@ async def background_yt_download(
                                                         chat_id=STORAGE_CHANNEL_ID,
                                                         video=vid,
                                                         caption=f"Video ID: {video_id} (Backup) | Part {idx}/{len(result)}",
-                                                        read_timeout=300,
-                                                        write_timeout=300,
-                                                        connect_timeout=60,
+                                                        read_timeout=1200,
+                                                        write_timeout=1200,
+                                                        connect_timeout=100,
                                                     )
                                                     current_file_id = (
                                                         channel_msg.video.file_id
