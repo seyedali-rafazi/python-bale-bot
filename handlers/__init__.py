@@ -41,6 +41,9 @@ from .menus import (
     btn_prog_chrome_req,
     btn_prog_firefox_req,
     btn_prog_vscode_req,
+    btn_prog_github_menu,
+    btn_gh_dl_req,
+    btn_gh_user_req,
     btn_profile_req,
     btn_music_menu,
     btn_music_track_req,
@@ -75,6 +78,7 @@ from .payment import (
 )
 from handlers.states.state_pinterest import handle_more_pins_callback
 from handlers.states.state_youtube import youtube_destination_callback
+from handlers.states.state_github import github_callback_handler
 
 
 load_dotenv()
@@ -278,6 +282,18 @@ def register_all_handlers(application):
         )
     )
 
+    # --- کدهای جدید گیت‌هاب ---
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_PROG_GITHUB)}$"), btn_prog_github_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_GH_DL_REPO)}$"), btn_gh_dl_req)
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_GH_USER)}$"), btn_gh_user_req)
+    )
     # ثبت کال‌بک دکمه‌های شیشه‌ای (جستجوی کروم)
     application.add_handler(
         CallbackQueryHandler(handle_chrome_callback, pattern=r"^dlchrome_")

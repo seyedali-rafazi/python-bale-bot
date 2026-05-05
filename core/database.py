@@ -61,6 +61,12 @@ def init_db():
     if "tt_exp_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN tt_exp_date TEXT")
 
+    # --- ستون‌های جدید برای گیتهاب ---
+    if "gh_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN gh_count INTEGER DEFAULT 0")
+    if "gh_date" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN gh_date TEXT")
+
     # جدول جدید برای ذخیره ویدیوهای اکسپلور تیک‌تاک
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tiktok_explore (
@@ -604,6 +610,37 @@ def delete_invalid_video_from_db(file_id: str):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM tiktok_explore WHERE file_id = ?", (file_id,))
+    conn.commit()
+    conn.close()
+
+
+# توابع گیتهاب
+def get_gh_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute("SELECT gh_count, gh_date FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        count, db_date = result
+        return count if db_date == today else 0
+    return 0
+
+
+def increment_gh_downloads(user_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    today = get_tehran_today()
+    cursor.execute("SELECT gh_count, gh_date FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    if result:
+        count, db_date = result
+        new_count = 1 if db_date != today else count + 1
+        cursor.execute(
+            "UPDATE users SET gh_count = ?, gh_date = ? WHERE user_id = ?",
+            (new_count, today, user_id),
+        )
     conn.commit()
     conn.close()
 

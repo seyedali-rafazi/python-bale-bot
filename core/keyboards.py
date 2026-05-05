@@ -84,6 +84,7 @@ def get_translation_menu_keyboard():
 
 def get_programming_menu_keyboard():
     keyboard = [
+        [KeyboardButton(BTN_PROG_GITHUB)],
         [KeyboardButton(BTN_PROG_CHROME), KeyboardButton(BTN_PROG_FIREFOX)],
         [KeyboardButton(BTN_PROG_VSCODE)],
         [KeyboardButton(BTN_BACK)],
@@ -99,3 +100,13 @@ def get_tiktok_menu_keyboard():
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_github_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_GH_DL_REPO)],
+        [KeyboardButton(BTN_GH_SEARCH), KeyboardButton(BTN_GH_USER)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
