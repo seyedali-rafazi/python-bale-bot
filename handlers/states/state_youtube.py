@@ -439,14 +439,6 @@ async def background_yt_download(
                             decrement_yt_downloads(chat_id)
                             return
 
-                        if destination == "server":
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"❌ پردازش ویدیو برای سرور ابری با خطا مواجه شد.\n{send_err}",
-                            )
-                            decrement_yt_downloads(chat_id)
-                            return
-
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="⚠️ دانلود مستقیم با مشکل مواجه شد. در حال تلاش از طریق سرور بکاپ ... ⏳",
@@ -461,16 +453,37 @@ async def background_yt_download(
                                     text="⏳ فایل از سرور بکاپ دریافت شد، در حال آماده‌سازی...",
                                 )
 
-                                result = await split_video_if_needed(backup_file)
-                                downloaded_files.extend(result)
+                                if destination == "server":
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text="☁️ در حال آپلود ویدیوی بکاپ در فضای ابری ...",
+                                    )
+                                    s3_url = await asyncio.to_thread(
+                                        upload_to_s3, backup_file
+                                    )
+                                    if s3_url:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=f"✅ فایل شما با موفقیت در سرور ابری ذخیره شد:\n\n🔗 [لینک دانلود فایل]({s3_url})",
+                                            parse_mode="Markdown",
+                                        )
+                                    else:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text="❌ خطا در آپلود به سرور ابری.",
+                                        )
+                                        decrement_yt_downloads(chat_id)
+                                else:
+                                    result = await split_video_if_needed(backup_file)
+                                    downloaded_files.extend(result)
 
-                                await process_and_send_backup_video_parts(
-                                    context=context,
-                                    chat_id=chat_id,
-                                    result_files=result,
-                                    video_id=video_id,
-                                    cache_key=cache_key,
-                                )
+                                    await process_and_send_backup_video_parts(
+                                        context=context,
+                                        chat_id=chat_id,
+                                        result_files=result,
+                                        video_id=video_id,
+                                        cache_key=cache_key,
+                                    )
                             else:
                                 await context.bot.send_message(
                                     chat_id=chat_id,
