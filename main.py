@@ -40,11 +40,10 @@ async def cleanup_old_downloads(context: ContextTypes.DEFAULT_TYPE):
                         pass
 
 
-def main():
+async def main_async():
     # ساخت جداول دیتابیس در هنگام استارت شدن بات
     init_db()
 
-    # ساخت اپلیکیشن با پشتیبانی از job_queue
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)
@@ -53,17 +52,25 @@ def main():
         .build()
     )
 
-    # افزودن تسک پاکسازی پوشه (هر ۷۲۰۰ ثانیه یک بار اجرا می‌شود، اولین اجرا ۱۰ ثانیه بعد از استارت)
+    # پاک کردن آپدیت‌های قدیمی قبل از شروع polling
+    await application.bot.delete_webhook(drop_pending_updates=True)
+
+    # job_queue
     if application.job_queue:
         application.job_queue.run_repeating(
             cleanup_old_downloads, interval=7200, first=10
         )
 
-    # ثبت تمام هندلرها از پوشه handlers
     register_all_handlers(application)
 
     print("✅ ربات با معماری جدید با موفقیت راه‌اندازی شد...")
-    application.run_polling()
+    await application.run_polling()
+
+
+def main():
+    import asyncio
+
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
