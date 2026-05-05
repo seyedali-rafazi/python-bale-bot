@@ -23,6 +23,7 @@ from core.database import (
     decrement_yt_downloads,
     get_cached_video,
     save_cached_video,
+    increment_yt_video_view,
 )
 
 from services.youtube import (
@@ -310,6 +311,9 @@ async def background_yt_download(
         cached_files = get_cached_video(cache_key)
         if cached_files:
             await send_cached_files(context, chat_id, cached_files, format_type)
+            increment_yt_video_view(
+                cache_key
+            )  # <--- ثبت بازدید فقط برای استفاده مجدد از کش
             return
 
     user_is_vip = is_vip(chat_id)

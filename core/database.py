@@ -67,7 +67,7 @@ def init_db():
     if "gh_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN gh_date TEXT")
 
-        # جدول کش کردن ویدیوهای یوتیوب
+    # جدول کش کردن ویدیوهای یوتیوب
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (
             video_id TEXT PRIMARY KEY,
