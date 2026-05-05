@@ -7,6 +7,45 @@ from core.state_manager import clear_state
 import uuid
 import os
 
+# ==================== سیستم صف ====================
+download_queue = asyncio.Queue()
+worker_started = False
+
+
+async def download_worker():
+    """ورکری که درخواست‌های درون صف را یکی‌یکی پردازش می‌کند"""
+    while True:
+        func, args = await download_queue.get()
+        try:
+            await func(*args)
+        except Exception as e:
+            print(f"Queue Worker Error: {e}")
+        finally:
+            download_queue.task_done()
+
+
+async def enqueue_download(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
+):
+    """اضافه کردن درخواست به صف"""
+    global worker_started
+    if not worker_started:
+        asyncio.create_task(download_worker())
+        worker_started = True
+
+    position = download_queue.qsize()
+    await context.bot.send_message(
+        chat_id, f"⏳ درخواست شما در صف قرار گرفت. (نفرات قبل از شما: ${position}$)"
+    )
+
+    # ارسال به صف
+    await download_queue.put(
+        (process_github_download, (update, context, chat_id, repo_path, user_id))
+    )
+
+
+# ==================================================
+
 
 async def handle_github_state(
     update: Update,
@@ -19,7 +58,7 @@ async def handle_github_state(
 
     user_id = update.effective_user.id
     vip_status = is_vip(str(user_id))
-    max_dl = 10 if vip_status else 4
+    max_dl = 20 if vip_status else 4
 
     if get_gh_downloads(str(user_id)) >= max_dl:
         await update.message.reply_text(
@@ -29,12 +68,11 @@ async def handle_github_state(
         return
 
     if step == "waiting_gh_dl":
-        # فرمت ورودی باید username/repo باشد
         repo_path = text.replace("https://github.com/", "").strip()
-        await process_github_download(update, context, chat_id, repo_path, str(user_id))
+        # به جای پردازش مستقیم، به صف اضافه می‌کنیم
+        await enqueue_download(update, context, chat_id, repo_path, str(user_id))
 
     elif step == "waiting_gh_user":
-        # دریافت ریپوهای یک کاربر
         await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -98,18 +136,15 @@ async def process_github_download(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
     await context.bot.send_message(
-        chat_id, "⏳ در حال آماده‌سازی فایل و گرفتن اسکرین‌شات..."
+        chat_id, "⏳ نوبت شما رسید! در حال آماده‌سازی فایل..."
     )
 
-    # استفاده از لینک دانلود مستقیم وب به جای API برای جلوگیری از دریافت فایل‌های ناقص و خطای 403
     zip_url = f"https://github.com/{repo_path}/archive/HEAD.zip"
     screenshot_url = (
-        f"https://image.thum.io/get/fullpage/https://github.com/{repo_path}"
+        f"https://image.thum.io/get/width/1080/crop/800/https://github.com/{repo_path}"
     )
 
     file_name = f"{repo_path.replace('/', '_')}.zip"
-    import uuid, os
-
     temp_path = f"temp_{uuid.uuid4().hex}_{file_name}"
 
     headers = {
@@ -117,61 +152,65 @@ async def process_github_download(
     }
 
     try:
-        import aiohttp
-
         async with aiohttp.ClientSession() as session:
-            # ارسال اسکرین شات
             try:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=screenshot_url,
-                    caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
+                await asyncio.wait_for(
+                    context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=screenshot_url,
+                        caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
+                    ),
+                    timeout=5.0,
                 )
-            except:
+            except Exception:
                 pass
 
-            # دانلود ریپو
             async with session.get(
                 zip_url, headers=headers, allow_redirects=True
             ) as resp:
                 if resp.status == 200:
+                    downloaded_size = 0
+                    is_oversized = False
+                    max_bytes = 20 * 1024 * 1024  # محدودیت 20 مگابایت
+
                     with open(temp_path, "wb") as f:
-                        f.write(await resp.read())
+                        # دانلود تکه‌تکه برای کنترل حجم در حین دانلود
+                        async for chunk in resp.content.iter_chunked(1024 * 1024):
+                            downloaded_size += len(chunk)
+                            if downloaded_size > max_bytes:
+                                is_oversized = True
+                                break
+                            f.write(chunk)
 
-                    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
-
-                    # اگر فایل خیلی کوچک باشد (کمتر از 1 کیلوبایت)، احتمالاً فایل معتبری نیست
-                    if file_size_mb < 0.001:
+                    if is_oversized:
                         await context.bot.send_message(
                             chat_id,
-                            "❌ فایل دریافتی از گیت‌هاب نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
-                        )
-                    elif file_size_mb > 49.5:
-                        await context.bot.send_message(
-                            chat_id,
-                            f"❌ حجم این ریپازیتوری ({file_size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام است.",
+                            "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۲۰ مگابایت است).",
                         )
                     else:
-                        await context.bot.send_document(
-                            chat_id=chat_id, document=temp_path, filename=file_name
-                        )
-                        # فراخوانی تابع افزایش تعداد دانلود کاربر
-                        # increment_gh_downloads(user_id)
+                        file_size_mb = downloaded_size / (1024 * 1024)
+                        if file_size_mb < 0.001:
+                            await context.bot.send_message(
+                                chat_id,
+                                "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
+                            )
+                        else:
+                            await context.bot.send_document(
+                                chat_id=chat_id, document=temp_path, filename=file_name
+                            )
+                            increment_gh_downloads(user_id)
                 else:
                     await context.bot.send_message(
                         chat_id,
                         f"❌ خطایی در دریافت فایل رخ داد. (کد خطا: {resp.status})",
                     )
     except Exception as e:
-        await context.bot.send_message(
-            chat_id, "❌ خطا در پردازش یا آپلود فایل در تلگرام."
-        )
+        await context.bot.send_message(chat_id, "❌ خطا در پردازش یا آپلود فایل.")
         print(f"GitHub Error: {e}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        # فراخوانی تابع پاکسازی وضعیت کاربر
-        # clear_state(chat_id)
+        clear_state(chat_id)
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,11 +223,13 @@ async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     if data.startswith("ghdl_"):
         repo_path = data.split("ghdl_")[1]
         vip_status = is_vip(user_id)
-        max_dl = 10 if vip_status else 4
+        max_dl = 20 if vip_status else 4
+
         if get_gh_downloads(user_id) >= max_dl:
             await query.message.reply_text(
                 "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
             )
             return
 
-        await process_github_download(query, context, chat_id, repo_path, user_id)
+        # به جای پردازش مستقیم، به صف اضافه می‌کنیم
+        await enqueue_download(update, context, chat_id, repo_path, user_id)
