@@ -61,13 +61,45 @@ async def handle_github_state(
                 else:
                     await update.message.reply_text("❌ کاربر یافت نشد.")
 
+    elif step == "waiting_gh_search":
+        await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api.github.com/search/repositories?q={text}&per_page=10"
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    repos = data.get("items", [])
+                    if not repos:
+                        await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
+                        return
+
+                    msg = f"🔍 ۱۰ نتیجه برتر برای «{text}»:\n\n"
+                    keyboard = []
+                    for i, repo in enumerate(repos):
+                        msg += f"{i + 1}. {repo['full_name']} (⭐ {repo['stargazers_count']})\n"
+                        keyboard.append(
+                            [
+                                InlineKeyboardButton(
+                                    f"📥 دانلود {repo['name']}",
+                                    callback_data=f"ghdl_{repo['full_name']}",
+                                )
+                            ]
+                        )
+
+                    await update.message.reply_text(
+                        msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                    await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
+
 
 async def process_github_download(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
     await update.message.reply_text("⏳ در حال آماده‌سازی فایل و گرفتن اسکرین‌شات...")
 
-    zip_url = f"https://github.com/{repo_path}/archive/refs/heads/main.zip"
+    zip_url = f"https://api.github.com/repos/{repo_path}/zipball"
     screenshot_url = f"https://image.thum.io/get/fullpage/https://github.com/{repo_path}"  # API رایگان اسکرین‌شات (میتوانید تغییر دهید)
 
     file_name = f"{repo_path.replace('/', '_')}.zip"

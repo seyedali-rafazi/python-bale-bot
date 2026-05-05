@@ -44,6 +44,7 @@ from .menus import (
     btn_prog_github_menu,
     btn_gh_dl_req,
     btn_gh_user_req,
+    btn_gh_search_req,
     btn_profile_req,
     btn_music_menu,
     btn_music_track_req,
@@ -370,6 +371,14 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_TT_EXPLORE)}$"), btn_tt_explore_req
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(github_callback_handler, pattern=r"^ghdl_")
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_GH_SEARCH)}$"), btn_gh_search_req
         )
     )
     # هندلر پشتیبانی

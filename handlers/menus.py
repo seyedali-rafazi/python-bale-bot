@@ -577,4 +577,13 @@ async def btn_gh_user_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👤 نام کاربری گیت‌هاب را ارسال کنید:")
 
 
+async def btn_gh_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from core.state_manager import set_state
+
+    set_state(str(update.effective_chat.id), "waiting_gh_search")
+    await update.message.reply_text(
+        "🔍 کلمه یا نام پروژه‌ای که می‌خواهید در گیت‌هاب جستجو کنید را وارد کنید:"
+    )
+
+
 #  گیتهاب end
