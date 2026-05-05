@@ -79,7 +79,7 @@ def _cookie_args():
 def _base_ytdlp_cmd():
     cmd = [
         "yt-dlp",
-        "--force-ipv4",
+        "--force-ipv6",
         "--js-runtimes",
         "node",
         "--remote-components",
@@ -322,7 +322,7 @@ def download_youtube_video(url, progress_dict=None):
     cmd.extend(
         [
             "-f",
-            "18/best[height<=720][ext=mp4]/best[height<=480][ext=mp4]/best[height<=360][ext=mp4]/best",
+            "best[height<=480][ext=mp4]/best[height<=480]/best",
             "--max-filesize",
             str(MAX_DOWNLOAD_SIZE),
             "-o",

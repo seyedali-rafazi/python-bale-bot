@@ -60,7 +60,6 @@ def get_telegram_menu_keyboard():
 
 def get_youtube_menu_keyboard():
     keyboard = [
-        [KeyboardButton(BTN_YT_TOP_VIDEOS)],
         [KeyboardButton(BTN_YT_LAST5), KeyboardButton(BTN_YT_CH_SEARCH)],
         [KeyboardButton(BTN_YT_GLOBAL)],
         [KeyboardButton(BTN_YT_LINK_VID), KeyboardButton(BTN_YT_LINK_MP3)],
