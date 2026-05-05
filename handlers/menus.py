@@ -118,18 +118,21 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    top_videos = get_top_cached_videos(5)
+    # فرض بر این است که این تابع در فایل شما وجود دارد
+    top_videos = get_top_cached_videos(4)
 
     if not top_videos:
         await update.message.reply_text("📭 هنوز ویدیویی در کش سیستم ثبت نشده است.")
         return
 
-    await update.message.reply_text("🔥 در حال ارسال ۱۰ ویدیوی پربازدید سیستم...")
+    await update.message.reply_text(
+        "🔥 در حال ارسال 4 ویدیوی پربازدید سیستم...\nلطفاً کمی صبر کنید."
+    )
 
     chat_id = update.effective_chat.id
+
     for index, video in enumerate(top_videos):
         try:
-            # استخراج لیست file_id ها
             file_ids = json.loads(video["file_ids"])
             views = video["view_count"]
             video_id = video["video_id"]
@@ -137,9 +140,9 @@ async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TY
             if file_ids:
                 total_parts = len(file_ids)
 
-                # حلقه جدید: ارسال تمام پارت‌های این ویدیو
+                # حلقه روی تمام پارت‌های یک ویدیو
                 for part_index, file_id in enumerate(file_ids):
-                    # اگر ویدیو چند پارته است، شماره پارت را در کپشن نمایش بده
+                    # تنظیم کپشن بر اساس تعداد پارت‌ها
                     if total_parts > 1:
                         caption = (
                             f"🏅 رتبه: {index + 1} (پارت {part_index + 1} از {total_parts})\n"
@@ -153,9 +156,22 @@ async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TY
                             f"🔗 آیدی ویدیو: {video_id}"
                         )
 
-                    await context.bot.send_video(
-                        chat_id=chat_id, video=file_id, caption=caption
-                    )
+                    # تلاش برای ارسال ویدیو
+                    try:
+                        await context.bot.send_video(
+                            chat_id=chat_id, video=file_id, caption=caption
+                        )
+                        # وقفه ۱.۵ ثانیه‌ای برای حفظ ترتیب و جلوگیری از محدودیت تلگرام
+                        await asyncio.sleep(1.5)
+
+                    except RetryAfter as e:
+                        # اگر تلگرام ارور محدودیت سرعت داد، صبر میکند و دوباره میفرستد
+                        print(f"Rate limited! Sleeping for {e.retry_after} seconds...")
+                        await asyncio.sleep(e.retry_after)
+                        await context.bot.send_video(
+                            chat_id=chat_id, video=file_id, caption=caption
+                        )
+                        await asyncio.sleep(1.5)
 
         except Exception as e:
             print(f"Error sending top video {video.get('video_id', 'Unknown')}: {e}")
