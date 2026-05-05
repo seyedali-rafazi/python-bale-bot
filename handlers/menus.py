@@ -34,6 +34,7 @@ from core.database import (
     get_setting,
     get_tt_downloads,
     delete_invalid_video_from_db,
+    get_gh_downloads,
 )
 from datetime import datetime
 
@@ -346,9 +347,10 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # دریافت آمار مصرف
     yt_count = get_yt_downloads(user_id)
     music_count = get_music_downloads(user_id)
-    pinterest_count = get_pinterest_downloads(user_id)  # دریافت مصرف پینترست
+    pinterest_count = get_pinterest_downloads(user_id)
     tt_dl_count = get_tt_downloads(user_id)
     tt_exp_count = get_tt_explores(user_id)
+    gh_count = get_gh_downloads(user_id)
 
     # بررسی محدودیت‌ها
     yt_limit = "20" if is_vip == 1 else "1"
@@ -356,6 +358,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pinterest_limit = "30" if is_vip == 1 else "2"
     tt_dl_limit = "15" if is_vip == 1 else "1"
     tt_exp_limit = "10" if is_vip == 1 else "1"
+    gh_limit = "20" if is_vip == 1 else "2"
 
     # ساختار متن نهایی
     profile_text = f"""
@@ -371,6 +374,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
+• گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
 """
 
     await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")

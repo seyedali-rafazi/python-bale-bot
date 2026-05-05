@@ -308,7 +308,6 @@ def get_user_info(user_id):
     return result
 
 
-
 # ----------- بخش مربوط به دانلودهای یوتیوب -----------
 
 
@@ -659,3 +658,31 @@ def reset_user_limits(user_id):
     )
     conn.commit()
     conn.close()
+
+
+def add_vip_time_to_all(days: int) -> int:
+    """اضافه کردن زمان مشخص به تمام کاربران VIP فعال"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT user_id, vip_expire_date FROM users WHERE is_vip = 1")
+    vip_users = cursor.fetchall()
+
+    now = datetime.now()
+    updated_count = 0
+
+    for user_id, expire_str in vip_users:
+        if expire_str:
+            current_expire = datetime.fromisoformat(expire_str)
+            # فقط به کسانی که اشتراکشون هنوز منقضی نشده اضافه میکنیم
+            if current_expire > now:
+                new_expire = current_expire + timedelta(days=days)
+                cursor.execute(
+                    "UPDATE users SET vip_expire_date = ? WHERE user_id = ?",
+                    (new_expire.isoformat(), user_id),
+                )
+                updated_count += 1
+
+    conn.commit()
+    conn.close()
+    return updated_count

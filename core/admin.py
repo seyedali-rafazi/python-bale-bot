@@ -8,6 +8,7 @@ from core.database import (
     get_all_users,
     get_total_vip_users,
     reset_user_limits,
+    add_vip_time_to_all,
 )
 import os
 from dotenv import load_dotenv
@@ -159,4 +160,27 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ محدودیت‌های کاربر $ {target_user} $ با موفقیت ریست شد."
+    )
+
+
+async def cmd_addvip_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ فرمت اشتباه است. مثال برای اضافه کردن ۵ روز:\n`/addvipall 5`"
+        )
+        return
+
+    try:
+        days = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً یک عدد صحیح وارد کنید.")
+        return
+
+    updated_users = add_vip_time_to_all(days)
+    await update.message.reply_text(
+        f"✅ با موفقیت $ {days} $ روز به اشتراک $ {updated_users} $ کاربر ویژه (پرو) اضافه شد."
     )
