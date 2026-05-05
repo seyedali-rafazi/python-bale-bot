@@ -67,6 +67,22 @@ def init_db():
     if "gh_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN gh_date TEXT")
 
+        # جدول کش کردن ویدیوهای یوتیوب
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS youtube_cache (
+            video_id TEXT PRIMARY KEY,
+            file_ids TEXT
+        )
+    """)
+
+    # --- بخش جدید: اضافه کردن ستون view_count بدون حذف داده‌های قبلی ---
+    cursor.execute("PRAGMA table_info(youtube_cache)")
+    yt_cache_columns = [column[1] for column in cursor.fetchall()]
+    if "view_count" not in yt_cache_columns:
+        cursor.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN view_count INTEGER DEFAULT 0"
+        )
+
     # جدول جدید برای ذخیره ویدیوهای اکسپلور تیک‌تاک
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tiktok_explore (
@@ -84,14 +100,6 @@ def init_db():
             payload TEXT,
             provider_charge_id TEXT,
             date TEXT
-        )
-    """)
-
-    # جدول کش کردن ویدیوهای یوتیوب
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS youtube_cache (
-            video_id TEXT PRIMARY KEY,
-            file_ids TEXT
         )
     """)
 
@@ -505,6 +513,32 @@ def save_cached_video(video_id: str, file_ids: list):
     )
     conn.commit()
     conn.close()
+
+
+def increment_yt_video_view(video_id: str):
+    """افزایش تعداد بازدید یک ویدیوی کش شده"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE youtube_cache SET view_count = view_count + 1 WHERE video_id = ?",
+        (video_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_top_cached_videos(limit=10):
+    """دریافت ویدیوهای پر بازدید کش شده"""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row  # برای دسترسی به ستون‌ها با اسم (مثل دیکشنری)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT video_id, file_ids, view_count FROM youtube_cache ORDER BY view_count DESC LIMIT ?",
+        (limit,),
+    )
+    results = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return results
 
 
 # ----------- بخش جدید: تیک تاک -----------

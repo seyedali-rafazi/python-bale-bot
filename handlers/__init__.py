@@ -33,6 +33,7 @@ from .menus import (
     btn_yt_global_req,
     btn_yt_link_vid_req,
     btn_yt_link_mp3_req,
+    btn_yt_top_videos_req,
     btn_tr_help,
     btn_tr_fa_en_req,
     btn_tr_en_fa_req,
@@ -226,7 +227,11 @@ def register_all_handlers(application):
     application.add_handler(
         CallbackQueryHandler(youtube_destination_callback, pattern="^ytdest_")
     )
-
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_YT_TOP_VIDEOS)}$"), btn_yt_top_videos_req
+        )
+    )
     #  هندلرهای منوی اینستاگرام
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req)

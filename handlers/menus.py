@@ -7,8 +7,7 @@ from telegram import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-
-
+import json
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import *
@@ -35,6 +34,7 @@ from core.database import (
     get_tt_downloads,
     delete_invalid_video_from_db,
     get_gh_downloads,
+    get_top_cached_videos,
 )
 from datetime import datetime
 
@@ -115,6 +115,37 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
             [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
         ),
     )
+
+
+async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    top_videos = get_top_cached_videos(10)
+
+    if not top_videos:
+        await update.message.reply_text("📭 هنوز ویدیویی در کش سیستم ثبت نشده است.")
+        return
+
+    await update.message.reply_text("🔥 در حال ارسال ۱۰ ویدیوی پربازدید سیستم...")
+
+    chat_id = update.effective_chat.id
+    for index, video in enumerate(top_videos):
+        try:
+            # استخراج لیست file_id ها (چون JSON ذخیره شده)
+            file_ids = json.loads(video["file_ids"])
+            views = video["view_count"]
+            video_id = video["video_id"]
+
+            caption = (
+                f"🏅 رتبه: {index + 1}\n👁 بازدید: {views}\n🔗 آیدی ویدیو: {video_id}"
+            )
+
+            # ارسال اولین پارت ویدیو به کاربر (یا می‌توانید تمام پارت‌ها را بفرستید)
+            if file_ids:
+                await context.bot.send_video(
+                    chat_id=chat_id, video=file_ids[0], caption=caption
+                )
+        except Exception as e:
+            print(f"Error sending top video {video_id}: {e}")
+            continue
 
 
 async def btn_ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
