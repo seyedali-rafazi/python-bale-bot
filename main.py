@@ -10,6 +10,9 @@ from core.database import init_db
 
 load_dotenv()
 BALE_TOKEN = os.getenv("BALE_TOKEN")
+BALE_URL = os.getenv("BALE_URL")
+BALE_LISTENING_PORT = os.getenv("BALE_LISTENING_PORT")
+
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
@@ -67,10 +70,10 @@ def main():
     # تنظیمات مربوط به Webhook
     # ---------------------------------------------------------
     # پورتی که Nginx ترافیک را به آن می‌فرستد (در تنظیمات Nginx عدد 8443 را وارد کرده بودیم)
-    PORT = int(os.environ.get("PORT", "8443"))
+    PORT = int(os.environ.get("PORT", BALE_LISTENING_PORT))
 
     # آدرس دقیق وب‌هوک همراه با توکن برای امنیت بیشتر
-    WEBHOOK_URL = f"https://bale.iranisafar.lol/{BALE_TOKEN}"
+    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
 
     # راه‌اندازی ربات در حالت وب‌هوک
     application.run_webhook(
