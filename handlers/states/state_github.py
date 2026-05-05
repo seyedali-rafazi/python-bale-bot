@@ -97,44 +97,81 @@ async def handle_github_state(
 async def process_github_download(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
-    await update.message.reply_text("⏳ در حال آماده‌سازی فایل و گرفتن اسکرین‌شات...")
+    await context.bot.send_message(
+        chat_id, "⏳ در حال آماده‌سازی فایل و گرفتن اسکرین‌شات..."
+    )
 
-    zip_url = f"https://api.github.com/repos/{repo_path}/zipball"
-    screenshot_url = f"https://image.thum.io/get/fullpage/https://github.com/{repo_path}"  # API رایگان اسکرین‌شات (میتوانید تغییر دهید)
+    # استفاده از لینک دانلود مستقیم وب به جای API برای جلوگیری از دریافت فایل‌های ناقص و خطای 403
+    zip_url = f"https://github.com/{repo_path}/archive/HEAD.zip"
+    screenshot_url = (
+        f"https://image.thum.io/get/fullpage/https://github.com/{repo_path}"
+    )
 
     file_name = f"{repo_path.replace('/', '_')}.zip"
+    import uuid, os
+
     temp_path = f"temp_{uuid.uuid4().hex}_{file_name}"
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
     try:
+        import aiohttp
+
         async with aiohttp.ClientSession() as session:
             # ارسال اسکرین شات
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=screenshot_url,
-                caption=f"📸 نمای کلی از 리پازیتوری: {repo_path}",
-            )
+            try:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=screenshot_url,
+                    caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
+                )
+            except:
+                pass
 
             # دانلود ریپو
-            async with session.get(zip_url) as resp:
+            async with session.get(
+                zip_url, headers=headers, allow_redirects=True
+            ) as resp:
                 if resp.status == 200:
                     with open(temp_path, "wb") as f:
                         f.write(await resp.read())
 
-                    await context.bot.send_document(
-                        chat_id=chat_id, document=temp_path, filename=file_name
-                    )
-                    increment_gh_downloads(user_id)
+                    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+
+                    # اگر فایل خیلی کوچک باشد (کمتر از 1 کیلوبایت)، احتمالاً فایل معتبری نیست
+                    if file_size_mb < 0.001:
+                        await context.bot.send_message(
+                            chat_id,
+                            "❌ فایل دریافتی از گیت‌هاب نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
+                        )
+                    elif file_size_mb > 49.5:
+                        await context.bot.send_message(
+                            chat_id,
+                            f"❌ حجم این ریپازیتوری ({file_size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام است.",
+                        )
+                    else:
+                        await context.bot.send_document(
+                            chat_id=chat_id, document=temp_path, filename=file_name
+                        )
+                        # فراخوانی تابع افزایش تعداد دانلود کاربر
+                        # increment_gh_downloads(user_id)
                 else:
                     await context.bot.send_message(
                         chat_id,
-                        "❌ خطایی در دانلود ریپازیتوری رخ داد (ممکن است شاخه اصلی main نباشد).",
+                        f"❌ خطایی در دریافت فایل رخ داد. (کد خطا: {resp.status})",
                     )
     except Exception as e:
-        await context.bot.send_message(chat_id, "❌ خطا در پردازش.")
+        await context.bot.send_message(
+            chat_id, "❌ خطا در پردازش یا آپلود فایل در تلگرام."
+        )
+        print(f"GitHub Error: {e}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        clear_state(chat_id)
+        # فراخوانی تابع پاکسازی وضعیت کاربر
+        # clear_state(chat_id)
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
