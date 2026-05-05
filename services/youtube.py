@@ -51,23 +51,41 @@ def _cookie_args():
     return []
 
 
+# def _base_ytdlp_cmd():
+#     """
+#     آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
+#     بدون proxy، برای استفاده از مسیر شبکه خود سرور/WARP.
+#     """
+#     cmd = [
+#         "yt-dlp",
+#         # 1. اگر سرورتان IPv6 دارد، خط زیر را فعال کنید (بسیار موثر است)
+#         # در غیر این صورت اگر ارور شبکه گرفتید، این خط را کامنت کنید.
+#         "--force-ipv6",
+#         "--js-runtimes",
+#         "node",
+#         "--remote-components",
+#         "ejs:github",
+#         # 2. تغییر کلاینت از وب به موبایل و تلویزیون برای دور زدن ربات‌گیر یوتیوب
+#         "--extractor-args",
+#         "youtube:client=ANDROID,IOS,TV_EMBED",
+#         "--no-playlist",
+#     ]
+
+#     cmd.extend(_cookie_args())
+
+#     return cmd
+
+
 def _base_ytdlp_cmd():
-    """
-    آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
-    بدون proxy، برای استفاده از مسیر شبکه خود سرور/WARP.
-    """
     cmd = [
         "yt-dlp",
-        # 1. اگر سرورتان IPv6 دارد، خط زیر را فعال کنید (بسیار موثر است)
-        # در غیر این صورت اگر ارور شبکه گرفتید، این خط را کامنت کنید.
-        "--force-ipv6",
+        "--force-ipv4",
         "--js-runtimes",
         "node",
         "--remote-components",
         "ejs:github",
-        # 2. تغییر کلاینت از وب به موبایل و تلویزیون برای دور زدن ربات‌گیر یوتیوب
         "--extractor-args",
-        "youtube:client=ANDROID,IOS,TV_EMBED",
+        "youtube:player_client=web",
         "--no-playlist",
     ]
 
