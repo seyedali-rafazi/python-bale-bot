@@ -53,7 +53,7 @@ STORAGE_CHANNEL_ID = "@digiacharstorage"
 
 def check_user_limit(chat_id: str) -> bool:
     vip_status = is_vip(chat_id)
-    limit = 20 if vip_status else 2
+    limit = 18 if vip_status else 1
     usage = get_yt_downloads(chat_id)
     return usage < limit
 

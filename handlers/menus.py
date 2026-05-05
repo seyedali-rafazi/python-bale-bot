@@ -351,7 +351,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tt_exp_count = get_tt_explores(user_id)
 
     # بررسی محدودیت‌ها
-    yt_limit = "20" if is_vip == 1 else "2"
+    yt_limit = "20" if is_vip == 1 else "1"
     music_limit = "20" if is_vip == 1 else "6"
     pinterest_limit = "30" if is_vip == 1 else "2"
     tt_dl_limit = "15" if is_vip == 1 else "1"
