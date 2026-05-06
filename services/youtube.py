@@ -9,6 +9,7 @@ import math
 import asyncio
 import subprocess
 from dotenv import load_dotenv
+import random
 
 load_dotenv()
 
@@ -19,6 +20,15 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
+
+IPV6_PREFIX = "2a01:4f8:c010:1e46"
+
+
+def get_random_ipv6():
+    """تولید یک آی‌پی تصادفی از ساب‌نت /64"""
+    hextets = [f"{random.randint(0, 65535):x}" for _ in range(4)]
+    suffix = ":".join(hextets)
+    return f"{IPV6_PREFIX}:{suffix}"
 
 
 def get_video_duration(file_path):
@@ -77,9 +87,14 @@ def _cookie_args():
 
 
 def _base_ytdlp_cmd():
+    random_ip = get_random_ipv6()
+    print(f"🌐 Using Random IPv6: {random_ip}")
+
     cmd = [
         "yt-dlp",
         "--force-ipv6",
+        "--source-address",
+        random_ip,
         "--js-runtimes",
         "node",
         "--remote-components",
