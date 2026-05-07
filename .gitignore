@@ -3,3 +3,5 @@ session_danny75479
 login.py
 testMainPooling.py
 testMainWbhook.py
+.env.test
+.env.production

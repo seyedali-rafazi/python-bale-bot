@@ -21,7 +21,8 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
-IPV6_PREFIX = "2a01:4f8:c010:1e46"
+IPV6_PREFIX = os.getenv("IPV6_PREFIX")
+
 
 
 def get_random_ipv6():
