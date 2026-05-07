@@ -73,6 +73,7 @@ def should_rotate_proxy(error_text: str) -> bool:
         "proxy",
         "connection",
         "timeout",
+        "timed out",
         "429",
         "too many requests",
         "rate limit",
@@ -81,12 +82,16 @@ def should_rotate_proxy(error_text: str) -> bool:
         "checkpoint",
         "login required",
         "temporary block",
+        "connection refused",
+        "remote end closed connection",
+        "network is unreachable",
+        "failed to establish a new connection",
     ]
 
     return any(k in error_text for k in keywords)
 
 
-def get_latest_post_sync(page_input, retry_count=1):
+def get_latest_post_sync(page_input, retry_count=2):
     username = extract_username(page_input)
     req_id = uuid.uuid4().hex
     target_dir = os.path.join(DOWNLOAD_DIR, f"req_{req_id}")
@@ -130,7 +135,7 @@ async def get_latest_post(page_input):
     return await asyncio.to_thread(get_latest_post_sync, page_input)
 
 
-def download_instagram(url, retry_count=1):
+def download_instagram(url, retry_count=2):
     req_id = uuid.uuid4().hex
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_DIR}/{req_id}_%(id)s.%(ext)s",
