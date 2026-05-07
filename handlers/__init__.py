@@ -58,6 +58,14 @@ from .menus import (
     btn_tt_search_req,
     btn_tt_trend_req,
     btn_tt_explore_req,
+    btn_article_menu,
+    btn_search_doi_req,
+    btn_search_name_req,
+    btn_citation_req,
+    btn_smart_abstract_req,
+    btn_bibtex_req,
+    btn_book_search_req,
+    inline_buttons_handler,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import (
@@ -267,6 +275,36 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_BOOK)}$"), btn_book_req)
     )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_BIBTEX)}$"), btn_bibtex_req)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SMART_ABSTRACT)}$"), btn_smart_abstract_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_ARTICLE)}$"), btn_article_menu)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SEARCH_DOI)}$"), btn_search_doi_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SEARCH_NAME)}$"), btn_search_name_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_CITATION)}$"), btn_citation_req)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_BOOK_SEARCH)}$"), btn_book_search_req
+        )
+    )
+    application.add_handler(CallbackQueryHandler(inline_buttons_handler))
 
     # هندلرهای منوی برنامه‌نویسی
     application.add_handler(
