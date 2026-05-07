@@ -39,17 +39,6 @@ async def btn_article_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_support_message")
-    await update.message.reply_text(
-        "🎧 لطفاً پیام خود را برای پشتیبانی بنویسید تا به ادمین ارسال شود:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
-    )
-
-
 async def btn_search_doi_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_article_doi")

@@ -1,20 +1,33 @@
 from datetime import datetime
-
 from telegram import (
     Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from telegram.ext import ContextTypes
 
 from core.constants import BALE_SUPPORT_URL
 from core.database import (
-    get_gh_downloads,
+    get_user_info,
+    get_yt_downloads,
     get_music_downloads,
     get_pinterest_downloads,
     get_tt_downloads,
     get_tt_explores,
-    get_user_info,
-    get_yt_downloads,
+    get_gh_downloads,
 )
+
+
+async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("💬 ارتباط با پشتیبانی در بله", url=BALE_SUPPORT_URL)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "برای ارتباط با پشتیبانی، طرح پیشنهادات و گزارش مشکلات، روی دکمه زیر کلیک کنید:",
+        reply_markup=reply_markup,
+    )
 
 
 async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
