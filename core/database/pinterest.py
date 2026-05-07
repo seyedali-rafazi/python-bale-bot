@@ -1,3 +1,5 @@
+# core/database/pinterest.py
+
 from .base import get_connection
 from .utils import get_tehran_today
 

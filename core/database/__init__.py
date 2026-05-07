@@ -1,3 +1,5 @@
+# core/database/__init__.py
+
 from .base import DB_NAME
 from .utils import get_tehran_today, get_tehran_now_full
 from .init_db import init_db

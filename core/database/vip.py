@@ -1,3 +1,5 @@
+# core/database/vip.py
+
 from datetime import datetime, timedelta
 from .base import get_connection
 

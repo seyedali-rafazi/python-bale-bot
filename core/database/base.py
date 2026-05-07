@@ -1,3 +1,5 @@
+# core/database/base.py
+
 import sqlite3
 
 DB_NAME = "bot_data.db"
