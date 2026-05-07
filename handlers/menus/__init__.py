@@ -77,12 +77,9 @@ from .github import (
 )
 
 from .books import (
-    btn_back_action,
     btn_article_menu,
     btn_search_doi_req,
     btn_search_name_req,
-    btn_user_info,
-    btn_support_req,
     btn_citation_req,
     btn_smart_abstract_req,
     btn_bibtex_req,
