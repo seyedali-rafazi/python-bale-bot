@@ -36,3 +36,9 @@ from .tiktok import (
 )
 from .github import get_gh_downloads, increment_gh_downloads
 from .usage import log_usage, get_user_usage_today
+from .articles import (
+    get_citation_count,
+    increment_citation_count,
+    get_book_download_count,
+    increment_book_download_count,
+)

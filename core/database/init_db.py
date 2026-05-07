@@ -46,6 +46,14 @@ def init_db():
     if "gh_date" not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN gh_date TEXT")
 
+    # جدید
+    if "citation_count" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN citation_count INTEGER DEFAULT 0")
+    if "book_download_count" not in columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN book_download_count INTEGER DEFAULT 0"
+        )
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (
             video_id TEXT PRIMARY KEY,
@@ -82,6 +90,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+    """)
+
+    # این جدول در usage.py استفاده می‌شود و باید ساخته شود
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usage_stats (
+            user_id TEXT,
+            action TEXT,
+            date TEXT,
+            count INTEGER DEFAULT 1,
+            PRIMARY KEY (user_id, action, date)
         )
     """)
 
