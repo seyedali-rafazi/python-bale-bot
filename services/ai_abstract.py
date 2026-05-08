@@ -73,21 +73,39 @@ async def analyze_abstract_with_ai(abstract_text: str) -> str:
             # ارسال پیام و دریافت آیدی آن
             sent_msg = await telethon_client.send_message(CHATGPT_BOT_USERNAME, prompt)
 
-            for _ in range(25):
-                await asyncio.sleep(5)
+            last_text = ""
+            stable_count = 0
+
+            # حلقه انتظار (حداکثر ۱۲۰ ثانیه: ۳۰ حلقه ۴ ثانیه‌ای)
+            for _ in range(30):
+                await asyncio.sleep(4)
+
                 # فقط پیام‌هایی که بعد از پیام ما ارسال شده‌اند را می‌گیرد
                 messages = await telethon_client.get_messages(
                     CHATGPT_BOT_USERNAME, min_id=sent_msg.id
                 )
 
-                for msg in messages:
-                    if (
-                        msg.text
-                        and not msg.out
-                        and not msg.sticker
-                        and len(msg.text.strip()) > 20
-                    ):
-                        return msg.text
+                if messages:
+                    # گرفتن جدیدترین پاسخ ربات
+                    msg = messages[0]
+                    if msg.text and not msg.out and not msg.sticker:
+                        current_text = msg.text.strip()
+
+                        if len(current_text) > 20:
+                            # اگر متن نسبت به چک کردن قبلی تغییری نکرده باشد
+                            if current_text == last_text:
+                                stable_count += 1
+                                # اگر ۲ بار پشت سر هم (حدود ۸ ثانیه) متن ثابت بود، یعنی تایپ ربات تمام شده
+                                if stable_count >= 2:
+                                    return current_text
+                            else:
+                                # اگر متن تغییر کرده بود، متن جدید را ذخیره کن و شمارشگر را صفر کن
+                                last_text = current_text
+                                stable_count = 0
+
+            # اگر حلقه تمام شد و ربات هنوز داشت طولانی تایپ می‌کرد، آخرین متنی که تا الان تولید شده را بده
+            if last_text:
+                return last_text
 
             return "❌ زمان انتظار پایان یافت."
         except Exception as e:
