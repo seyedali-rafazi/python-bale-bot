@@ -11,6 +11,7 @@ from telegram import (
     InlineKeyboardMarkup,
 )
 from telegram.ext import ContextTypes
+from telegram.error import TimedOut  # اضافه شدن خطای تایم‌اوت
 
 from core.state_manager import set_state, get_state, clear_state
 from core.constants import BTN_YT_VIDEO, BTN_BACK
@@ -119,6 +120,7 @@ async def process_and_send_video_parts(
     uploaded_file_ids = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
+    has_timeout = False  # فلگ برای تشخیص ارور تایم‌اوت
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -142,6 +144,14 @@ async def process_and_send_video_parts(
                 raise Exception("خطا در فوروارد/ارسال به کاربر")
 
             uploaded_file_ids.append(current_file_id)
+
+        except TimedOut as e:
+            print(f"⚠️ Timeout Error uploading/sending part {idx}: {e}")
+            has_timeout = True
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ پارت {idx} دچار قطعی موقت شد. در حال ادامه عملیات برای پارت‌های بعدی...",
+            )
         except Exception as e:
             print(f"❌ Error uploading/sending part {idx}: {e}")
             await context.bot.send_message(
@@ -152,9 +162,15 @@ async def process_and_send_video_parts(
 
         await asyncio.sleep(1)
 
-    if len(uploaded_file_ids) == total_parts:
+    # فقط در صورتی کش شود که تمامی پارت‌ها بدون تایم‌اوت ارسال شده باشند
+    if len(uploaded_file_ids) == total_parts and not has_timeout:
         save_cached_video(cache_key, uploaded_file_ids)
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ عملیات پایان یافت اما به دلیل قطعی در ارسال، فایل در سرور ذخیره نشد.",
+        )
 
 
 async def process_and_send_backup_video_parts(
@@ -162,6 +178,7 @@ async def process_and_send_backup_video_parts(
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
+    has_timeout = False
 
     for idx, file_path in enumerate(result_files, 1):
         if total_parts > 1:
@@ -180,6 +197,14 @@ async def process_and_send_backup_video_parts(
                 raise Exception("خطا در ارسال پارت بکاپ")
 
             uploaded_file_ids.append(current_file_id)
+
+        except TimedOut as e:
+            print(f"⚠️ Timeout Error backup part {idx}: {e}")
+            has_timeout = True
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ پارت {idx} با مشکل اتصال مواجه شد. ادامه عملیات...",
+            )
         except Exception as e:
             print(f"❌ Error backup part {idx}: {e}")
             await context.bot.send_message(
@@ -190,10 +215,14 @@ async def process_and_send_backup_video_parts(
 
         await asyncio.sleep(1)
 
-    if len(uploaded_file_ids) == total_parts:
+    if len(uploaded_file_ids) == total_parts and not has_timeout:
         save_cached_video(cache_key, uploaded_file_ids)
         await context.bot.send_message(
             chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ."
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id, text="⚠️ عملیات بکاپ پایان یافت اما به دلیل قطعی، کش نشد."
         )
 
 
@@ -222,7 +251,6 @@ async def send_cached_files(
 async def execute_yt_download(
     context, url: str, chat_id: str, format_type: str, destination: str, status_msg
 ):
-    """منطق اصلی پردازش و دانلود که قبلا داخل Semaphore بود"""
     video_id = extract_yt_id(url)
     cache_key = f"{video_id}_{format_type}_{destination}"
 
@@ -402,6 +430,11 @@ async def execute_yt_download(
                             await context.bot.send_message(
                                 chat_id=chat_id, text="✅ ارسال با موفقیت انجام شد!"
                             )
+                        except TimedOut:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="⚠️ فایل ارسال شد اما به دلیل خطای تایم‌اوت، در سرور ذخیره نشد.",
+                            )
                         except Exception as aud_err:
                             await context.bot.send_message(
                                 chat_id=chat_id, text="❌ خطا در ارسال صوت."
@@ -433,7 +466,6 @@ async def execute_yt_download(
 
 
 async def yt_worker(queue: asyncio.Queue):
-    """این ورکر در پس‌زمینه دائما چک می‌کند که آیا فایلی در صف هست یا نه"""
     while True:
         task = await queue.get()
         try:
@@ -452,7 +484,6 @@ async def yt_worker(queue: asyncio.Queue):
 
 
 def ensure_workers_started():
-    """استارت کردن ورکرها در اولین اجرای دانلود (Lazy Load)"""
     global _workers_started
     if not _workers_started:
         for _ in range(MAX_NORMAL_DOWNLOADS):
@@ -494,10 +525,8 @@ async def background_yt_download(
             text="⏳ درخواست شما ثبت شد و پردازش به زودی آغاز می‌گردد...",
         )
 
-    # مطمئن می‌شویم که ورکرها روشن هستند
     ensure_workers_started()
 
-    # قرار دادن وظیفه در صف مناسب
     await active_queue.put(
         {
             "context": context,
@@ -771,7 +800,6 @@ async def youtube_destination_callback(
 
     increment_yt_downloads(chat_id)
 
-    # صف جدید به جای ایجاد تسک مستقیم
     asyncio.create_task(
         background_yt_download(context, url, chat_id, format_type, destination)
     )
