@@ -11,7 +11,6 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
-from telegram.error import TimedOut
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state, get_state, clear_state
@@ -42,7 +41,7 @@ except ImportError:
 
 
 MAX_NORMAL_DOWNLOADS = 2
-MAX_VIP_DOWNLOADS = 2
+MAX_VIP_DOWNLOADS = 4
 
 normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
 vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
@@ -154,22 +153,28 @@ async def process_and_send_video_parts(
                 caption=caption,
             )
 
-            await send_video_once(context, chat_id, current_file_id)
+            # بررسی موفقیت آمیز بودن ارسال به کاربر
+            send_success = await send_video_once(context, chat_id, current_file_id)
+            if not send_success:
+                raise Exception("خطا در فوروارد/ارسال به کاربر")
+
             uploaded_file_ids.append(current_file_id)
 
         except Exception as e:
             print(f"❌ Error uploading/sending part {idx}: {e}")
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ پارت {idx} به دلیل خطا ارسال نشد. در حال ادامه...",
+                text=f"❌ متاسفانه در آپلود یا ارسال پارت {idx} مشکلی پیش آمد. عملیات لغو شد.",
             )
+            # پرتاب مجدد خطا برای جلوگیری از ذخیره در دیتابیس و اجرای عملیات پاکسازی
+            raise e
 
         await asyncio.sleep(1)
 
-    if uploaded_file_ids:
+    # ذخیره در کش تنها در صورتی که تمام پارت‌ها موفق بوده باشند
+    if len(uploaded_file_ids) == total_parts:
         save_cached_video(cache_key, uploaded_file_ids)
-
-    await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
+        await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
 
 
 async def process_and_send_backup_video_parts(
@@ -197,20 +202,28 @@ async def process_and_send_backup_video_parts(
                 file_path=file_path,
                 caption=caption,
             )
-            await send_video_once(context, chat_id, current_file_id)
+
+            send_success = await send_video_once(context, chat_id, current_file_id)
+            if not send_success:
+                raise Exception("خطا در ارسال پارت بکاپ")
+
             uploaded_file_ids.append(current_file_id)
+
         except Exception as e:
             print(f"❌ Error backup part {idx}: {e}")
             await context.bot.send_message(
-                chat_id=chat_id, text=f"⚠️ پارت {idx} ارسال نشد. ادامه..."
+                chat_id=chat_id,
+                text=f"❌ ارسال پارت {idx} ناموفق بود. عملیات بکاپ لغو شد.",
             )
+            raise e
 
         await asyncio.sleep(1)
 
-    if uploaded_file_ids:
+    if len(uploaded_file_ids) == total_parts:
         save_cached_video(cache_key, uploaded_file_ids)
-
-    await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ.")
+        await context.bot.send_message(
+            chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ."
+        )
 
 
 async def send_cached_files(
