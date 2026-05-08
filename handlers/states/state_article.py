@@ -331,7 +331,7 @@ async def handle_article_state(
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال دریافت چکیده مقاله...")
 
-        abstract_text = get_abstract_from_openalex(doi_input)
+        abstract_text = await get_abstract_from_openalex(doi_input)
         if not abstract_text:
             await update.message.reply_text(
                 "❌ متاسفانه چکیده‌ای برای این مقاله در پایگاه داده یافت نشد.",
