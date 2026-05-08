@@ -12,7 +12,7 @@ from .constants import *
 def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROFILE), KeyboardButton(BTN_BUY_VIP)],
-        [KeyboardButton(BTN_PROGRAMMING)],
+        [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_PROGRAMMING)],
         [KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_DL_YOUTUBE)],
         [
@@ -20,7 +20,7 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_PINTEREST),
         ],
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
-        [KeyboardButton(BTN_BOOK), KeyboardButton(BTN_AI)],
+        [KeyboardButton(BTN_AI)],
         [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)],
         [KeyboardButton(BTN_SUPPORT)],
     ]

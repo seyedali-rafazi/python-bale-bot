@@ -13,9 +13,11 @@ from core.keyboards import (
 from core.constants import *
 from core.database import (
     is_vip,
-    get_user_usage_today,
     log_usage,
     increment_citation_count,
+    get_citation_count,
+    get_book_download_count,
+    increment_book_download_count,
 )
 from services.research import (
     smart_download_pdf,
@@ -31,8 +33,17 @@ from handlers.commands import cmd_start
 
 # بارگذاری متغیرهای محیطی
 load_dotenv()
-USER_LIMIT_VALUE = os.getenv("USER_LIMIT_VALUE")
-VIP_LIMIT_VALUE = os.getenv("VIP_LIMIT_VALUE")
+# مقادیر لیمیت جایگزین با اعداد ثابت مد نظر شما
+USER_LIMIT_VALUE = 2
+VIP_LIMIT_VALUE = 20
+
+
+def get_limit_message(daily_limit):
+    return (
+        f"❌ کاربر گرامی، شما به سقف مجاز خود ($ {daily_limit} $) رسیده‌اید و قادر به ثبت درخواست جدید نیستید.\n\n"
+        f"🌟 برای رفع محدودیت، حساب کاربری خود را به VIP ارتقا دهید.\n"
+        f"💳 از منوی اصلی اقدام کنید."
+    )
 
 
 async def show_article_results(
@@ -106,6 +117,9 @@ async def handle_article_state(
     if text in ["0", "لغو", "شروع", "بازگشت", BTN_BACK]:
         await cmd_start(update, context)
         return
+
+    user_is_vip = is_vip(chat_id)
+    daily_limit = VIP_LIMIT_VALUE if user_is_vip else USER_LIMIT_VALUE
 
     # ====== 1. پردازش دریافت DOI ======
     if step == "waiting_article_doi":
@@ -212,22 +226,10 @@ async def handle_article_state(
 
         if text.startswith("📥 دانلود مقاله "):
             try:
-                user_is_vip = is_vip(chat_id)
-                daily_limit = (
-                    int(VIP_LIMIT_VALUE) if user_is_vip else int(USER_LIMIT_VALUE)
-                )
-                usage_today = get_user_usage_today(chat_id, "download_article")
+                usage_today = get_book_download_count(chat_id, "download_article")
 
                 if usage_today >= daily_limit:
-                    await update.message.reply_text(
-                        f"❌ کاربر گرامی، شما به سقف مجاز روزانه خود ($ {daily_limit} $) رسیده‌اید و در حال حاضر قادر به ثبت درخواست جدید نیستید.\n\n"
-                        f"🌟 برای رفع این محدودیت و استفاده نامحدود از امکانات ربات، می‌توانید حساب کاربری خود را ارتقا دهید.\n\n"
-                        f"💎 با خرید اشتراک VIP از مزایای زیر بهره‌مند می‌شوید:\n"
-                        f"🔹 حذف محدودیت‌های روزانه\n"
-                        f"🔹 دسترسی به امکانات و قابلیت‌های ویژه\n"
-                        f"🔹 سرعت بالاتر و اولویت در پاسخ‌گویی\n\n"
-                        f"💳 برای خرید اشتراک VIP و ارتقای حساب، لطفاً از منوی مربوطه اقدام کنید."
-                    )
+                    await update.message.reply_text(get_limit_message(daily_limit))
                     return
 
                 index = int(text.replace("📥 دانلود مقاله ", "").strip()) - 1
@@ -267,6 +269,10 @@ async def handle_article_state(
 
     # ====== 5. تولید رفرنس ======
     if step == "waiting_article_citation_doi":
+        if get_citation_count(chat_id) >= daily_limit:
+            await update.message.reply_text(get_limit_message(daily_limit))
+            return
+
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال دریافت اطلاعات مقاله...")
 
@@ -328,6 +334,10 @@ async def handle_article_state(
 
     # ====== 6. تحلیل چکیده هوشمند ======
     if step == "waiting_article_smart_abstract_doi":
+        if get_book_download_count(chat_id, "smart_abstract") >= daily_limit:
+            await update.message.reply_text(get_limit_message(daily_limit))
+            return
+
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال دریافت چکیده مقاله...")
 
@@ -357,6 +367,10 @@ async def handle_article_state(
 
     # ====== 8. تولید رفرنس BibTeX ======
     if step == "waiting_article_bibtex_doi":
+        if get_citation_count(chat_id) >= daily_limit:
+            await update.message.reply_text(get_limit_message(daily_limit))
+            return
+
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال پردازش اطلاعات مقاله...")
 
@@ -368,7 +382,7 @@ async def handle_article_state(
             )
             return
 
-        log_usage(chat_id, "generate_bibtex")
+        increment_citation_count(chat_id)
 
         await update.message.reply_text(
             f"📜 <b>رفرنس BibTeX شما آماده است:</b>\n\n"
@@ -380,8 +394,12 @@ async def handle_article_state(
         set_state(chat_id, None)
         return
 
-    # ====== 9.دانلود کتاب   ======
+    # ====== 9.دانلود کتاب ======
     if step == "waiting_article_book_name":
+        if get_book_download_count(chat_id) >= daily_limit:
+            await update.message.reply_text(get_limit_message(daily_limit))
+            return
+
         book_name = text.strip()
         await update.message.reply_text("⏳ در حال جستجوی کتاب در پایگاه داده...")
 
@@ -393,6 +411,9 @@ async def handle_article_state(
             return
 
         set_state(chat_id, "waiting_book_download", books=books)
+
+        # افزایش لیمیت کتاب کاربر
+        increment_book_download_count(chat_id)
 
         # ساخت لیست متنی از کتاب‌ها
         msg_text = "📚 **نتایج یافت شده:**\n\n"

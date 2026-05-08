@@ -4,12 +4,6 @@ from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core.constants import *
-from core.database import (
-    get_book_download_count,
-    get_citation_count,
-    get_user_usage_today,
-    is_vip,
-)
 from core.keyboards import get_article_menu_keyboard, get_main_menu_article
 from core.state_manager import get_state, set_state
 from handlers.commands import cmd_start
@@ -78,13 +72,6 @@ async def btn_search_name_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def btn_citation_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
 
-    # بررسی محدودیت استفاده (کاربر عادی حداکثر 3 بار)
-    if not is_vip(chat_id) and get_citation_count(chat_id) >= 3:
-        await update.message.reply_text(
-            "❌ شما از تمام ظرفیت ($ 3 $ رفرنس) اکانت عادی خود استفاده کرده‌اید.\nبرای استفاده نامحدود، از طریق منوی اصلی حساب خود را VIP کنید."
-        )
-        return
-
     set_state(chat_id, "waiting_article_citation_doi")
     text = (
         "📑 **لطفاً شناسه DOI مقاله مورد نظر را جهت تولید رفرنس ارسال کنید:**\n\n"
@@ -106,24 +93,6 @@ async def btn_citation_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- تابع جدید برای دکمه چکیده هوشمند ---
 async def btn_smart_abstract_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-
-    # بررسی محدودیت استفاده
-    user_is_vip = is_vip(chat_id)
-    daily_limit = 20 if user_is_vip else 2
-    usage_today = get_user_usage_today(chat_id, "smart_abstract")
-
-    if usage_today >= daily_limit:
-        await update.message.reply_text(
-            f"❌ کاربر گرامی، شما به سقف مجاز روزانه خود ($ {daily_limit} $) رسیده‌اید و در حال حاضر قادر به ثبت درخواست جدید نیستید.\n\n"
-            f"🌟 برای رفع این محدودیت و استفاده نامحدود از امکانات ربات، می‌توانید حساب کاربری خود را ارتقا دهید.\n\n"
-            f"💎 با خرید اشتراک VIP از مزایای زیر بهره‌مند می‌شوید:\n"
-            f"🔹 حذف محدودیت‌های روزانه\n"
-            f"🔹 دسترسی به امکانات و قابلیت‌های ویژه\n"
-            f"🔹 سرعت بالاتر و اولویت در پاسخ‌گویی\n\n"
-            f"💳 برای خرید اشتراک VIP و ارتقای حساب، لطفاً از منوی مربوطه اقدام کنید."
-        )
-
-        return
 
     set_state(chat_id, "waiting_article_smart_abstract_doi")
 
@@ -150,14 +119,6 @@ async def btn_smart_abstract_req(update: Update, context: ContextTypes.DEFAULT_T
 
 async def btn_bibtex_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-
-    if not is_vip(chat_id):
-        usage_today = get_user_usage_today(chat_id, "generate_bibtex")
-        if usage_today >= 2:
-            await update.message.reply_text(
-                "❌ کاربر عادی عزیز، شما از تمام ظرفیت روزانه ($ }{2} $ بار) برای ابزار **تولید BibTeX** استفاده کرده‌اید.\nبرای استفاده نامحدود، اکانت خود را VIP کنید."
-            )
-            return
 
     set_state(chat_id, "waiting_article_bibtex_doi")
     await update.message.reply_text(
@@ -188,13 +149,6 @@ async def inline_buttons_handler(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
 
     if data.startswith("dlbook_"):
-        if not is_vip(chat_id) and get_book_download_count(chat_id) >= 4:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ شما از محدودیت دانلود کتاب (کلا $4$ بار برای کاربر عادی) استفاده کرده‌اید. لطفا از منوی اصلی VIP تهیه کنید.",
-            )
-            return
-
         try:
             index = int(data.split("_")[1])
             state_data = get_state(chat_id)
