@@ -1,4 +1,4 @@
-# handlers/states.py
+# handlers/states/state_article.py
 
 import os
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -385,9 +385,9 @@ async def handle_article_state(
         book_name = text.strip()
         await update.message.reply_text("⏳ در حال جستجوی کتاب در پایگاه داده...")
 
-        from services.book_service import search_books_by_name
+        from services.book.book_service import search_books_by_name
 
-        books = search_books_by_name(book_name)
+        books = await search_books_by_name(book_name)
         if not books:
             await update.message.reply_text("❌ کتابی با این نام یافت نشد.")
             return

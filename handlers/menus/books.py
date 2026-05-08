@@ -1,17 +1,19 @@
+# handlers/menus/books.py
+
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-from handlers.commands import cmd_start
-from core.state_manager import set_state, get_state
+
 from core.constants import *
-from core.keyboards import get_article_menu_keyboard, get_main_menu_article
 from core.database import (
-    is_vip,
+    get_book_download_count,
     get_citation_count,
     get_user_usage_today,
-    get_book_download_count,
-    increment_book_download_count,
+    is_vip,
 )
-from services.book_service import download_book_pdf
+from core.keyboards import get_article_menu_keyboard, get_main_menu_article
+from core.state_manager import get_state, set_state
+from handlers.commands import cmd_start
+from services.book.queue_manager import download_queue
 
 
 async def btn_book_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,7 +184,6 @@ async def btn_book_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def inline_buttons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     chat_id = str(query.message.chat.id)
     data = query.data
 
@@ -190,43 +191,37 @@ async def inline_buttons_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not is_vip(chat_id) and get_book_download_count(chat_id) >= 4:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ شما از محدودیت دانلود کتاب (کلا $ 2 $ بار برای کاربر عادی) استفاده کرده‌اید. لطفا از منوی اصلی VIP تهیه کنید.",
+                text="❌ شما از محدودیت دانلود کتاب (کلا $4$ بار برای کاربر عادی) استفاده کرده‌اید. لطفا از منوی اصلی VIP تهیه کنید.",
             )
             return
 
-        index = int(data.split("_")[1])
-        state_data = get_state(chat_id)
-        books = state_data.get("books", [])
+        try:
+            index = int(data.split("_")[1])
+            state_data = get_state(chat_id)
+            books = state_data.get("books", [])
 
-        if index >= len(books):
-            await context.bot.send_message(
-                chat_id, "❌ خطای سیستمی. لطفا دوباره جستجو کنید."
-            )
-            return
+            if not (0 <= index < len(books)):
+                await context.bot.send_message(
+                    chat_id, "❌ خطای سیستمی. لطفا دوباره جستجو کنید."
+                )
+                return
 
-        selected_book = books[index]
-
-        status_msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text="⏳ در حال آماده‌سازی و آپلود فایل PDF. لطفاً صبور باشید...",
-        )
-
-        # دریافت فایل PDF از سرویس دانلود
-        pdf_file = await download_book_pdf(selected_book)
-
-        if pdf_file:
-            # ثبت یک بار دانلود در دیتابیس
-            increment_book_download_count(chat_id)
-
-            caption = f"📕 **عنوان:** {selected_book['title']}\n👤 **نویسنده:** {selected_book['author']}"
-
-            # آپلود فایل برای کاربر
-            await context.bot.send_document(
+            selected_book = books[index]
+            status_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                document=pdf_file,
-                caption=caption,
-                parse_mode="Markdown",
+                text=f"✅ درخواست دانلود کتاب '{selected_book['title']}' به صف اضافه شد. به محض آماده شدن، فایل برای شما ارسال خواهد شد.",
             )
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text("❌ متاسفانه در دانلود این کتاب مشکلی پیش آمد.")
+
+            job = {
+                "chat_id": chat_id,
+                "book_data": selected_book,
+                "status_msg_id": status_msg.message_id,
+            }
+            await download_queue.put(job)
+        except (ValueError, IndexError):
+            await context.bot.send_message(chat_id, "❌ درخواست نامعتبر است.")
+        except Exception as e:
+            print(f"Error in inline_buttons_handler: {e}")
+            await context.bot.send_message(
+                chat_id, "❌ خطایی در ثبت درخواست شما رخ داد."
+            )
