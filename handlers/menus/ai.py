@@ -4,9 +4,12 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_BACK
 from core.keyboards import get_ai_menu_keyboard
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     await update.message.reply_text(
         "🤖 به بخش هوش مصنوعی خوش آمدید!\nلطفاً یک گزینه را انتخاب کنید 👇",
         reply_markup=get_ai_menu_keyboard(),
@@ -14,6 +17,9 @@ async def btn_ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_ai_chat_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
+
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_ai_chat")
     await update.message.reply_text(
@@ -25,6 +31,8 @@ async def btn_ai_chat_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_ai_ocr_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_ai_ocr")
     await update.message.reply_text(
@@ -36,6 +44,8 @@ async def btn_ai_ocr_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_ai_tts_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_ai_tts")
     await update.message.reply_text(
@@ -47,6 +57,8 @@ async def btn_ai_tts_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_ai_image_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_ai_image")
     await update.message.reply_text(

@@ -8,9 +8,12 @@ from core.state_manager import set_state
 from core.constants import BTN_BACK
 from core.keyboards import get_youtube_menu_keyboard
 from core.database import get_setting, get_top_cached_videos
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     if get_setting("youtube_enabled", "1") == "0":
         await update.message.reply_text(
             "❌ بخش یوتیوب فعلاً توسط ادمین غیرفعال شده است."
@@ -24,6 +27,8 @@ async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_yt_last5_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_yt_last5_channel")
     await update.message.reply_text(
@@ -35,6 +40,8 @@ async def btn_yt_last5_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_yt_ch_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_yt_ch_search_name")
     await update.message.reply_text(
@@ -46,6 +53,8 @@ async def btn_yt_ch_search_req(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def btn_yt_global_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_yt_global_search")
     await update.message.reply_text(
@@ -57,6 +66,8 @@ async def btn_yt_global_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_yt_link_vid_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_yt_link", format="video")
     await update.message.reply_text(
@@ -68,6 +79,8 @@ async def btn_yt_link_vid_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_yt_link", format="audio")
     await update.message.reply_text(
@@ -79,6 +92,8 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     top_videos = get_top_cached_videos(4)
 
     if not top_videos:

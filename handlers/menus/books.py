@@ -8,9 +8,12 @@ from core.keyboards import get_article_menu_keyboard, get_main_menu_article
 from core.state_manager import get_state, set_state
 from handlers.commands import cmd_start
 from services.book.queue_manager import download_queue
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_book_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
 
     await update.message.reply_text(
         "به بخش کتاب و مقاله خوش آمدید:", reply_markup=get_main_menu_article()
@@ -18,11 +21,16 @@ async def btn_book_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_back_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
 
     await cmd_start(update, context)
 
 
 async def btn_article_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
+
     text = (
         "📚 **به بخش جستجوی مقالات خوش آمدید!**\n\n"
         "💡 **راهنمای جستجو:**\n"
@@ -36,6 +44,8 @@ async def btn_article_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_search_doi_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_article_doi")
 
@@ -58,6 +68,8 @@ async def btn_search_doi_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def btn_search_name_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_article_name")
     await update.message.reply_text(
@@ -70,6 +82,8 @@ async def btn_search_name_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- تابع جدید برای دکمه تولید رفرنس ---
 async def btn_citation_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
 
     set_state(chat_id, "waiting_article_citation_doi")
@@ -92,6 +106,8 @@ async def btn_citation_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- تابع جدید برای دکمه چکیده هوشمند ---
 async def btn_smart_abstract_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
 
     set_state(chat_id, "waiting_article_smart_abstract_doi")
@@ -118,6 +134,8 @@ async def btn_smart_abstract_req(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def btn_bibtex_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
 
     set_state(chat_id, "waiting_article_bibtex_doi")
@@ -132,6 +150,8 @@ async def btn_bibtex_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_book_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_article_book_name")
     await update.message.reply_text(
@@ -143,6 +163,8 @@ async def btn_book_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def inline_buttons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     query = update.callback_query
     await query.answer()
     chat_id = str(query.message.chat.id)

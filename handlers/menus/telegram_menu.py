@@ -1,8 +1,11 @@
 from core.state_manager import set_state
 from core.keyboards import get_telegram_menu_keyboard
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_telegram_menu(update, context):
+    if not await ensure_membership(update, context):
+        return
     await update.message.reply_text(
         "به منوی تلگرام خوش آمدید. یک گزینه را انتخاب کنید:",
         reply_markup=get_telegram_menu_keyboard(),
@@ -10,6 +13,8 @@ async def btn_telegram_menu(update, context):
 
 
 async def btn_tg_single_req(update, context):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_tg_single")
     await update.message.reply_text(
@@ -18,6 +23,8 @@ async def btn_tg_single_req(update, context):
 
 
 async def btn_tg_latest_req(update, context):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_tg_latest")
     await update.message.reply_text(

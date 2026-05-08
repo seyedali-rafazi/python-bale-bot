@@ -147,10 +147,6 @@ async def check_membership_middleware(update, context):
 
 
 def register_all_handlers(application):
-    # این خط باعث می‌شود قبل از هر دستوری، جوین اجباری چک شود (گروه 1-)
-    application.add_handler(
-        MessageHandler(filters.ALL, check_membership_middleware), group=-1
-    )
 
     # دستورات ادمین
     application.add_handler(CommandHandler("stats", cmd_stats))
