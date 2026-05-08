@@ -97,55 +97,6 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
-async def check_membership_middleware(update, context):
-    if not update.effective_user or not update.message:
-        return
-
-    user_id = update.effective_user.id
-
-    # اگر آیدی کانال تنظیم نشده بود، کاری نکن
-    if not CHANNEL_ID:
-        return
-
-    # ==========================================
-    # برای غیرفعال کردن موقتِ کل قفل کانال (تا زمان رفع اختلال سرور)،
-    # کافیست علامت # را از ابتدای خط زیر بردارید:
-    # return
-    # ==========================================
-
-    # --- بخش کش کردن (فعلاً کامنت شده است) ---
-    # last_check_time = context.user_data.get("last_membership_check", 0)
-    # current_time = time.time()
-    #
-    # if current_time - last_check_time < 86400:
-    #     return  # کاربر قبلاً تایید شده است، ادامه کار ربات
-    # -----------------------------------------
-
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            # --- بخش ذخیره در کش (فعلاً کامنت شده است) ---
-            # context.user_data["last_membership_check"] = time.time()
-            # ---------------------------------------------
-
-            return  # ادامه کار ربات
-
-    except Exception as e:
-        # اگر خطایی رخ داد (مثلا سرور مشکل داشت)
-        print(f"Membership check failed (ignored): {e}")
-        return
-
-    # اگر کاربر عضو نبود (یا سرور به اشتباه گفت عضو نیست)
-    keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
-    await update.message.reply_text(
-        "🛑 کاربر عزیز، برای استفاده از ربات حتماً باید در کانال ما عضو شوید.\n\n"
-        "پس از عضویت در کانال، لطفاً دستور /start را برای ربات ارسال کنید.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    # متوقف کردن ادامه پردازش
-    raise ApplicationHandlerStop()
-
-
 def register_all_handlers(application):
 
     # دستورات ادمین
