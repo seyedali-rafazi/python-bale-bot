@@ -5,3 +5,6 @@ testMainPooling.py
 testMainWbhook.py
 .env.test
 .env.production
+my-telegram-research.session
+my_bale1_bot_session.session
+ai-session-name.session

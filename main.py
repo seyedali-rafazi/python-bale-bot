@@ -1,5 +1,4 @@
 # main.py
-
 import logging
 import asyncio
 from telegram import Bot
@@ -8,9 +7,16 @@ from handlers import register_all_handlers
 import os
 import time
 from dotenv import load_dotenv
-from core.database import init_db
+
+# ایمپورت‌های مربوط به دیتابیس، صف دانلود و سرویس‌ها
+from core.database import init_db, increment_book_download_count
 from services.book.queue_manager import download_queue
 from services.book.book_service import download_book_pdf
+
+# === ایمپورت‌های جدید برای مدیریت چرخه عمر کلاینت Telethon ===
+from services.ai_abstract import startup_telethon_client, shutdown_telethon_client
+from services.research import startup_research_client, shutdown_research_client
+
 
 load_dotenv()
 BALE_TOKEN = os.getenv("BALE_TOKEN")
@@ -42,8 +48,8 @@ async def cleanup_old_downloads(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def download_worker(bot: Bot):
-    """پردازشگر صف دانلود: درخواست‌ها را از صف برداشته و 처리 می‌کند."""
-    logger.info("Download worker started.")
+    """پردازشگر صف دانلود: درخواست‌ها را از صف برداشته و پردازش می‌کند."""
+    logger.info("✅ Download worker started and is waiting for jobs.")
     while True:
         try:
             job = await download_queue.get()
@@ -63,8 +69,6 @@ async def download_worker(bot: Bot):
             pdf_file = await download_book_pdf(book_data)
 
             if pdf_file:
-                from core.database import increment_book_download_count
-
                 increment_book_download_count(chat_id)
                 caption = f"📕 **عنوان:** {book_data['title']}\n👤 **نویسنده:** {book_data['author']}"
                 await bot.edit_message_text(
@@ -86,18 +90,38 @@ async def download_worker(bot: Bot):
                     text="❌ متاسفانه در دانلود این کتاب مشکلی پیش آمد. لطفا دوباره تلاش کنید.",
                 )
         except Exception as e:
-            logger.error(f"Error in download worker: {e}")
+            logger.error(f"Error in download worker for chat {job.get('chat_id')}: {e}")
+            # Optionally, inform the user about the failure
+            if job and job.get("chat_id") and job.get("status_msg_id"):
+                await bot.edit_message_text(
+                    chat_id=job.get("chat_id"),
+                    message_id=job.get("status_msg_id"),
+                    text="❌ یک خطای غیرمنتظره در پردازش درخواست شما رخ داد. لطفا بعدا تلاش کنید.",
+                )
         finally:
             download_queue.task_done()
 
 
 async def post_init(application: Application):
-    """تابعی که پس از راه‌اندازی برنامه اجرا می‌شود تا پردازشگر صف را استارت بزند."""
+    logger.info("Running post-initialization tasks...")
     asyncio.create_task(download_worker(application.bot))
+
+    # روشن کردن هر دو کلاینت تلگرام (AI و Scihub)
+    await startup_telethon_client()
+    await startup_research_client()
+
+
+async def post_shutdown(application: Application):
+    logger.info("Running pre-shutdown tasks...")
+
+    # خاموش کردن امن هر دو کلاینت
+    await shutdown_telethon_client()
+    await shutdown_research_client()
 
 
 def main():
     init_db()
+
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)

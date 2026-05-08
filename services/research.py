@@ -1,26 +1,46 @@
 # services/research.py
 
+
 import os
 import re
-import requests
+import aiohttp
 import asyncio
 from telethon import TelegramClient
 from dotenv import load_dotenv
 
+
 load_dotenv()
-API_ID = os.getenv("API_ID")
+API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
-SESSION_NAME = os.getenv("SESSION_NAME")
+SESSION_NAME = os.getenv("RESEARCH_SESSION_NAME")
 SCIHUB_BOT_USERNAME = os.getenv("SCIHUB_BOT_USERNAME")
 
-download_lock = None
+# کلاینت دائمی برای سای‌هاب
+scihub_client: TelegramClient | None = None
+# قفل برای جلوگیری از تداخل دانلود کاربران
+scihub_lock = asyncio.Lock()
+
+
+async def startup_research_client():
+    global scihub_client
+    if not all([API_ID, API_HASH, SESSION_NAME]):
+        return
+    scihub_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    try:
+        await scihub_client.start()
+    except Exception as e:
+        print(f"❌ Research Client Error: {e}")
+        scihub_client = None
+
+
+async def shutdown_research_client():
+    global scihub_client
+    if scihub_client and scihub_client.is_connected():
+        await scihub_client.disconnect()
 
 
 def clean_doi(doi: str) -> str:
-    if not doi:
-        return ""
-    doi = re.sub(r"^(https?://)?(dx\.)?doi\.org/", "", doi).strip()
-    return doi
+    return re.sub(r"^(https?://)?(dx\.)?doi\.org/", "", doi or "").strip()
 
 
 def format_openalex_item(item) -> dict:
@@ -62,7 +82,7 @@ def format_openalex_item(item) -> dict:
     }
 
 
-def search_article_by_name(query, page=1, min_year=None, sort_by="relevance"):
+async def search_article_by_name(query, page=1, min_year=None, sort_by="relevance"):
     url = "https://api.openalex.org/works"
     params = {"search": query, "per-page": 5, "page": page}
     if sort_by == "citation":
@@ -72,27 +92,32 @@ def search_article_by_name(query, page=1, min_year=None, sort_by="relevance"):
     headers = {"User-Agent": "BaleBot/1.0"}
 
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        results = [
-            format_openalex_item(item)
-            for item in data.get("results", [])
-            if format_openalex_item(item)
-        ]
-        return results
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, params=params, headers=headers) as response:
+                response.raise_for_status()
+                data = await response.json()
+                results = [
+                    format_openalex_item(item)
+                    for item in data.get("results", [])
+                    if format_openalex_item(item)
+                ]
+                return results
     except Exception as e:
         print(f"Error searching OpenAlex: {e}")
         return []
 
 
-def search_article_by_doi(doi_input: str) -> list:
+async def search_article_by_doi(doi_input: str) -> list:
     doi_clean = clean_doi(doi_input)
     url = f"https://api.openalex.org/works/https://doi.org/{doi_clean}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return [format_openalex_item(response.json())]
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return [format_openalex_item(data)]
     except Exception as e:
         print(f"Error fetching DOI from OpenAlex: {e}")
     return []
@@ -101,32 +126,36 @@ def search_article_by_doi(doi_input: str) -> list:
 # --- توابع جدید برای منابع جایگزین ---
 
 
-def get_unpaywall_pdf(doi: str) -> str:
+async def get_unpaywall_pdf(doi: str) -> str:
     """دریافت لینک PDF از API رایگان Unpaywall"""
     email = "your_email@example.com"  # بهتر است ایمیل واقعی خود را اینجا قرار دهید
     url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("best_oa_location"):
-                return data["best_oa_location"].get("url_for_pdf")
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("best_oa_location"):
+                        return data["best_oa_location"].get("url_for_pdf")
     except:
         pass
     return None
 
 
-def get_semanticscholar_pdf(doi: str) -> str:
+async def get_semanticscholar_pdf(doi: str) -> str:
     """دریافت لینک PDF از API رایگان Semantic Scholar"""
     url = (
         f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=openAccessPdf"
     )
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("openAccessPdf"):
-                return data["openAccessPdf"].get("url")
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("openAccessPdf"):
+                        return data["openAccessPdf"].get("url")
     except:
         pass
     return None
@@ -145,67 +174,60 @@ async def download_direct_pdf(url: str, doi_or_name: str) -> str:
         file_path = f"downloads/{safe_name}_direct.pdf"
 
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=15, stream=True)
-        content_type = response.headers.get("Content-Type", "").lower()
+        timeout = aiohttp.ClientTimeout(total=15)
 
-        if response.status_code == 200 and "application/pdf" in content_type:
-            with open(file_path, "wb") as f:
-                for chunk in response.iter_content(1024):
-                    if chunk:
-                        f.write(chunk)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as response:
+                content_type = response.headers.get("Content-Type", "").lower()
 
-            if (
-                os.path.exists(file_path) and os.path.getsize(file_path) > 10240
-            ):  # حجم بیشتر از 10 کیلوبایت
-                return file_path
-            else:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                return None
+                if response.status == 200 and "application/pdf" in content_type:
+                    # دانلود فایل به صورت chunk-by-chunk بدون بلاک کردن Event Loop
+                    with open(file_path, "wb") as f:
+                        async for chunk in response.content.iter_chunked(1024):
+                            f.write(chunk)
+
+                    if os.path.exists(file_path) and os.path.getsize(file_path) > 10240:
+                        return file_path
+                    else:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        return None
     except Exception as e:
         print(f"Error downloading direct PDF from {url}: {e}")
     return None
 
 
 async def download_pdf_via_telegram(doi_input: str) -> str:
-    """دریافت از طریق ربات تلگرامی Sci-Hub"""
-    global download_lock
-    if download_lock is None:
-        download_lock = asyncio.Lock()
-
+    global scihub_client
     doi = clean_doi(doi_input)
-    if not doi:
+    if not doi or not scihub_client or not scihub_client.is_connected():
         return None
 
-    async with download_lock:
-        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-        await client.connect()
-
-        if not await client.is_user_authorized():
-            print("⚠️ خطا: اکانت تلگرام لاگین نیست.")
-            await client.disconnect()
-            return None
-
+    # قفل کردن سیستم دانلود سای‌هاب برای هر کاربر (صف انتظار)
+    async with scihub_lock:
         downloaded_file_path = None
         try:
-            await client.delete_dialog(SCIHUB_BOT_USERNAME)
-            await client.send_message(SCIHUB_BOT_USERNAME, doi)
-            await asyncio.sleep(12)  # افزایش زمان به 12 ثانیه برای اطمینان
+            # پاک کردن چت برای جلوگیری از تداخل با پیام‌های قدیمی
+            await scihub_client.delete_dialog(SCIHUB_BOT_USERNAME)
 
-            messages = await client.get_messages(SCIHUB_BOT_USERNAME, limit=3)
-            for msg in messages:
-                if msg.file and msg.file.ext == ".pdf":
-                    os.makedirs("downloads", exist_ok=True)
-                    safe_name = doi.replace("/", "_").replace("\\", "_")
-                    file_path = f"downloads/{safe_name}.pdf"
+            sent_msg = await scihub_client.send_message(SCIHUB_BOT_USERNAME, doi)
 
-                    await client.download_media(message=msg, file=file_path)
-                    downloaded_file_path = file_path
-                    break
+            # انتظار تا ۳۰ ثانیه برای دریافت فایل
+            for _ in range(15):
+                await asyncio.sleep(2)
+                messages = await scihub_client.get_messages(
+                    SCIHUB_BOT_USERNAME, min_id=sent_msg.id
+                )
+
+                for msg in messages:
+                    if msg.file and msg.file.ext == ".pdf":
+                        os.makedirs("downloads", exist_ok=True)
+                        safe_name = doi.replace("/", "_").replace("\\", "_")
+                        file_path = f"downloads/{safe_name}.pdf"
+                        await scihub_client.download_media(message=msg, file=file_path)
+                        return file_path
         except Exception as e:
             print(f"Error in Telegram fetch: {e}")
-        finally:
-            await client.disconnect()
 
         return downloaded_file_path
 
@@ -213,7 +235,6 @@ async def download_pdf_via_telegram(doi_input: str) -> str:
 async def smart_download_pdf(article: dict, status_message) -> str:
     """
     مدیریت هوشمند و چندلایه‌ی دانلود مقاله همراه با اطلاع‌رسانی به کاربر.
-    status_message: شیء پیامی است که با await status_message.edit_text آپدیت می‌شود.
     """
     doi = article.get("doi")
     is_oa = article.get("is_oa")
@@ -236,7 +257,7 @@ async def smart_download_pdf(article: dict, status_message) -> str:
 
     # 2. تلاش دوم: Unpaywall
     await status_message.edit_text("🔍 تلاش دوم: جستجو در پایگاه Unpaywall...")
-    unpaywall_url = get_unpaywall_pdf(doi)
+    unpaywall_url = await get_unpaywall_pdf(doi)
     if unpaywall_url:
         file_path = await download_direct_pdf(unpaywall_url, doi)
         if file_path:
@@ -244,7 +265,7 @@ async def smart_download_pdf(article: dict, status_message) -> str:
 
     # 3. تلاش سوم: Semantic Scholar
     await status_message.edit_text("🔍 تلاش سوم: جستجو در پایگاه Semantic Scholar...")
-    semantic_url = get_semanticscholar_pdf(doi)
+    semantic_url = await get_semanticscholar_pdf(doi)
     if semantic_url:
         file_path = await download_direct_pdf(semantic_url, doi)
         if file_path:
@@ -265,41 +286,41 @@ async def smart_download_pdf(article: dict, status_message) -> str:
     return None
 
 
-def get_article_data_for_citation(doi_input: str) -> dict:
+async def get_article_data_for_citation(doi_input: str) -> dict:
     """دریافت اطلاعات مقاله از OpenAlex برای تولید رفرنس"""
     doi_clean = clean_doi(doi_input)
     url = f"https://api.openalex.org/works/https://doi.org/{doi_clean}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
 
-            title = data.get("title", "Unknown Title")
-            year = str(data.get("publication_year", "Unknown Year"))
-            doi_val = clean_doi(data.get("doi", ""))
+                    title = data.get("title", "Unknown Title")
+                    year = str(data.get("publication_year", "Unknown Year"))
+                    doi_val = clean_doi(data.get("doi", ""))
 
-            # استخراج نام ژورنال
-            journal = "Unknown Journal"
-            primary_location = data.get("primary_location")
-            if primary_location and primary_location.get("source"):
-                journal = primary_location["source"].get(
-                    "display_name", "Unknown Journal"
-                )
+                    journal = "Unknown Journal"
+                    primary_location = data.get("primary_location")
+                    if primary_location and primary_location.get("source"):
+                        journal = primary_location["source"].get(
+                            "display_name", "Unknown Journal"
+                        )
 
-            # استخراج لیست نویسندگان
-            authors_list = []
-            for authorship in data.get("authorships", []):
-                author_name = authorship.get("author", {}).get("display_name")
-                if author_name:
-                    authors_list.append(author_name)
+                    authors_list = []
+                    for authorship in data.get("authorships", []):
+                        author_name = authorship.get("author", {}).get("display_name")
+                        if author_name:
+                            authors_list.append(author_name)
 
-            return {
-                "title": title,
-                "year": year,
-                "doi": doi_val,
-                "journal": journal,
-                "authors_list": authors_list,
-            }
+                    return {
+                        "title": title,
+                        "year": year,
+                        "doi": doi_val,
+                        "journal": journal,
+                        "authors_list": authors_list,
+                    }
     except Exception as e:
         print(f"Error fetching data for citation: {e}")
 

@@ -1,86 +1,94 @@
 # services/ai_abstract.py
 
 import os
-import requests
 import asyncio
+import aiohttp
 from telethon import TelegramClient
 from dotenv import load_dotenv
 from .research import clean_doi
 
 load_dotenv()
+
 CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME")
-API_ID = int(os.getenv("API_ID", 0))  # API_ID باید عدد صحیح باشد
+API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
-SESSION_NAME = os.getenv("SESSION_NAME")
+SESSION_NAME = os.getenv("AI_SESSION_NAME")
 
-chatgpt_lock = None
+telethon_client: TelegramClient | None = None
+chatgpt_lock = asyncio.Lock()
 
 
-def get_abstract_from_openalex(doi_input: str) -> str:
-    """استخراج چکیده مقاله از openalex"""
+async def startup_telethon_client():
+    global telethon_client
+    if not all([API_ID, API_HASH, SESSION_NAME]):
+        return
+    telethon_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    try:
+        await telethon_client.start()
+    except Exception as e:
+        print(f"❌ AI Client Error: {e}")
+        telethon_client = None
+
+
+async def shutdown_telethon_client():
+    global telethon_client
+    if telethon_client and telethon_client.is_connected():
+        await telethon_client.disconnect()
+
+
+async def get_abstract_from_openalex(doi_input: str) -> str | None:
     doi_clean = clean_doi(doi_input)
     url = f"https://api.openalex.org/works/https://doi.org/{doi_clean}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            item = response.json()
-            idx = item.get("abstract_inverted_index", {})
-            if not idx:
-                return None
-            # بازسازی متن چکیده از ایندکس‌های معکوس
-            words = []
-            for word, positions in idx.items():
-                for pos in positions:
-                    words.append((pos, word))
-            words.sort(key=lambda x: x[0])
-            return " ".join([w[1] for w in words])
-    except Exception as e:
-        print(f"Error fetching abstract: {e}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    item = await response.json()
+                    idx = item.get("abstract_inverted_index", {})
+                    if not idx:
+                        return None
+                    words = sorted(
+                        (
+                            (pos, word)
+                            for word, positions in idx.items()
+                            for pos in positions
+                        ),
+                        key=lambda x: x[0],
+                    )
+                    return " ".join([w[1] for w in words])
+    except:
+        pass
     return None
 
 
 async def analyze_abstract_with_ai(abstract_text: str) -> str:
-    """ارسال چکیده به ربات هوش مصنوعی با صف‌بندی کاربران و نادیده گرفتن استیکر/پیام کوتاه"""
-    global chatgpt_lock
-    if chatgpt_lock is None:
-        chatgpt_lock = asyncio.Lock()
+    if not telethon_client or not telethon_client.is_connected():
+        return "⚠️ سرویس موقتا در دسترس نیست."
 
-    # این بلوک یک صف تشکیل می‌دهد. نفرات بعدی اینجا منتظر می‌مانند تا قفل باز شود
+    # قفل کردن برای پردازش نفر به نفر
     async with chatgpt_lock:
-        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-        await client.connect()
-
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            return "⚠️ خطا: اکانت تلگرام سرور لاگین نیست."
-
         try:
-            prompt = (
-                "لطفا این چکیده علمی را به طور کامل تحلیل کن و نکات کلیدی آن را بیان کن. "
-                "نکته بسیار مهم: در انتهای پاسخ خود به هیچ وجه سوالی نپرس (مانند «آیا جزئیات بیشتری می‌خواهید؟» یا «آیا کمک دیگری نیاز دارید؟») "
-                f"و فقط و فقط متن تحلیل را به صورت مستقیم ارائه بده:\n\n{abstract_text}"
-            )
+            prompt = f"لطفا این چکیده علمی را تحلیل کن و فقط متن تحلیل را بده بدون هیچ سوال اضافه‌ای:\n\n{abstract_text}"
 
-            await client.send_message(CHATGPT_BOT_USERNAME, prompt)
+            # ارسال پیام و دریافت آیدی آن
+            sent_msg = await telethon_client.send_message(CHATGPT_BOT_USERNAME, prompt)
 
-            # منتظر ماندن برای دریافت پاسخ نهایی
-            for _ in range(20):  # حداکثر 20 بار چک میکند (حدود دو دقیقه)
-                await asyncio.sleep(6)
-                messages = await client.get_messages(CHATGPT_BOT_USERNAME, limit=2)
+            for _ in range(25):
+                await asyncio.sleep(5)
+                # فقط پیام‌هایی که بعد از پیام ما ارسال شده‌اند را می‌گیرد
+                messages = await telethon_client.get_messages(
+                    CHATGPT_BOT_USERNAME, min_id=sent_msg.id
+                )
 
-                if not messages:
-                    continue
+                for msg in messages:
+                    if (
+                        msg.text
+                        and not msg.out
+                        and not msg.sticker
+                        and len(msg.text.strip()) > 20
+                    ):
+                        return msg.text
 
-                latest_msg = messages[0]
-
-                # اگر پیام متنی بود، متعلق به خودمان نبود، استیکر نبود و طول آن بیشتر از 20 کاراکتر بود
-                if latest_msg.text and not latest_msg.out and not latest_msg.sticker:
-                    if len(latest_msg.text.strip()) > 20:
-                        return latest_msg.text
-
-            return "❌ زمان انتظار برای تحلیل پایان یافت یا ربات مبدا پاسخی نداد."
+            return "❌ زمان انتظار پایان یافت."
         except Exception as e:
-            print(f"Error in AI abstract analysis: {e}")
-            return "❌ خطا در برقراری ارتباط با هوش مصنوعی."
-        finally:
-            await client.disconnect()
+            return "❌ خطا در برقراری ارتباط."

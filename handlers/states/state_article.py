@@ -110,7 +110,7 @@ async def handle_article_state(
     # ====== 1. پردازش دریافت DOI ======
     if step == "waiting_article_doi":
         await update.message.reply_text("⏳ در حال بررسی شناسه DOI...")
-        articles = search_article_by_doi(text)
+        articles = await search_article_by_doi(text)
         if not articles:
             await update.message.reply_text("❌ مقاله‌ای یافت نشد.")
             return
@@ -158,7 +158,7 @@ async def handle_article_state(
             sort_by = "citation"
 
         await update.message.reply_text("⏳ در حال جستجوی مقالات...")
-        articles = search_article_by_name(
+        articles = await search_article_by_name(
             query, page=1, min_year=min_year, sort_by=sort_by
         )
         if not articles:
@@ -187,7 +187,7 @@ async def handle_article_state(
         if text == BTN_NEXT_PAGE:
             page += 1
             await update.message.reply_text(f"⏳ در حال دریافت صفحه $ {page} $...")
-            articles = search_article_by_name(
+            articles = await search_article_by_name(
                 query, page=page, min_year=min_year, sort_by=sort_by
             )
             if not articles:
@@ -202,7 +202,7 @@ async def handle_article_state(
             if page > 1:
                 page -= 1
                 await update.message.reply_text(f"⏳ در حال دریافت صفحه $ {page} $...")
-                articles = search_article_by_name(
+                articles = await search_article_by_name(
                     query, page=page, min_year=min_year, sort_by=sort_by
                 )
                 await show_article_results(
@@ -270,7 +270,7 @@ async def handle_article_state(
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال دریافت اطلاعات مقاله...")
 
-        article_data = get_article_data_for_citation(doi_input)
+        article_data = await get_article_data_for_citation(doi_input)
         if not article_data:
             await update.message.reply_text("❌ مقاله‌ای با این DOI یافت نشد.")
             return
@@ -360,7 +360,7 @@ async def handle_article_state(
         doi_input = text.strip()
         await update.message.reply_text("⏳ در حال پردازش اطلاعات مقاله...")
 
-        bibtex_result = get_bibtex_from_openalex(doi_input)
+        bibtex_result = await get_bibtex_from_openalex(doi_input)
 
         if not bibtex_result:
             await update.message.reply_text(
