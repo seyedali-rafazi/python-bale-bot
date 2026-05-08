@@ -226,7 +226,7 @@ async def handle_article_state(
 
         if text.startswith("📥 دانلود مقاله "):
             try:
-                usage_today = get_book_download_count(chat_id, "download_article")
+                usage_today = get_book_download_count(chat_id)
 
                 if usage_today >= daily_limit:
                     await update.message.reply_text(get_limit_message(daily_limit))
@@ -334,7 +334,7 @@ async def handle_article_state(
 
     # ====== 6. تحلیل چکیده هوشمند ======
     if step == "waiting_article_smart_abstract_doi":
-        if get_book_download_count(chat_id, "smart_abstract") >= daily_limit:
+        if get_book_download_count(chat_id) >= daily_limit:
             await update.message.reply_text(get_limit_message(daily_limit))
             return
 

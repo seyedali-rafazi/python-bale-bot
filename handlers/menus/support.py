@@ -76,8 +76,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gh_count = get_gh_downloads(user_id)
 
     # دریافت آمار علمی جدید
-    article_dl_count = get_book_download_count(user_id, "download_article")
-    smart_abstract_count = get_book_download_count(user_id, "smart_abstract")
+    article_dl_count = get_book_download_count(user_id)
+    smart_abstract_count = get_book_download_count(user_id)
     citation_count = get_citation_count(user_id)
     book_dl_count = get_book_download_count(user_id)
 
