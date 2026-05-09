@@ -54,13 +54,13 @@ def upload_to_s3(file_path: str, object_name: str = None) -> str:
         endpoint_url=ARVAN_ENDPOINT,
         aws_access_key_id=ARVAN_ACCESS_KEY,
         aws_secret_access_key=ARVAN_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(signature_version="s3v4", max_pool_connections=50),
     )
 
     transfer_config = TransferConfig(
-        multipart_threshold=8 * 1024 * 1024,
-        max_concurrency=12,
-        multipart_chunksize=8 * 1024 * 1024,
+        multipart_threshold=5 * 1024 * 1024,
+        max_concurrency=10,
+        multipart_chunksize=5 * 1024 * 1024,
         use_threads=True,
     )
 
