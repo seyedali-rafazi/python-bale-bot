@@ -129,6 +129,7 @@ def main():
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
         .post_init(post_init)
+        .post_shutdown(post_shutdown)  # <--- این خط باید اضافه شود
         .build()
     )
 
