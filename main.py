@@ -1,4 +1,5 @@
 # main.py
+
 import logging
 import asyncio
 from telegram import Bot
@@ -20,8 +21,7 @@ from services.research import startup_research_client, shutdown_research_client
 
 load_dotenv()
 BALE_TOKEN = os.getenv("BALE_TOKEN")
-BALE_URL = os.getenv("BALE_URL")
-BALE_LISTENING_PORT = os.getenv("BALE_LISTENING_PORT")
+# در حالت پولینگ نیازی به BALE_URL و PORT نیست
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -91,7 +91,6 @@ async def download_worker(bot: Bot):
                 )
         except Exception as e:
             logger.error(f"Error in download worker for chat {job.get('chat_id')}: {e}")
-            # Optionally, inform the user about the failure
             if job and job.get("chat_id") and job.get("status_msg_id"):
                 await bot.edit_message_text(
                     chat_id=job.get("chat_id"),
@@ -128,6 +127,7 @@ def main():
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
         .post_init(post_init)
+        .post_shutdown(post_shutdown)  # اضافه شدن متد خاموش کردن
         .build()
     )
 
@@ -137,12 +137,10 @@ def main():
         )
 
     register_all_handlers(application)
-    logger.info("✅ ربات با صف دانلود و معماری بهینه راه‌اندازی شد...")
-    PORT = int(os.environ.get("PORT", BALE_LISTENING_PORT))
-    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
-    application.run_webhook(
-        listen="0.0.0.0", port=PORT, url_path=BALE_TOKEN, webhook_url=WEBHOOK_URL
-    )
+    logger.info("✅ ربات در حالت پولینگ (Polling) راه‌اندازی شد...")
+
+    # اجرای حالت پولینگ و نادیده گرفتن پیام‌های زمان خاموشی (جلوگیری از اسپم)
+    application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
