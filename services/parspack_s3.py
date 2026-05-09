@@ -59,7 +59,7 @@ def upload_to_s3(file_path: str, object_name: str = None) -> str:
 
     transfer_config = TransferConfig(
         multipart_threshold=8 * 1024 * 1024,
-        max_concurrency=5,
+        max_concurrency=12,
         multipart_chunksize=8 * 1024 * 1024,
         use_threads=True,
     )
