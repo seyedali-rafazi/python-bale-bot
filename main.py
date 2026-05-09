@@ -2,14 +2,8 @@
 
 import logging
 import asyncio
-from telegram import Bot, Update
-from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    ContextTypes,
-    TypeHandler,
-    ApplicationHandlerStop,
-)
+from telegram import Bot
+from telegram.ext import Application, ApplicationBuilder, ContextTypes
 from handlers import register_all_handlers
 import os
 import time
@@ -23,28 +17,17 @@ from services.book.book_service import download_book_pdf
 # === ایمپورت‌های جدید برای مدیریت چرخه عمر کلاینت Telethon ===
 from services.ai_abstract import startup_telethon_client, shutdown_telethon_client
 from services.research import startup_research_client, shutdown_research_client
-from datetime import datetime, timezone
 
 
 load_dotenv()
 BALE_TOKEN = os.getenv("BALE_TOKEN")
-# در حالت پولینگ نیازی به BALE_URL و PORT نیست
+BALE_URL = os.getenv("BALE_URL")
+BALE_LISTENING_PORT = os.getenv("BALE_LISTENING_PORT")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-
-# === تغییر جدید: تابع فیلتر پیام‌های قدیمی ===
-async def ignore_old_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نادیده گرفتن پیام‌هایی که قبل از ران شدن ربات ارسال شده‌اند"""
-    if update.message and update.message.date:
-        now = datetime.now(timezone.utc)
-        # اگر پیام برای بیشتر از ۶۰ ثانیه پیش بود، آن را پردازش نکن
-        if (now - update.message.date).total_seconds() > 60:
-            logger.info("Ignoring old message...")
-            raise ApplicationHandlerStop()  # متوقف کردن چرخه آپدیت برای این پیام
 
 
 async def cleanup_old_downloads(context: ContextTypes.DEFAULT_TYPE):
@@ -109,6 +92,7 @@ async def download_worker(bot: Bot):
                 )
         except Exception as e:
             logger.error(f"Error in download worker for chat {job.get('chat_id')}: {e}")
+            # Optionally, inform the user about the failure
             if job and job.get("chat_id") and job.get("status_msg_id"):
                 await bot.edit_message_text(
                     chat_id=job.get("chat_id"),
@@ -123,12 +107,15 @@ async def post_init(application: Application):
     logger.info("Running post-initialization tasks...")
     asyncio.create_task(download_worker(application.bot))
 
+    # روشن کردن هر دو کلاینت تلگرام (AI و Scihub)
     await startup_telethon_client()
     await startup_research_client()
 
 
 async def post_shutdown(application: Application):
     logger.info("Running pre-shutdown tasks...")
+
+    # خاموش کردن امن هر دو کلاینت
     await shutdown_telethon_client()
     await shutdown_research_client()
 
@@ -142,7 +129,6 @@ def main():
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
         .post_init(post_init)
-        .post_shutdown(post_shutdown)
         .build()
     )
 
@@ -151,13 +137,13 @@ def main():
             cleanup_old_downloads, interval=7200, first=10
         )
 
-    # === تغییر جدید: ثبت هندلر فیلتر پیام‌های قدیمی قبل از سایر هندلرها (group=-1) ===
-    application.add_handler(TypeHandler(Update, ignore_old_messages), group=-1)
-
     register_all_handlers(application)
-    logger.info("✅ ربات در حالت پولینگ (Polling) راه‌اندازی شد...")
-
-    application.run_polling(drop_pending_updates=True)
+    logger.info("✅ ربات با صف دانلود و معماری بهینه راه‌اندازی شد...")
+    PORT = int(os.environ.get("PORT", BALE_LISTENING_PORT))
+    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
+    application.run_webhook(
+        listen="0.0.0.0", port=PORT, url_path=BALE_TOKEN, webhook_url=WEBHOOK_URL
+    )
 
 
 if __name__ == "__main__":
