@@ -24,7 +24,7 @@ async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_vip:
         await update.message.reply_text(
-            "به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro  میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید ."
+            "❌ به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro  میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید .❌"
         )
         return
 

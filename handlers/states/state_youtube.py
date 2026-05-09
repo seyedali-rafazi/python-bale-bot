@@ -41,7 +41,7 @@ except ImportError:
 
 
 MAX_NORMAL_DOWNLOADS = 1
-MAX_VIP_DOWNLOADS = 3
+MAX_VIP_DOWNLOADS = 4
 
 normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
 vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
