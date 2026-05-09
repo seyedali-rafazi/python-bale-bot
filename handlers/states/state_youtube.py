@@ -764,7 +764,12 @@ async def youtube_destination_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
     query = update.callback_query
-    await query.answer()
+
+    # جلوگیری از ارور تایم‌اوت شبکه
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"⚠️ Error answering callback query: {e}")
 
     data = query.data
     chat_id = str(query.message.chat_id)

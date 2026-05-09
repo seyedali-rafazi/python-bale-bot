@@ -48,7 +48,12 @@ async def btn_buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # این تابع زمانی فراخوانی می‌شود که کاربر دکمه پذیرش را می‌زند
 async def handle_tos_acceptance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # پایان حالت لودینگ دکمه
+
+    # پایان حالت لودینگ دکمه به همراه مدیریت خطا
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"⚠️ Error answering callback query: {e}")
 
     chat_id = update.effective_chat.id
 

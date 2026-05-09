@@ -165,8 +165,15 @@ async def btn_book_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def inline_buttons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
+
     query = update.callback_query
-    await query.answer()
+
+    # جلوگیری از ارور تایم‌اوت شبکه
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"⚠️ Error answering callback query: {e}")
+
     chat_id = str(query.message.chat.id)
     data = query.data
 
