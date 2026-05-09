@@ -251,7 +251,6 @@ def register_all_handlers(application):
             filters.Regex(f"^{re.escape(BTN_BOOK_SEARCH)}$"), btn_book_search_req
         )
     )
-    application.add_handler(CallbackQueryHandler(inline_buttons_handler))
 
     # هندلرهای منوی برنامه‌نویسی
     application.add_handler(
@@ -373,10 +372,26 @@ def register_all_handlers(application):
             filters.Regex(f"^{re.escape(BTN_GH_SEARCH)}$"), btn_gh_search_req
         )
     )
+
+    # هندلر های پرداخت
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_BUY_VIP)}$"), btn_buy_vip)
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_tos_acceptance, pattern="^accept_tos$")
+    )
+    application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    application.add_handler(
+        MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
+    )
+
     # هندلر پشتیبانی
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)
     )
+
+    application.add_handler(CallbackQueryHandler(inline_buttons_handler))
+
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
     )
