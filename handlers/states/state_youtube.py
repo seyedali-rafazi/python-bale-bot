@@ -40,8 +40,8 @@ except ImportError:
     upload_to_s3 = None
 
 
-MAX_NORMAL_DOWNLOADS = 2
-MAX_VIP_DOWNLOADS = 2
+MAX_NORMAL_DOWNLOADS = 1
+MAX_VIP_DOWNLOADS = 3
 
 normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
 vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
