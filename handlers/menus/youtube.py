@@ -7,13 +7,27 @@ from telegram.error import RetryAfter
 from core.state_manager import set_state
 from core.constants import BTN_BACK
 from core.keyboards import get_youtube_menu_keyboard
-from core.database import get_setting, get_top_cached_videos
+from core.database import get_setting, get_top_cached_videos, get_user_info
 from handlers.ensure_membership import ensure_membership
 
 
 async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
+
+    # دریافت اطلاعات کاربر از دیتابیس
+    user_id = update.effective_user.id
+    user_info = get_user_info(user_id)
+
+    # بررسی VIP بودن (is_vip در ایندکس 1 خروجی دیتابیس است)
+    is_vip = user_info[1] if user_info else 0
+
+    if not is_vip:
+        await update.message.reply_text(
+            "به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro  میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید ."
+        )
+        return
+
     if get_setting("youtube_enabled", "1") == "0":
         await update.message.reply_text(
             "❌ بخش یوتیوب فعلاً توسط ادمین غیرفعال شده است."
