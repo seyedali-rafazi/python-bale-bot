@@ -1,5 +1,3 @@
-# services/ai.py (فایل جدید)
-
 # services/ai.py
 
 import os
@@ -9,32 +7,74 @@ import asyncio
 import aiohttp
 from dotenv import load_dotenv
 from gtts import gTTS
-from openai import AsyncOpenAI  # اضافه شدن OpenAI ناهمگام
+from telethon import TelegramClient
 
 load_dotenv()
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
 
-# تنظیم کلاینت GapGPT
-GAPGPT_API_KEY = os.getenv(
-    "GAPGPT_API_KEY", "sk-SRgmKMz7SSBb3K2oLcEww6mgJYk86ZU6w5weK78O9Cju4bMR"
-)
-try:
-    ai_client = AsyncOpenAI(
-        base_url="https://api.gapgpt.app/v1", api_key=GAPGPT_API_KEY
-    )
-except Exception as e:
-    print(f"Error configuring GapGPT: {e}")
+# تنظیمات Telethon
+CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME")
+API_ID = int(os.getenv("API_ID", 0))
+API_HASH = os.getenv("API_HASH")
+SESSION_NAME = os.getenv("AI_SESSION_NAME", "SESSION_NAME")
+
+chatbot_lock = asyncio.Lock()
 
 
 async def ask_chatbot(text):
-    try:
-        # استفاده از متد AsyncOpenAI برای GapGPT
-        response = await ai_client.chat.completions.create(
-            model="gpt-chat-5.3-latest", messages=[{"role": "user", "content": text}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"❌ خطایی در ارتباط با هوش مصنوعی رخ داد: {e}"
+    """ارسال متن به ربات هوش مصنوعی از طریق Telethon با مدیریت وضعیت در حال تایپ/ادیت"""
+    async with chatbot_lock:
+        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return "⚠️ خطا: اکانت تلگرام سرور (یوزربات) لاگین نیست."
+
+        try:
+            # دستور سخت‌گیرانه برای عدم استفاده از تاریخچه
+            prompt = (
+                "این یک درخواست کاملاً مستقل است. به هیچ عنوان از پیام‌های قبلی به عنوان اطلاعات یا کانتکست استفاده نکن.\n"
+                f"متن درخواست:\n{text}"
+            )
+
+            await client.send_message(CHATGPT_BOT_USERNAME, prompt)
+
+            last_text = ""
+            stable_count = 0
+
+            # حلقه انتظار برای تکمیل پیام (حداکثر 40 بار چک کردن = حدود 2 دقیقه)
+            for _ in range(40):
+                await asyncio.sleep(3)
+                messages = await client.get_messages(CHATGPT_BOT_USERNAME, limit=2)
+
+                if not messages:
+                    continue
+
+                latest_msg = messages[0]
+
+                if latest_msg.text and not latest_msg.out and not latest_msg.sticker:
+                    current_text = latest_msg.text.strip()
+
+                    if len(current_text) > 10:
+                        # بررسی اینکه آیا متن دیگر تغییر نمی‌کند (پایان ادیت)
+                        if current_text == last_text:
+                            stable_count += 1
+                        else:
+                            stable_count = 0
+                            last_text = current_text
+
+                        # اگر 2 بار متوالی متن ثابت موند، یعنی پیام کامل شده است
+                        if stable_count >= 2:
+                            return current_text
+
+            return "❌ زمان انتظار پایان یافت یا ربات مبدا پاسخ را کامل نکرد."
+
+        except Exception as e:
+            print(f"Error in telethon AI chat: {e}")
+            return "❌ خطا در برقراری ارتباط با ربات هوش مصنوعی."
+        finally:
+            await client.disconnect()
 
 
 async def perform_ocr(image_bytes: bytes):
