@@ -3,7 +3,7 @@
 import asyncio
 import aiohttp
 from io import BytesIO
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
@@ -50,8 +50,6 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    media_group = []
-
     async with aiohttp.ClientSession() as session:
         # ۱۰ لینک اول را بررسی میکنیم
         tasks = [get_image_bytes(session, url) for url in images_urls[:10]]
@@ -59,17 +57,20 @@ async def handle_pinterest_state(
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
+    images_to_send = successful_images[:5]
 
-    if not media_group:
+    if not images_to_send:
         await msg.edit_text("❌ خطا در دانلود تصاویر. کلمه دیگری تست کنید.")
         set_state(chat_id, "")
         return
 
     try:
         await msg.delete()
-        await context.bot.send_media_group(chat_id=chat_id, media=media_group)
+
+        # تغییر جدید: ارسال عکس‌ها دونه به دونه
+        for img_bytes in images_to_send:
+            await context.bot.send_photo(chat_id=chat_id, photo=img_bytes)
+
         increment_pinterest_downloads(user_id)
 
         context.user_data["pin_images"] = images_urls
@@ -130,8 +131,6 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
-    media_group = []
-
     async with aiohttp.ClientSession() as session:
         # ۱۰ لینک بعدی را بررسی میکنیم
         tasks = [get_image_bytes(session, url) for url in images[index : index + 10]]
@@ -139,18 +138,18 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
+    images_to_send = successful_images[:5]
 
-    if not media_group:
+    if not images_to_send:
         await msg.edit_text("❌ تصاویر بعدی قابل دریافت نیستند.")
         return
 
     try:
         await msg.delete()
-        await context.bot.send_media_group(
-            chat_id=query.message.chat_id, media=media_group
-        )
+
+        # تغییر جدید: ارسال عکس‌ها دونه به دونه در بخش عکس‌های بیشتر
+        for img_bytes in images_to_send:
+            await context.bot.send_photo(chat_id=query.message.chat_id, photo=img_bytes)
 
         # اضافه شدن به شمارش مصرف کاربر
         increment_pinterest_downloads(user_id)
