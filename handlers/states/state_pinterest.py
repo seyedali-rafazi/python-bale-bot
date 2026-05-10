@@ -56,8 +56,7 @@ async def handle_pinterest_state(
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
-
-    images_to_send = successful_images[:5]
+    images_to_send = successful_images[:5]  # نهایتا ۵ عکس
 
     if not images_to_send:
         await msg.edit_text("❌ خطا در دانلود تصاویر. کلمه دیگری تست کنید.")
@@ -67,7 +66,7 @@ async def handle_pinterest_state(
     try:
         await msg.delete()
 
-        # تغییر جدید: ارسال عکس‌ها دونه به دونه
+        # ارسال دونه‌به‌دونه عکس‌ها
         for img_bytes in images_to_send:
             await context.bot.send_photo(chat_id=chat_id, photo=img_bytes)
 
@@ -87,7 +86,6 @@ async def handle_pinterest_state(
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
-            # تغییر جدید: اگر از همان سرچ اول عکس‌های کمی پیدا شده بود
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
@@ -124,7 +122,6 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     images = context.user_data.get("pin_images", [])
     index = context.user_data.get("pin_index", 0)
 
-    # تغییر جدید: پیام اتمام در صورت زدن دکمه اضافی
     if index >= len(images):
         await msg.edit_text(
             "✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید."
@@ -137,8 +134,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
-
-    images_to_send = successful_images[:5]
+    images_to_send = successful_images[:5]  # نهایتا ۵ عکس
 
     if not images_to_send:
         await msg.edit_text("❌ تصاویر بعدی قابل دریافت نیستند.")
@@ -147,7 +143,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     try:
         await msg.delete()
 
-        # تغییر جدید: ارسال عکس‌ها دونه به دونه در بخش عکس‌های بیشتر
+        # ارسال دونه‌به‌دونه عکس‌ها
         for img_bytes in images_to_send:
             await context.bot.send_photo(chat_id=query.message.chat_id, photo=img_bytes)
 
@@ -167,7 +163,6 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
-            # تغییر جدید: ارسال پیام اتمام وقتی که لیست عکس‌ها تمام شد
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
