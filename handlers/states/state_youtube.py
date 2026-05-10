@@ -33,6 +33,7 @@ from services.youtube import (
     split_video_if_needed,
 )
 from services.telegram_backup import download_from_telegram_bot
+from services.youtube import get_video_info
 
 try:
     from services.parspack_s3 import upload_to_s3
@@ -266,6 +267,25 @@ async def background_yt_download(
             await asyncio.to_thread(increment_yt_video_view, cache_key)
             return
 
+    # گرفتن اطلاعات ویدیو و ارسال تامنیل پیش از شروع
+    info = await asyncio.to_thread(get_video_info, url)
+    if info and info.get("thumbnail"):
+        caption = (
+            f"🎥 **{info['title']}**\n"
+            f"👤 کانال: {info['uploader']}\n"
+            f"⏱ زمان: $$ {info['duration']} $$ ثانیه\n\n"
+            f"⏳ در حال آماده‌سازی برای دانلود..."
+        )
+        try:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=info["thumbnail"],
+                caption=caption,
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass  # در صورت خطای لود عکس نادیده گرفته شود
+
     user_is_vip = await asyncio.to_thread(is_vip, chat_id)
     active_semaphore = vip_semaphore if user_is_vip else normal_semaphore
     max_concurrent = MAX_VIP_DOWNLOADS if user_is_vip else MAX_NORMAL_DOWNLOADS
@@ -340,13 +360,22 @@ async def background_yt_download(
                                 await context.bot.send_message(
                                     chat_id=chat_id, text="☁️ آپلود در فضای ابری ..."
                                 )
+                                # ریست کردن وضعیت برای نمایش پیشرفت آپلود ابری
+                                progress_dict["is_finished"] = False
+                                progress_dict["text"] = "☁️ شروع آپلود ابری..."
+                                updater_task = asyncio.create_task(
+                                    update_progress_message()
+                                )
+
                                 s3_links = []
                                 for file_path in result:
                                     s3_url = await asyncio.to_thread(
-                                        upload_to_s3, file_path
+                                        upload_to_s3, file_path, None, progress_dict
                                     )
                                     if s3_url:
                                         s3_links.append(s3_url)
+
+                                progress_dict["is_finished"] = True
 
                                 if s3_links:
                                     links_text = "\n\n".join(
@@ -409,9 +438,15 @@ async def background_yt_download(
                                 )
 
                                 if destination == "server":
-                                    s3_url = await asyncio.to_thread(
-                                        upload_to_s3, backup_file
+                                    progress_dict["is_finished"] = False
+                                    updater_task = asyncio.create_task(
+                                        update_progress_message()
                                     )
+                                    s3_url = await asyncio.to_thread(
+                                        upload_to_s3, backup_file, None, progress_dict
+                                    )
+                                    progress_dict["is_finished"] = True
+
                                     if s3_url:
                                         await context.bot.send_message(
                                             chat_id=chat_id,
@@ -454,7 +489,9 @@ async def background_yt_download(
                 elif format_type == "audio":
                     file_path = None
                     try:
-                        file_path = await asyncio.to_thread(download_youtube_audio, url)
+                        file_path = await asyncio.to_thread(
+                            download_youtube_audio, url, progress_dict
+                        )
                         progress_dict["is_finished"] = True
 
                         if (
@@ -466,9 +503,15 @@ async def background_yt_download(
                                 await context.bot.send_message(
                                     chat_id=chat_id, text="☁️ آپلود در سرور ابری..."
                                 )
-                                s3_url = await asyncio.to_thread(
-                                    upload_to_s3, file_path
+                                progress_dict["is_finished"] = False
+                                updater_task = asyncio.create_task(
+                                    update_progress_message()
                                 )
+                                s3_url = await asyncio.to_thread(
+                                    upload_to_s3, file_path, None, progress_dict
+                                )
+                                progress_dict["is_finished"] = True
+
                                 if s3_url:
                                     await context.bot.send_message(
                                         chat_id=chat_id,

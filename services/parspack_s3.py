@@ -16,33 +16,34 @@ ARVAN_BUCKET = os.getenv("ARVAN_BUCKET", "YOUR_BUCKET")
 
 
 class ProgressPercentage(object):
-    """
-    کلاسی برای محاسبه و نمایش لاگ پیشرفت آپلود فایل
-    """
-
-    def __init__(self, filename):
+    def __init__(self, filename, progress_dict=None):
         self._filename = filename
         self._size = float(os.path.getsize(filename))
         self._seen_so_far = 0
         self._lock = threading.Lock()
+        self._progress_dict = progress_dict
 
     def __call__(self, bytes_amount):
         with self._lock:
             self._seen_so_far += bytes_amount
             percentage = (self._seen_so_far / self._size) * 100
-            # چاپ درصد پیشرفت در ترمینال
-            sys.stdout.write(
-                f"\r⏳ Uploading {os.path.basename(self._filename)}: {percentage:.2f}% "
-                f"({self._seen_so_far} / {int(self._size)} bytes)"
-            )
+
+            # آپدیت دیکشنری برای تلگرام
+            if self._progress_dict is not None:
+                # import تابع ساخت نوار از youtube.py در بالای فایل یا کپی آن
+                filled = int((percentage / 100) * 10)
+                bar = "█" * filled + "░" * (10 - filled)
+                self._progress_dict["text"] = (
+                    f"☁️ در حال آپلود ابری...\n[{bar}] $$ {percentage:.1f} \\% $$"
+                )
+
+            sys.stdout.write(f"\r⏳ Uploading: {percentage:.2f}%")
             sys.stdout.flush()
 
-            # وقتی 100 درصد شد به خط بعدی برود
-            if self._seen_so_far >= self._size:
-                sys.stdout.write("\n✅ Upload Complete!\n")
 
-
-def upload_to_s3(file_path: str, object_name: str = None) -> str:
+def upload_to_s3(
+    file_path: str, object_name: str = None, progress_dict: dict = None
+) -> str:
     """
     فایل را در سرور ابری آپلود کرده و یک لینک دانلود موقت برمی‌گرداند.
     """
@@ -65,13 +66,12 @@ def upload_to_s3(file_path: str, object_name: str = None) -> str:
     )
 
     try:
-        # پاس دادن Callback برای نمایش درصد پیشرفت
         s3.upload_file(
             file_path,
             ARVAN_BUCKET,
             object_name,
             Config=transfer_config,
-            Callback=ProgressPercentage(file_path),
+            Callback=ProgressPercentage(file_path, progress_dict),
         )
 
         presigned_url = s3.generate_presigned_url(

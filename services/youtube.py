@@ -9,6 +9,8 @@ import asyncio
 import subprocess
 from dotenv import load_dotenv
 import random
+import json
+import re
 
 load_dotenv()
 
@@ -108,6 +110,35 @@ def _base_ytdlp_cmd():
     return cmd
 
 
+def generate_progress_bar(percent: float, length: int = 10) -> str:
+    """ساخت نوار پیشرفت گرافیکی"""
+    filled = int((percent / 100) * length)
+    bar = "█" * filled + "░" * (length - filled)
+    return f"[{bar}] $$ {percent:.1f} \\% $$"
+
+
+def get_video_info(url: str):
+    """گرفتن متادیتا شامل تامنیل، تایتل و مدت زمان"""
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(["--dump-json", "--skip-download", url])
+
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            return {
+                "title": data.get("title", "بدون عنوان"),
+                "thumbnail": data.get("thumbnail"),
+                "duration": data.get("duration", 0),
+                "uploader": data.get("uploader", "ناشناس"),
+            }
+    except Exception as e:
+        print(f"Error getting video info: {e}")
+    return None
+
+
 def _run_subprocess_and_capture(cmd, progress_dict=None):
     """
     اجرای yt-dlp با subprocess.
@@ -129,21 +160,22 @@ def _run_subprocess_and_capture(cmd, progress_dict=None):
     for line in process.stdout:
         line = line.rstrip()
         output_lines.append(line)
-
         print(line)
 
         if progress_dict is not None:
-            # نمونه خروجی:
-            # [download]  45.3% of 6.88MiB at 1.23MiB/s ETA 00:03
             if "[download]" in line and "%" in line:
-                progress_dict["text"] = f"📥 در حال دانلود...\n{line}"
+                # استخراج درصد با regex
+                match = re.search(r"(\d+\.\d+)%", line)
+                if match:
+                    percent = float(match.group(1))
+                    bar = generate_progress_bar(percent)
+                    # حذف بخش [download] برای تمیزی متن
+                    clean_line = line.split("]", 1)[-1].strip()
+                    progress_dict["text"] = (
+                        f"📥 در حال دانلود...\n{bar}\n`{clean_line}`"
+                    )
             elif "Destination:" in line:
                 progress_dict["text"] = "📥 شروع دانلود..."
-            elif "has already been downloaded" in line:
-                progress_dict["text"] = "✅ فایل از قبل دانلود شده است."
-            elif "100%" in line:
-                progress_dict["text"] = "✅ دانلود تکمیل شد! در حال آماده‌سازی فایل..."
-
     process.wait()
 
     full_output = "\n".join(output_lines)
