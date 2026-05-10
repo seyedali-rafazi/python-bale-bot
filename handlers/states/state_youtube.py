@@ -379,7 +379,18 @@ async def background_yt_download(
                     except Exception as send_err:
                         print(f"❌ Video error: {send_err}")
                         error_text = str(send_err).lower()
-                        if "too large" in error_text or "max-filesize" in error_text:
+
+                        if any(
+                            keyword in error_text
+                            for keyword in [
+                                "too large",
+                                "max-filesize",
+                                "300",
+                                "size",
+                                "exceed",
+                                "limit",
+                            ]
+                        ):
                             await context.bot.send_message(
                                 chat_id=chat_id, text="⚠️ حجم ویدیو بیش از حد مجاز است."
                             )
