@@ -16,36 +16,12 @@ download_semaphore = asyncio.Semaphore(5)
 async def get_image_bytes(session, url):
     async with download_semaphore:
         try:
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36"
-                )
-            }
-
-            async with session.get(url, timeout=10, headers=headers) as res:
-                if res.status != 200:
-                    return None
-
-                content_type = res.headers.get("Content-Type", "").lower()
-
-                if not content_type.startswith("image/"):
-                    return None
-
-                data = await res.read()
-
-                if len(data) < 3000:
-                    return None
-
-                if len(data) > 10 * 1024 * 1024:
-                    return None
-
-                return BytesIO(data)
-
-        except Exception as e:
-            print(f"Image Download Error: {e}")
-
+            async with session.get(url, timeout=5) as res:
+                if res.status == 200:
+                    data = await res.read()
+                    return BytesIO(data)
+        except:
+            pass
         return None
 
 
