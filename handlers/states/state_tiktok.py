@@ -1,4 +1,6 @@
 # handlers/states/state_tiktok.py
+
+
 import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -16,30 +18,33 @@ from core.database import (
     increment_tt_downloads,
     add_tiktok_explore_video,
 )
+from core.limits import get_limit
 
-# نام کانالی که ویدیوها به عنوان آرشیو در آن ذخیره می‌شوند
+
 STORAGE_CHANNEL_ID = "@digitiktoksection"
-
-# محدودکننده دانلود همزمان (صف ۳ تایی)
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 
 async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
     vip = is_vip(user_id)
-    max_dl = 15 if vip else 1
+    max_dl = get_limit("tiktok_download", vip)
     current_dl = get_tt_downloads(user_id)
+
     if current_dl >= max_dl:
         await update.message.reply_text(
             "❌ محدودیت دانلود روزانه تیک‌تاک شما به پایان رسیده است."
         )
         return False
+
     return True
 
 
+# پارامتر user_id اضافه شد
 async def background_tt_download(
     context: ContextTypes.DEFAULT_TYPE,
     url: str,
     chat_id: str,
+    user_id: str,
     title: str = "ویدیوی تیک‌تاک",
 ):
     status_msg = await context.bot.send_message(
@@ -47,7 +52,6 @@ async def background_tt_download(
     )
 
     try:
-        # استفاده از Semaphore برای صف‌بندی (فقط ۳ دانلود همزمان)
         async with DOWNLOAD_SEMAPHORE:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -55,7 +59,6 @@ async def background_tt_download(
                 text="⬇️ در حال دریافت ویدیو...",
             )
 
-            # 1. دانلود ویدیو (حالا کاملا async است)
             file_path = await download_tiktok_video(url)
 
             if not file_path or not os.path.exists(file_path):
@@ -72,7 +75,6 @@ async def background_tt_download(
                 text="📤 ویدیو دانلود شد! در حال آپلود در سرور...",
             )
 
-            # 2. ذخیره در کانال آرشیو (اکسپلور داخلی) و دریافت file_id
             with open(file_path, "rb") as vid:
                 channel_msg = await context.bot.send_video(
                     chat_id=STORAGE_CHANNEL_ID,
@@ -82,18 +84,17 @@ async def background_tt_download(
                     write_timeout=300,
                 )
                 file_id = channel_msg.video.file_id
-
-                # ذخیره ویدیو در دیتابیس اکسپلور
                 add_tiktok_explore_video(file_id)
 
-        # 3. ارسال file_id برای کاربر نهایی (سرعت بالا در ارسال)
         await context.bot.send_video(
             chat_id=chat_id,
             video=file_id,
             caption=f"✅ {title}\n🤖 دانلود شده توسط ربات",
         )
 
-        # پاک کردن پیام صبر کنید
+        # افزایش محدودیت کاربر فقط در اینجا (پس از ارسال موفق) انجام می‌شود
+        increment_tt_downloads(user_id)
+
         await context.bot.delete_message(
             chat_id=chat_id, message_id=status_msg.message_id
         )
@@ -104,17 +105,14 @@ async def background_tt_download(
             chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
         )
     finally:
-        # 4. حذف فایل از هارد سرور
         if "file_path" in locals() and file_path and os.path.exists(file_path):
             os.remove(file_path)
 
 
 async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت دکمه ترند تیک‌تاک"""
     chat_id = str(update.effective_chat.id)
     await update.message.reply_text("⏳ در حال دریافت ویدیوهای ترند...")
 
-    # فراخوانی مستقیم تابع async
     results = await get_tiktok_trends()
     if not results:
         await update.message.reply_text("❌ ویدیویی یافت نشد.")
@@ -143,27 +141,26 @@ async def handle_tiktok_state(
 ):
     user_id_str = str(update.effective_user.id)
 
-    # 1. گرفتن لینک مستقیم تیک‌تاک
     if step == "waiting_tt_link":
         if "tiktok.com" not in text and "tiktok" not in text:
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        # بررسی محدودیت دانلود و افزایش شمارنده
+        # فقط چک میکنیم، اما کسر نمیکنیم
         if not await check_tt_dl_limit(update, user_id_str):
             return
-        increment_tt_downloads(user_id_str)
 
         asyncio.create_task(
-            background_tt_download(context, text, chat_id, "دانلود مستقیم با لینک")
+            # ارسال user_id_str به عنوان آرگومان
+            background_tt_download(
+                context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
+            )
         )
         return
 
-    # 2. گرفتن موضوع و جستجو ($10$ ویدیو)
     elif step == "waiting_tt_search":
         await update.message.reply_text("⏳ در حال جستجو...")
 
-        # فراخوانی مستقیم تابع async
         results = await search_tiktok_videos(text, max_results=10)
 
         if not results:
@@ -187,7 +184,6 @@ async def handle_tiktok_state(
         )
         return
 
-    # 3. انتخاب ویدیو از لیست (ترند یا جستجو)
     elif step == "waiting_tt_selection":
         if text.startswith("📥 دانلود تیک‌تاک "):
             try:
@@ -200,15 +196,19 @@ async def handle_tiktok_state(
                     )
                     return
 
-                # بررسی محدودیت دانلود و افزایش شمارنده
+                # فقط چک میکنیم، کسر نمیکنیم
                 if not await check_tt_dl_limit(update, user_id_str):
                     return
-                increment_tt_downloads(user_id_str)
 
                 selected_video = videos[index]
                 asyncio.create_task(
+                    # ارسال user_id_str به عنوان آرگومان
                     background_tt_download(
-                        context, selected_video["url"], chat_id, selected_video["title"]
+                        context,
+                        selected_video["url"],
+                        chat_id,
+                        user_id_str,
+                        selected_video["title"],
                     )
                 )
 

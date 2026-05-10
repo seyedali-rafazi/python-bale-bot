@@ -1,30 +1,38 @@
 # services/ai.py (فایل جدید)
 
+# services/ai.py
+
 import os
 import io
 import urllib.parse
 import asyncio
 import aiohttp
-import google.generativeai as genai
 from dotenv import load_dotenv
 from gtts import gTTS
+from openai import AsyncOpenAI  # اضافه شدن OpenAI ناهمگام
 
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
 
+# تنظیم کلاینت GapGPT
+GAPGPT_API_KEY = os.getenv(
+    "GAPGPT_API_KEY", "sk-SRgmKMz7SSBb3K2oLcEww6mgJYk86ZU6w5weK78O9Cju4bMR"
+)
 try:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-flash-latest")
+    ai_client = AsyncOpenAI(
+        base_url="https://api.gapgpt.app/v1", api_key=GAPGPT_API_KEY
+    )
 except Exception as e:
-    print(f"Error configuring Gemini: {e}")
+    print(f"Error configuring GapGPT: {e}")
 
 
 async def ask_chatbot(text):
     try:
-        # استفاده از متد async خود جمنای
-        response = await model.generate_content_async(text)
-        return response.text
+        # استفاده از متد AsyncOpenAI برای GapGPT
+        response = await ai_client.chat.completions.create(
+            model="gpt-chat-5.3-latest", messages=[{"role": "user", "content": text}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
         return f"❌ خطایی در ارتباط با هوش مصنوعی رخ داد: {e}"
 
@@ -34,7 +42,6 @@ async def perform_ocr(image_bytes: bytes):
         data = aiohttp.FormData()
         data.add_field("apikey", OCR_SPACE_API_KEY)
         data.add_field("language", "ara")
-        # ارسال مستقیم بایت‌ها بدون نیاز به فایل فیزیکی
         data.add_field(
             "filename", image_bytes, filename="image.jpg", content_type="image/jpeg"
         )
@@ -61,7 +68,6 @@ async def perform_ocr(image_bytes: bytes):
 
 
 def _sync_tts(text):
-    # این تابع چون gTTS سینک است، در ترد جداگانه اجرا می‌شود
     lang = "fa" if any("\u0600" <= c <= "\u06ff" for c in text) else "en"
     tts = gTTS(text=text, lang=lang, slow=False)
     fp = io.BytesIO()
@@ -72,7 +78,6 @@ def _sync_tts(text):
 
 async def text_to_speech(text):
     try:
-        # ساخت فایل در حافظه رم به جای هارد دیسک
         return await asyncio.to_thread(_sync_tts, text)
     except Exception as e:
         print(f"TTS Error: {e}")
@@ -89,7 +94,6 @@ async def generate_image(prompt):
             async with session.get(url) as response:
                 if response.status == 200:
                     image_bytes = await response.read()
-                    # برگرداندن عکس در حافظه رم
                     return io.BytesIO(image_bytes)
         return None
     except asyncio.TimeoutError:

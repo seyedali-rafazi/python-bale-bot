@@ -18,6 +18,7 @@ from core.database import (
     get_book_download_count,  # اضافه شد
     get_citation_count,  # اضافه شد
 )
+from core.limits import get_limit
 
 
 async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -75,22 +76,13 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tt_exp_count = get_tt_explores(user_id)
     gh_count = get_gh_downloads(user_id)
 
-    # دریافت آمار علمی جدید
-    article_dl_count = get_book_download_count(user_id)
-    smart_abstract_count = get_book_download_count(user_id)
-    citation_count = get_citation_count(user_id)
-    book_dl_count = get_book_download_count(user_id)
-
     # تعیین لیمیت‌های قبلی
-    yt_limit = "20" if is_vip == 1 else "1"
-    music_limit = "20" if is_vip == 1 else "6"
-    pinterest_limit = "30" if is_vip == 1 else "2"
-    tt_dl_limit = "15" if is_vip == 1 else "1"
-    tt_exp_limit = "10" if is_vip == 1 else "1"
-    gh_limit = "20" if is_vip == 1 else "2"
-
-    # تعیین لیمیت‌های علمی (2 برای عادی، 20 برای ویژه)
-    academic_limit = "20" if is_vip == 1 else "2"
+    yt_limit = get_limit("youtube_download", is_vip)
+    music_limit = get_limit("music_download", is_vip)
+    pinterest_limit = get_limit("pinterest_search", is_vip)
+    tt_dl_limit = get_limit("tiktok_download", is_vip)
+    tt_exp_limit = get_limit("tiktok_explore", is_vip)
+    gh_limit = get_limit("github_download", is_vip)
 
     profile_text = f"""
 🪪 **مشخصات شما**
@@ -107,11 +99,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
 
-🎓 **بخش علمی:**
-• مقاله | دانلود: $ {article_dl_count} / {academic_limit} $
-• مقاله | چکیده هوشمند: $ {smart_abstract_count} / {academic_limit} $
-• کتاب | دانلود: $ {book_dl_count} / {academic_limit} $
-• رفرنس | تولید: $ {citation_count} / {academic_limit} $
+
 """
 
     await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")

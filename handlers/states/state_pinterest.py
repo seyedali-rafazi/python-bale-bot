@@ -1,13 +1,16 @@
 # handlers/states/state_pinterest.py
 
+
 import asyncio
 import aiohttp
 from io import BytesIO
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
 from services.pinterest import search_pinterest_images
+from core.limits import get_limit
+
 
 # محدود کردن تعداد دانلودهای همزمان کل ربات
 download_semaphore = asyncio.Semaphore(5)
@@ -40,9 +43,8 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    msg = await update.message.reply_text("⏳ در حال جستجو و دریافت تصاویر...")
+    msg = await update.message.reply_text("⏳ در حال جستجو و ارسال تصاویر...")
 
-    # افزایش تعداد نتایج جستجو برای داشتن عکس برای دفعات بعدی
     images_urls = search_pinterest_images(text, max_results=50)
 
     if not images_urls:
@@ -50,54 +52,54 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    media_group = []
+    sent_count = 0
+    current_index = 0
 
     async with aiohttp.ClientSession() as session:
-        # ۱۰ لینک اول را بررسی میکنیم
-        tasks = [get_image_bytes(session, url) for url in images_urls[:10]]
-        results = await asyncio.gather(*tasks)
+        for url in images_urls:
+            if sent_count >= 5:  # تعداد عکسی که می‌خواهیم ارسال کنیم
+                break
 
-    successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
+            img_bytes = await get_image_bytes(session, url)
+            if img_bytes:
+                try:
+                    await context.bot.send_photo(chat_id=chat_id, photo=img_bytes)
+                    sent_count += 1
+                except Exception as e:
+                    print(f"Error sending individual photo: {e}")
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
+            current_index += 1
 
-    if not media_group:
-        await msg.edit_text("❌ خطا در دانلود تصاویر. کلمه دیگری تست کنید.")
+    await msg.delete()
+
+    if sent_count == 0:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ خطا در دانلود و ارسال تصاویر. کلمه دیگری تست کنید.",
+        )
         set_state(chat_id, "")
         return
 
-    try:
-        await msg.delete()
-        await context.bot.send_media_group(chat_id=chat_id, media=media_group)
-        increment_pinterest_downloads(user_id)
+    increment_pinterest_downloads(user_id)
+    context.user_data["pin_images"] = images_urls
+    context.user_data["pin_index"] = current_index
 
-        context.user_data["pin_images"] = images_urls
-        context.user_data["pin_index"] = 10  # ۱۰ لینک مصرف شد
-
-        # نمایش دکمه عکس‌های بیشتر در صورت وجود عکس
-        if context.user_data["pin_index"] < len(images_urls):
-            keyboard = [
-                [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
-            ]
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="برای دریافت عکس‌های بیشتر کلیک کنید:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-        else:
-            # تغییر جدید: اگر از همان سرچ اول عکس‌های کمی پیدا شده بود
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
-            )
-    except Exception as e:
-        print(f"Error: {e}")
+    if context.user_data["pin_index"] < len(images_urls):
+        keyboard = [
+            [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
+        ]
         await context.bot.send_message(
-            chat_id=chat_id, text="❌ ارسال تصاویر پشتیبانی نشد."
+            chat_id=chat_id,
+            text="برای دریافت عکس‌های بیشتر کلیک کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
-    finally:
-        set_state(chat_id, "")
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
+        )
+
+    set_state(chat_id, "")
 
 
 async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,75 +108,70 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
 
     user_id = str(update.effective_user.id)
     usage = get_pinterest_downloads(user_id)
-    limit = 30 if is_vip(user_id) else 5
+    vip = is_vip(user_id)
+    limit = get_limit("pinterest_search", vip)
 
-    # بررسی محدودیت روزانه در دفعات بعدی
     if usage >= limit:
         await query.edit_message_text("❌ محدودیت روزانه شما به پایان رسیده است!")
         return
 
-    # حذف پیغام حاوی دکمه قدیمی
     await query.message.delete()
 
     msg = await context.bot.send_message(
-        chat_id=query.message.chat_id, text="⏳ در حال دریافت تصاویر..."
+        chat_id=query.message.chat_id, text="⏳ در حال دریافت تصاویر بعدی..."
     )
 
     images = context.user_data.get("pin_images", [])
     index = context.user_data.get("pin_index", 0)
 
-    # تغییر جدید: پیام اتمام در صورت زدن دکمه اضافی
     if index >= len(images):
         await msg.edit_text(
             "✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید."
         )
         return
 
-    media_group = []
+    sent_count = 0
+    current_index = index
 
     async with aiohttp.ClientSession() as session:
-        # ۱۰ لینک بعدی را بررسی میکنیم
-        tasks = [get_image_bytes(session, url) for url in images[index : index + 10]]
-        results = await asyncio.gather(*tasks)
+        for url in images[index:]:
+            if sent_count >= 5:
+                break
 
-    successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
+            img_bytes = await get_image_bytes(session, url)
+            if img_bytes:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=query.message.chat_id, photo=img_bytes
+                    )
+                    sent_count += 1
+                except Exception as e:
+                    print(f"Error sending individual photo: {e}")
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
+            current_index += 1
 
-    if not media_group:
-        await msg.edit_text("❌ تصاویر بعدی قابل دریافت نیستند.")
+    await msg.delete()
+
+    if sent_count == 0:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id, text="❌ تصاویر بعدی قابل دریافت نیستند."
+        )
         return
 
-    try:
-        await msg.delete()
-        await context.bot.send_media_group(
-            chat_id=query.message.chat_id, media=media_group
-        )
+    increment_pinterest_downloads(user_id)
+    context.user_data["pin_index"] = current_index
 
-        # اضافه شدن به شمارش مصرف کاربر
-        increment_pinterest_downloads(user_id)
-
-        context.user_data["pin_index"] = index + 10  # آپدیت کردن ایندکس لینک‌ها
-
-        # ارسال مجدد دکمه در زیر عکس‌های سری جدید
-        if context.user_data["pin_index"] < len(images):
-            keyboard = [
-                [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
-            ]
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="برای دریافت عکس‌های بیشتر کلیک کنید:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-        else:
-            # تغییر جدید: ارسال پیام اتمام وقتی که لیست عکس‌ها تمام شد
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
-            )
-    except Exception as e:
-        print(f"Error: {e}")
+    if context.user_data["pin_index"] < len(images):
+        keyboard = [
+            [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
+        ]
         await context.bot.send_message(
-            chat_id=query.message.chat_id, text="❌ خطا در ارسال."
+            chat_id=query.message.chat_id,
+            text="برای دریافت عکس‌های بیشتر کلیک کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
         )

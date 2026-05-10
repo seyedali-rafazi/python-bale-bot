@@ -12,6 +12,7 @@ from core.database import (
     delete_invalid_video_from_db,
 )
 from handlers.ensure_membership import ensure_membership
+from core.limits import get_limit
 
 
 async def btn_tiktok_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,11 +61,12 @@ async def btn_tt_trend_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
+
     user_id = str(update.effective_user.id)
     chat_id = str(update.effective_chat.id)
 
     vip = is_vip(user_id)
-    max_exp = 10 if vip else 1
+    max_exp = get_limit("tiktok_explore", vip)
     current_exp = get_tt_explores(user_id)
 
     if current_exp >= max_exp:

@@ -1,0 +1,100 @@
+# limits.py
+
+FREE_LIMITS = {
+    "youtube_download": 1,
+    "music_download": 6,
+    "pinterest_search": 2,
+    "tiktok_download": 5,
+    "tiktok_explore": 3,
+    "github_download": 2,
+    "article_download": 2,
+    "smart_abstract": 2,
+    "book_download": 2,
+    "citation": 2,
+}
+
+VIP_LIMITS = {
+    "youtube_download": 20,
+    "music_download": 20,
+    "pinterest_search": 30,
+    "tiktok_download": 30,
+    "tiktok_explore": 15,
+    "github_download": 20,
+    "article_download": 20,
+    "smart_abstract": 20,
+    "book_download": 20,
+    "citation": 20,
+}
+
+
+def get_limit(key: str, is_vip: int) -> int:
+    limits = VIP_LIMITS if is_vip == 1 else FREE_LIMITS
+    return limits[key]
+
+
+# limits.py
+
+FREE_LIMITS = {
+    "youtube_download": 1,
+    "music_download": 6,
+    "pinterest_search": 2,
+    "tiktok_download": 5,
+    "tiktok_explore": 3,
+    "github_download": 2,
+    "article_download": 2,
+    "smart_abstract": 2,
+    "book_download": 2,
+    "citation": 2,
+}
+
+VIP_LIMITS = {
+    "youtube_download": 20,
+    "music_download": 20,
+    "pinterest_search": 30,
+    "tiktok_download": 30,
+    "tiktok_explore": 15,
+    "github_download": 20,
+    "article_download": 20,
+    "smart_abstract": 20,
+    "book_download": 20,
+    "citation": 20,
+}
+
+
+def get_limit(key: str, is_vip: int) -> int:
+    limits = VIP_LIMITS if is_vip == 1 else FREE_LIMITS
+    return limits[key]
+
+
+# limits.py
+
+FREE_LIMITS = {
+    "youtube_download": 1,
+    "music_download": 6,
+    "pinterest_search": 10,
+    "tiktok_download": 5,
+    "tiktok_explore": 3,
+    "github_download": 2,
+    "article_download": 2,
+    "smart_abstract": 2,
+    "book_download": 2,
+    "citation": 2,
+}
+
+VIP_LIMITS = {
+    "youtube_download": 20,
+    "music_download": 20,
+    "pinterest_search": 40,
+    "tiktok_download": 30,
+    "tiktok_explore": 15,
+    "github_download": 20,
+    "article_download": 20,
+    "smart_abstract": 20,
+    "book_download": 20,
+    "citation": 20,
+}
+
+
+def get_limit(key: str, is_vip: int) -> int:
+    limits = VIP_LIMITS if is_vip == 1 else FREE_LIMITS
+    return limits[key]
