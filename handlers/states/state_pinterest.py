@@ -3,7 +3,7 @@
 import asyncio
 import aiohttp
 from io import BytesIO
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
@@ -50,26 +50,26 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
+    media_group = []
+
     async with aiohttp.ClientSession() as session:
         # ۱۰ لینک اول را بررسی میکنیم
         tasks = [get_image_bytes(session, url) for url in images_urls[:10]]
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
-    images_to_send = successful_images[:5]  # نهایتا ۵ عکس
 
-    if not images_to_send:
+    for img_bytes in successful_images[:5]:
+        media_group.append(InputMediaPhoto(media=img_bytes))
+
+    if not media_group:
         await msg.edit_text("❌ خطا در دانلود تصاویر. کلمه دیگری تست کنید.")
         set_state(chat_id, "")
         return
 
     try:
         await msg.delete()
-
-        # ارسال دونه‌به‌دونه عکس‌ها
-        for img_bytes in images_to_send:
-            await context.bot.send_photo(chat_id=chat_id, photo=img_bytes)
-
+        await context.bot.send_media_group(chat_id=chat_id, media=media_group)
         increment_pinterest_downloads(user_id)
 
         context.user_data["pin_images"] = images_urls
@@ -86,6 +86,7 @@ async def handle_pinterest_state(
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
+            # تغییر جدید: اگر از همان سرچ اول عکس‌های کمی پیدا شده بود
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
@@ -122,11 +123,14 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     images = context.user_data.get("pin_images", [])
     index = context.user_data.get("pin_index", 0)
 
+    # تغییر جدید: پیام اتمام در صورت زدن دکمه اضافی
     if index >= len(images):
         await msg.edit_text(
             "✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید."
         )
         return
+
+    media_group = []
 
     async with aiohttp.ClientSession() as session:
         # ۱۰ لینک بعدی را بررسی میکنیم
@@ -134,18 +138,19 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
-    images_to_send = successful_images[:5]  # نهایتا ۵ عکس
 
-    if not images_to_send:
+    for img_bytes in successful_images[:5]:
+        media_group.append(InputMediaPhoto(media=img_bytes))
+
+    if not media_group:
         await msg.edit_text("❌ تصاویر بعدی قابل دریافت نیستند.")
         return
 
     try:
         await msg.delete()
-
-        # ارسال دونه‌به‌دونه عکس‌ها
-        for img_bytes in images_to_send:
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=img_bytes)
+        await context.bot.send_media_group(
+            chat_id=query.message.chat_id, media=media_group
+        )
 
         # اضافه شدن به شمارش مصرف کاربر
         increment_pinterest_downloads(user_id)
@@ -163,6 +168,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
+            # تغییر جدید: ارسال پیام اتمام وقتی که لیست عکس‌ها تمام شد
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
