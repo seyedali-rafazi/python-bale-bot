@@ -15,7 +15,7 @@ from core.database import (
     is_vip,
 )
 from core.limits import get_limit
-from services.pinterest import search_pinterest_images
+from services.pinterest_queue import queued_pinterest_search
 
 
 download_semaphore = asyncio.Semaphore(5)
@@ -49,7 +49,6 @@ async def get_image_bytes(
 
                 content_type = res.headers.get("Content-Type", "").lower()
 
-                # اگر content-type درست نبود ولی فایل واقعاً image بود، باز هم عبور کن
                 if "image" not in content_type:
                     if len(data) < 500:
                         return None
@@ -84,6 +83,7 @@ async def fetch_image_bytes(urls: List[str]) -> List[BytesIO]:
     for item in results:
         if isinstance(item, BytesIO):
             images.append(item)
+
     return images
 
 
@@ -127,7 +127,7 @@ async def handle_pinterest_state(
     msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر Pinterest...")
 
     try:
-        image_urls = await search_pinterest_images(text, max_results=40)
+        image_urls = await queued_pinterest_search(text, max_results=40)
     except Exception as e:
         print(f"Pinterest search error: {e}")
         image_urls = []
@@ -143,7 +143,7 @@ async def handle_pinterest_state(
 
     try:
         await msg.delete()
-    except:
+    except Exception:
         pass
 
     if sent_count == 0:
@@ -192,7 +192,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     if not images or index >= len(images):
         try:
             await query.edit_message_text("✅ همه تصاویر این جستجو قبلاً ارسال شده‌اند.")
-        except:
+        except Exception:
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="✅ همه تصاویر این جستجو قبلاً ارسال شده‌اند.",
@@ -201,7 +201,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
 
     try:
         await query.message.delete()
-    except:
+    except Exception:
         pass
 
     msg = await context.bot.send_message(
@@ -214,7 +214,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
 
     try:
         await msg.delete()
-    except:
+    except Exception:
         pass
 
     if sent_count == 0:
