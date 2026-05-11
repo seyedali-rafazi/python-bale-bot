@@ -33,10 +33,14 @@ class PinterestService:
         seen = set()
 
         for url in image_urls:
-            norm = self._normalize_image_url(url)
-            if norm and norm not in seen:
-                seen.add(norm)
-                results.append(norm)
+            candidates = self._build_quality_candidates(url)
+
+            for candidate in candidates:
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    results.append(candidate)
+                    break
+
             if len(results) >= max_results:
                 break
 
@@ -87,6 +91,8 @@ class PinterestService:
                     await page.wait_for_timeout(2000)
                     await page.mouse.wheel(0, 2500)
                     await page.wait_for_timeout(2000)
+                    await page.mouse.wheel(0, 3000)
+                    await page.wait_for_timeout(2000)
                 except Exception:
                     pass
 
@@ -111,6 +117,10 @@ class PinterestService:
             r'"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"image"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"images"\s*:\s*\{.*?"orig"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
+            r'"images"\s*:\s*\{.*?"736x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
+            r'"images"\s*:\s*\{.*?"564x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
+            r'"images"\s*:\s*\{.*?"474x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
+            r'"images"\s*:\s*\{.*?"236x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
         ]
 
         results = []
@@ -119,15 +129,14 @@ class PinterestService:
         for pattern in patterns:
             matches = re.findall(pattern, text, flags=re.I | re.S)
             for url in matches:
-                cleaned = html.unescape(url).replace("\\/", "/")
-                cleaned = self._normalize_image_url(cleaned)
+                cleaned = self._clean_url(url)
                 if cleaned and cleaned not in seen:
                     seen.add(cleaned)
                     results.append(cleaned)
 
         return results
 
-    def _normalize_image_url(self, url: str) -> Optional[str]:
+    def _clean_url(self, url: str) -> Optional[str]:
         if not url:
             return None
 
@@ -145,6 +154,78 @@ class PinterestService:
             return None
 
         return url
+
+    def _build_quality_candidates(self, url: str) -> List[str]:
+        """
+        از یک URL کم‌کیفیت چند کاندید باکیفیت‌تر می‌سازد.
+        ترتیب اهمیت:
+        1) originals
+        2) 736x
+        3) 564x
+        4) خود لینک اصلی
+        """
+        clean = self._clean_url(url)
+        if not clean:
+            return []
+
+        candidates = []
+        seen = set()
+
+        def add(u: str):
+            if u and u not in seen:
+                seen.add(u)
+                candidates.append(u)
+
+        # اگر خودش originals باشد
+        add(clean)
+
+        # تبدیل سایزهای thumbnail به originals
+        originals_url = re.sub(
+            r"/(236x|474x|564x|736x)/",
+            "/originals/",
+            clean,
+            flags=re.I,
+        )
+        add(originals_url)
+
+        # تبدیل به 736x
+        x736_url = re.sub(
+            r"/(236x|474x|564x|originals)/",
+            "/736x/",
+            clean,
+            flags=re.I,
+        )
+        add(x736_url)
+
+        # تبدیل به 564x
+        x564_url = re.sub(
+            r"/(236x|474x|736x|originals)/",
+            "/564x/",
+            clean,
+            flags=re.I,
+        )
+        add(x564_url)
+
+        # اگر URL شامل originals بود، نسخه 736x هم ساخته شود
+        if "/originals/" in clean:
+            add(clean.replace("/originals/", "/736x/"))
+
+        # اولویت‌بندی بهتر:
+        def score(u: str) -> int:
+            if "/originals/" in u:
+                return 0
+            if "/736x/" in u:
+                return 1
+            if "/564x/" in u:
+                return 2
+            if "/474x/" in u:
+                return 3
+            if "/236x/" in u:
+                return 4
+            return 5
+
+        candidates.sort(key=score)
+        return candidates
 
 
 async def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
