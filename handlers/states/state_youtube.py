@@ -1,6 +1,5 @@
 # handlers/states/state_youtube.py
 
-
 import os
 import asyncio
 import re
@@ -25,15 +24,14 @@ from core.database import (
     save_cached_video,
     increment_yt_video_view,
 )
-from services.youtube import get_video_filesize
 from services.youtube import (
+    get_video_precheck,
     download_youtube_video,
     download_youtube_audio,
     search_yt_videos,
     split_video_if_needed,
 )
 from services.telegram_backup import download_from_telegram_bot
-from services.youtube import get_video_info
 
 try:
     from services.parspack_s3 import upload_to_s3
@@ -72,6 +70,30 @@ def get_waiting_count(semaphore: asyncio.Semaphore, max_concurrent: int) -> int:
         return max(0, running + waiters)
     except Exception:
         return 0
+
+
+def is_non_backup_youtube_error(error_text: str) -> bool:
+    error_text = (error_text or "").lower()
+
+    blocked_keywords = [
+        "too_large",
+        "too large",
+        "max-filesize",
+        "auth_required",
+        "sign in to confirm you're not a bot",
+        "cookies",
+        "private video",
+        "video unavailable",
+        "metadata_failed",
+        "unknown_size",
+        "could not detect video id",
+        "failed to get video id",
+        "download failed",
+        "video_unavailable",
+        "private_video",
+    ]
+
+    return any(keyword in error_text for keyword in blocked_keywords)
 
 
 async def send_video_once(context, chat_id: str, file_id: str):
@@ -154,7 +176,6 @@ async def process_and_send_video_parts(
                 caption=caption,
             )
 
-            # بررسی موفقیت آمیز بودن ارسال به کاربر
             send_success = await send_video_once(context, chat_id, current_file_id)
             if not send_success:
                 raise Exception("خطا در فوروارد/ارسال به کاربر")
@@ -167,12 +188,10 @@ async def process_and_send_video_parts(
                 chat_id=chat_id,
                 text=f"❌ متاسفانه در آپلود یا ارسال پارت {idx} مشکلی پیش آمد. عملیات لغو شد.",
             )
-            # پرتاب مجدد خطا برای جلوگیری از ذخیره در دیتابیس و اجرای عملیات پاکسازی
             raise e
 
         await asyncio.sleep(1)
 
-    # ذخیره در کش تنها در صورتی که تمام پارت‌ها موفق بوده باشند
     if len(uploaded_file_ids) == total_parts:
         await asyncio.to_thread(save_cached_video, cache_key, uploaded_file_ids)
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
@@ -267,28 +286,46 @@ async def background_yt_download(
             await asyncio.to_thread(increment_yt_video_view, cache_key)
             return
 
-    # گرفتن اطلاعات ویدیو و ارسال تامنیل پیش از شروع
-    info = await asyncio.to_thread(get_video_info, url)
-    if info and info.get("thumbnail"):
-        caption = (
-            f"🎥 **{info['title']}**\n"
-            f"👤 کانال: {info['uploader']}\n"
-            f"⏱ زمان: $$ {info['duration']} $$ ثانیه\n\n"
-            f"⏳ در حال آماده‌سازی برای دانلود..."
-        )
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=info["thumbnail"],
-                caption=caption,
-                parse_mode="Markdown",
-            )
-        except Exception:
-            pass  # در صورت خطای لود عکس نادیده گرفته شود
+    precheck = None
 
-    # ✅ چک حجم قبل از شروع دانلود و قبل از ورود به صف
+    # ✅ one-request precheck فقط برای video
     if format_type == "video":
-        size = await asyncio.to_thread(get_video_filesize, url)
+        precheck = await asyncio.to_thread(get_video_precheck, url)
+
+        if not precheck.get("ok"):
+            reason = precheck.get("reason", "UNKNOWN")
+            print(f"❌ YouTube precheck failed: {precheck}")
+
+            if reason == "AUTH_REQUIRED":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ یوتیوب اجازه دریافت اطلاعات این ویدیو را نداد (نیاز به کوکی/احراز هویت).",
+                )
+            elif reason == "VIDEO_UNAVAILABLE":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ این ویدیو در دسترس نیست.",
+                )
+            elif reason == "PRIVATE_VIDEO":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ این ویدیو خصوصی است.",
+                )
+            elif reason == "UNKNOWN_SIZE":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ حجم ویدیو قابل تشخیص نیست؛ برای جلوگیری از دانلود فایل حجیم، عملیات متوقف شد.",
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ دریافت اطلاعات ویدیو ناموفق بود. دانلود انجام نشد.",
+                )
+
+            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+            return
+
+        size = precheck.get("size")
         if size and size > 300 * 1024 * 1024:
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -296,6 +333,23 @@ async def background_yt_download(
             )
             await asyncio.to_thread(decrement_yt_downloads, chat_id)
             return
+
+        if precheck.get("thumbnail"):
+            caption = (
+                f"🎥 **{precheck.get('title', 'بدون عنوان')}**\n"
+                f"👤 کانال: {precheck.get('uploader', 'نامشخص')}\n"
+                f"⏱ زمان: {precheck.get('duration', 0)} ثانیه\n\n"
+                f"⏳ در حال آماده‌سازی برای دانلود..."
+            )
+            try:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=precheck["thumbnail"],
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
 
     user_is_vip = await asyncio.to_thread(is_vip, chat_id)
     active_semaphore = vip_semaphore if user_is_vip else normal_semaphore
@@ -353,6 +407,38 @@ async def background_yt_download(
                             await asyncio.to_thread(decrement_yt_downloads, chat_id)
                             return
 
+                        elif raw_file == "AUTH_REQUIRED":
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ یوتیوب برای این ویدیو احراز هویت/کوکی می‌خواهد. دانلود انجام نشد.",
+                            )
+                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+                            return
+
+                        elif raw_file == "VIDEO_UNAVAILABLE":
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ این ویدیو در دسترس نیست.",
+                            )
+                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+                            return
+
+                        elif raw_file == "PRIVATE_VIDEO":
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ این ویدیو خصوصی است.",
+                            )
+                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+                            return
+
+                        elif raw_file in ["METADATA_FAILED", "DOWNLOAD_FAILED", None]:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ دانلود از یوتیوب ناموفق بود. بکاپ اجرا نشد.",
+                            )
+                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+                            return
+
                         elif raw_file and isinstance(raw_file, str):
                             await context.bot.edit_message_text(
                                 chat_id=chat_id,
@@ -371,7 +457,7 @@ async def background_yt_download(
                                 await context.bot.send_message(
                                     chat_id=chat_id, text="☁️ آپلود در فضای ابری ..."
                                 )
-                                # ریست کردن وضعیت برای نمایش پیشرفت آپلود ابری
+
                                 progress_dict["is_finished"] = False
                                 progress_dict["text"] = "☁️ شروع آپلود ابری..."
                                 updater_task = asyncio.create_task(
@@ -414,42 +500,51 @@ async def background_yt_download(
                                 )
 
                         else:
-                            raise Exception("Download failed")
+                            raise Exception("DOWNLOAD_FAILED")
 
                     except Exception as send_err:
                         print(f"❌ Video error: {send_err}")
-
-                        # ✅ اگر خطا مربوط به حجم بود، بکاپ نرو
-                        if "TOO_LARGE" in str(send_err):
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ حجم ویدیو بیشتر از حد مجاز (300MB) است.",
-                            )
-                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
-                            return
-
                         error_text = str(send_err).lower()
 
-                        if any(
-                            keyword in error_text
-                            for keyword in [
-                                "too large",
-                                "max-filesize",
-                                "300",
-                                "size",
-                                "exceed",
-                                "limit",
-                            ]
-                        ):
-                            await context.bot.send_message(
-                                chat_id=chat_id, text="⚠️ حجم ویدیو بیش از حد مجاز است."
-                            )
+                        # ✅ خطاهای غیرقابل بکاپ
+                        if is_non_backup_youtube_error(error_text):
+                            if (
+                                "too_large" in error_text
+                                or "max-filesize" in error_text
+                            ):
+                                msg = "❌ حجم ویدیو بیشتر از حد مجاز (300MB) است."
+                            elif (
+                                "auth_required" in error_text
+                                or "cookies" in error_text
+                                or "not a bot" in error_text
+                            ):
+                                msg = "❌ یوتیوب درخواست احراز هویت/کوکی داده است. دانلود انجام نشد."
+                            elif (
+                                "private video" in error_text
+                                or "private_video" in error_text
+                            ):
+                                msg = "❌ این ویدیو خصوصی است."
+                            elif (
+                                "video unavailable" in error_text
+                                or "video_unavailable" in error_text
+                            ):
+                                msg = "❌ این ویدیو در دسترس نیست."
+                            elif (
+                                "unknown_size" in error_text
+                                or "metadata_failed" in error_text
+                            ):
+                                msg = "❌ اطلاعات کافی برای دانلود امن این ویدیو دریافت نشد."
+                            else:
+                                msg = "❌ دانلود از یوتیوب ناموفق بود و بکاپ اجرا نشد."
+
+                            await context.bot.send_message(chat_id=chat_id, text=msg)
                             await asyncio.to_thread(decrement_yt_downloads, chat_id)
                             return
 
                         await context.bot.send_message(
                             chat_id=chat_id, text="⚠️ تلاش از طریق سرور بکاپ ... ⏳"
                         )
+
                         try:
                             backup_file = await download_from_telegram_bot(url)
                             if backup_file and os.path.exists(backup_file):
@@ -460,9 +555,11 @@ async def background_yt_download(
 
                                 if destination == "server":
                                     progress_dict["is_finished"] = False
+                                    progress_dict["text"] = "☁️ شروع آپلود فایل بکاپ..."
                                     updater_task = asyncio.create_task(
                                         update_progress_message()
                                     )
+
                                     s3_url = await asyncio.to_thread(
                                         upload_to_s3, backup_file, None, progress_dict
                                     )
@@ -490,12 +587,15 @@ async def background_yt_download(
                                     )
                             else:
                                 await context.bot.send_message(
-                                    chat_id=chat_id, text="❌ سرور بکاپ ناموفق بود."
+                                    chat_id=chat_id,
+                                    text="❌ سرور بکاپ ناموفق بود.",
                                 )
                                 await asyncio.to_thread(decrement_yt_downloads, chat_id)
+
                         except Exception as backup_err:
                             await context.bot.send_message(
-                                chat_id=chat_id, text=f"❌ خطای بکاپ: {str(backup_err)}"
+                                chat_id=chat_id,
+                                text=f"❌ خطای بکاپ: {str(backup_err)}",
                             )
                             await asyncio.to_thread(decrement_yt_downloads, chat_id)
 
@@ -504,7 +604,7 @@ async def background_yt_download(
                             if os.path.exists(file_path):
                                 try:
                                     await asyncio.to_thread(os.remove, file_path)
-                                except:
+                                except Exception:
                                     pass
 
                 elif format_type == "audio":
@@ -525,9 +625,11 @@ async def background_yt_download(
                                     chat_id=chat_id, text="☁️ آپلود در سرور ابری..."
                                 )
                                 progress_dict["is_finished"] = False
+                                progress_dict["text"] = "☁️ شروع آپلود ابری..."
                                 updater_task = asyncio.create_task(
                                     update_progress_message()
                                 )
+
                                 s3_url = await asyncio.to_thread(
                                     upload_to_s3, file_path, None, progress_dict
                                 )
@@ -541,7 +643,8 @@ async def background_yt_download(
                                     )
                                 else:
                                     await context.bot.send_message(
-                                        chat_id=chat_id, text="❌ خطا در آپلود ابری."
+                                        chat_id=chat_id,
+                                        text="❌ خطا در آپلود ابری.",
                                     )
                                     await asyncio.to_thread(
                                         decrement_yt_downloads, chat_id
@@ -562,7 +665,7 @@ async def background_yt_download(
                                         chat_id=chat_id,
                                         text="✅ ارسال با موفقیت انجام شد!",
                                     )
-                                except Exception as aud_err:
+                                except Exception:
                                     await context.bot.send_message(
                                         chat_id=chat_id, text="❌ خطا در ارسال صوت."
                                     )
@@ -581,7 +684,7 @@ async def background_yt_download(
                         if file_path and os.path.exists(file_path):
                             try:
                                 await asyncio.to_thread(os.remove, file_path)
-                            except:
+                            except Exception:
                                 pass
 
             except Exception as e:
@@ -840,7 +943,6 @@ async def youtube_destination_callback(
 ):
     query = update.callback_query
 
-    # جلوگیری از ارور تایم‌اوت شبکه
     try:
         await query.answer()
     except Exception as e:

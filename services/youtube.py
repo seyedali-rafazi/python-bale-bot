@@ -1,254 +1,242 @@
-# services/youtube.py
-
-
 import os
-import glob
-import uuid
-import math
-import asyncio
-import subprocess
-from dotenv import load_dotenv
-import random
-import json
 import re
+import json
+import uuid
+import shutil
+import subprocess
+from pathlib import Path
 
-load_dotenv()
-
-DOWNLOAD_DIR = "downloads"
-COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
+DOWNLOAD_DIR = "downloads/youtube"
+COOKIES_FILE = os.getenv("YT_COOKIES_FILE", "cookies/youtube.txt")
+YTDLP_BIN = os.getenv("YTDLP_BIN", "yt-dlp")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
-SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
-
-IPV6_PREFIX = os.getenv("IPV6_PREFIX")
-
-
-def get_random_ipv6():
-    """تولید یک آی‌پی تصادفی از ساب‌نت /64"""
-    hextets = [f"{random.randint(0, 65535):x}" for _ in range(4)]
-    suffix = ":".join(hextets)
-    return f"{IPV6_PREFIX}:{suffix}"
-
-
-def get_video_duration(file_path):
-    try:
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            file_path,
-        ]
-        output = subprocess.check_output(cmd, text=True)
-        return float(output.strip())
-    except Exception as e:
-        print(f"Error getting duration: {e}")
-        return 0
-
-
-def _cookie_args():
-    """
-    اگر فایل کوکی وجود داشته باشد، آرگومان cookies را برمی‌گرداند.
-    """
-    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
-        return ["--cookies", COOKIE_FILE]
-
-    print(f"⚠️ Cookie file not found: {COOKIE_FILE}")
-    return []
-
-
-# def _base_ytdlp_cmd():
-#     """
-#     آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
-#     بدون proxy، برای استفاده از مسیر شبکه خود سرور/WARP.
-#     """
-#     cmd = [
-#         "yt-dlp",
-#         # 1. اگر سرورتان IPv6 دارد، خط زیر را فعال کنید (بسیار موثر است)
-#         # در غیر این صورت اگر ارور شبکه گرفتید، این خط را کامنت کنید.
-#         "--force-ipv6",
-#         "--js-runtimes",
-#         "node",
-#         "--remote-components",
-#         "ejs:github",
-#         # 2. تغییر کلاینت از وب به موبایل و تلویزیون برای دور زدن ربات‌گیر یوتیوب
-#         "--extractor-args",
-#         "youtube:client=ANDROID,IOS,TV_EMBED",
-#         "--no-playlist",
-#     ]
-
-#     cmd.extend(_cookie_args())
-
-#     return cmd
-
 
 def _base_ytdlp_cmd():
-    random_ip = get_random_ipv6()
-    print(f"🌐 Using Random IPv6: {random_ip}")
+    cmd = [YTDLP_BIN]
 
-    cmd = [
-        "yt-dlp",
-        "--force-ipv6",
-        "--source-address",
-        random_ip,
-        "--js-runtimes",
-        "node",
-        "--remote-components",
-        "ejs:github",
-        "--extractor-args",
-        "youtube:player_client=web",
-        "--no-playlist",
-    ]
-
-    cmd.extend(_cookie_args())
+    if COOKIES_FILE and os.path.exists(COOKIES_FILE):
+        cmd.extend(["--cookies", COOKIES_FILE])
 
     return cmd
 
 
-def generate_progress_bar(percent: float, length: int = 10) -> str:
-    """ساخت نوار پیشرفت گرافیکی"""
-    filled = int((percent / 100) * length)
-    bar = "█" * filled + "░" * (length - filled)
-    return f"[{bar}] $$ {percent:.1f} \\% $$"
+def _safe_int(value):
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
-def get_video_info(url: str):
-    """گرفتن متادیتا شامل تامنیل، تایتل و مدت زمان"""
+def get_video_precheck(url: str):
+    """
+    یک درخواست واحد برای دریافت:
+      - title
+      - thumbnail
+      - uploader
+      - duration
+      - video_id
+      - filesize / filesize_approx
+
+    خروجی موفق:
+      {
+        "ok": True,
+        "video_id": "...",
+        "title": "...",
+        "thumbnail": "...",
+        "uploader": "...",
+        "duration": 123,
+        "size": 12345678
+      }
+
+    خروجی خطا:
+      {
+        "ok": False,
+        "reason": "AUTH_REQUIRED|VIDEO_UNAVAILABLE|PRIVATE_VIDEO|UNKNOWN_SIZE|METADATA_FAILED|EXCEPTION",
+        "message": "..."
+      }
+    """
     cmd = _base_ytdlp_cmd()
-    cmd.extend(["--dump-json", "--skip-download", url])
+    cmd.extend(["--dump-json", "--skip-download", "--no-warnings", url])
 
     try:
         result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
         )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
+
+        stdout_text = (result.stdout or "").strip()
+        stderr_text = (result.stderr or "").strip()
+        full_error = f"{stdout_text}\n{stderr_text}".lower()
+
+        if result.returncode != 0:
+            if "sign in to confirm you're not a bot" in full_error:
+                return {
+                    "ok": False,
+                    "reason": "AUTH_REQUIRED",
+                    "message": "یوتیوب درخواست احراز هویت/کوکی داده است.",
+                }
+
+            if "cookies" in full_error:
+                return {
+                    "ok": False,
+                    "reason": "AUTH_REQUIRED",
+                    "message": "کوکی یوتیوب لازم است یا معتبر نیست.",
+                }
+
+            if "video unavailable" in full_error:
+                return {
+                    "ok": False,
+                    "reason": "VIDEO_UNAVAILABLE",
+                    "message": "ویدیو در دسترس نیست.",
+                }
+
+            if "private video" in full_error:
+                return {
+                    "ok": False,
+                    "reason": "PRIVATE_VIDEO",
+                    "message": "ویدیو خصوصی است.",
+                }
+
             return {
-                "title": data.get("title", "بدون عنوان"),
-                "thumbnail": data.get("thumbnail"),
-                "duration": data.get("duration", 0),
-                "uploader": data.get("uploader", "ناشناس"),
+                "ok": False,
+                "reason": "METADATA_FAILED",
+                "message": stderr_text or stdout_text or "خطا در دریافت اطلاعات ویدیو.",
             }
+
+        data = json.loads(stdout_text)
+
+        size = _safe_int(data.get("filesize")) or _safe_int(data.get("filesize_approx"))
+
+        if not size:
+            formats = data.get("formats") or []
+            size_candidates = []
+
+            for fmt in formats:
+                fmt_size = _safe_int(fmt.get("filesize")) or _safe_int(
+                    fmt.get("filesize_approx")
+                )
+                if fmt_size:
+                    size_candidates.append(fmt_size)
+
+            if size_candidates:
+                size = max(size_candidates)
+
+        if not size:
+            return {
+                "ok": False,
+                "reason": "UNKNOWN_SIZE",
+                "message": "حجم ویدیو قابل تشخیص نیست.",
+            }
+
+        return {
+            "ok": True,
+            "video_id": data.get("id"),
+            "title": data.get("title") or "بدون عنوان",
+            "thumbnail": data.get("thumbnail"),
+            "uploader": data.get("uploader") or "نامشخص",
+            "duration": _safe_int(data.get("duration")) or 0,
+            "size": size,
+        }
+
     except Exception as e:
-        print(f"Error getting video info: {e}")
-    return None
+        print(f"Error in get_video_precheck: {e}")
+        return {
+            "ok": False,
+            "reason": "EXCEPTION",
+            "message": str(e),
+        }
+
+
+def get_video_info(url: str):
+    """
+    سازگاری با کدهای قبلی؛
+    اطلاعات را از precheck می‌گیرد.
+    """
+    result = get_video_precheck(url)
+    if not result.get("ok"):
+        return None
+
+    return {
+        "title": result.get("title"),
+        "thumbnail": result.get("thumbnail"),
+        "uploader": result.get("uploader"),
+        "duration": result.get("duration"),
+        "video_id": result.get("video_id"),
+        "size": result.get("size"),
+    }
 
 
 def get_video_filesize(url: str):
     """
-    گرفتن حجم تقریبی ویدیو قبل از دانلود
-    برای جلوگیری از دانلود فایل‌های بزرگ
+    سازگاری با کدهای قبلی؛
+    اطلاعات را از precheck می‌گیرد.
     """
-    cmd = _base_ytdlp_cmd()
-    cmd.extend(["--dump-json", "--skip-download", url])
+    result = get_video_precheck(url)
+    if not result.get("ok"):
+        return result
 
-    try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
-        )
+    return {
+        "ok": True,
+        "size": result.get("size"),
+    }
 
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
 
-            size = data.get("filesize") or data.get("filesize_approx")
-
-            if size:
-                return int(size)
-
-    except Exception as e:
-        print(f"Error getting filesize: {e}")
-
+def _extract_percent(line: str):
+    match = re.search(r"(\d+(?:\.\d+)?)%", line)
+    if match:
+        try:
+            return float(match.group(1))
+        except Exception:
+            return None
     return None
 
 
 def _run_subprocess_and_capture(cmd, progress_dict=None):
-    """
-    اجرای yt-dlp با subprocess.
-    خروجی خط‌به‌خط خوانده می‌شود تا هم لاگ داشته باشیم، هم در صورت نیاز progress_dict آپدیت شود.
-    """
-    print("Running command:")
-    print(" ".join(cmd))
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+        collected = []
 
-    output_lines = []
+        for line in process.stdout:
+            line = line.strip()
+            collected.append(line)
 
-    for line in process.stdout:
-        line = line.rstrip()
-        output_lines.append(line)
-        print(line)
+            if progress_dict is not None:
+                percent = _extract_percent(line)
+                if percent is not None:
+                    progress_dict["percent"] = percent
 
-        if progress_dict is not None:
-            if "[download]" in line and "%" in line:
-                # استخراج درصد با regex
-                match = re.search(r"(\d+\.\d+)%", line)
-                if match:
-                    percent = float(match.group(1))
-                    bar = generate_progress_bar(percent)
-                    # حذف بخش [download] برای تمیزی متن
-                    clean_line = line.split("]", 1)[-1].strip()
-                    progress_dict["text"] = (
-                        f"📥 در حال دانلود...\n{bar}\n`{clean_line}`"
-                    )
-            elif "Destination:" in line:
-                progress_dict["text"] = "📥 شروع دانلود..."
-    process.wait()
+        process.wait()
+        output = "\n".join(collected)
 
-    full_output = "\n".join(output_lines)
+        if process.returncode != 0:
+            print("❌ yt-dlp failed:")
+            print(output)
+            return False, output
 
-    if process.returncode != 0:
-        print("❌ yt-dlp failed")
-        print(full_output)
-        return False, full_output
+        return True, output
 
-    return True, full_output
-
-
-def _find_downloaded_file(video_id, req_id, preferred_ext=None):
-    """
-    فایل دانلود شده را بر اساس id و req_id پیدا می‌کند.
-    """
-    if preferred_ext:
-        pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.{preferred_ext}")
-        files = glob.glob(pattern)
-        if files:
-            return files[0]
-
-    pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
-    files = glob.glob(pattern)
-
-    # فایل‌های موقت را حذف از انتخاب
-    files = [
-        f
-        for f in files
-        if not f.endswith(".part")
-        and not f.endswith(".ytdl")
-        and not f.endswith(".temp")
-    ]
-
-    if not files:
-        return None
-
-    # اگر چند فایل بود، بزرگ‌ترین را بردار
-    files.sort(key=lambda x: os.path.getsize(x), reverse=True)
-    return files[0]
+    except Exception as e:
+        print(f"❌ subprocess error: {e}")
+        return False, str(e)
 
 
 def _get_video_id_by_ytdlp(url):
     """
     گرفتن video id با yt-dlp.
-    برای ساخت نام فایل قابل پیش‌بینی.
     """
     cmd = _base_ytdlp_cmd()
     cmd.extend(
@@ -256,6 +244,7 @@ def _get_video_id_by_ytdlp(url):
             "--print",
             "%(id)s",
             "--skip-download",
+            "--no-warnings",
             url,
         ]
     )
@@ -269,17 +258,32 @@ def _get_video_id_by_ytdlp(url):
             timeout=60,
         )
 
+        stderr_text = (result.stderr or "").strip().lower()
+        stdout_text = (result.stdout or "").strip().lower()
+        full_error = f"{stdout_text}\n{stderr_text}"
+
         if result.returncode != 0:
             print("❌ Failed to get video id")
             print(result.stderr)
+
+            if "sign in to confirm you're not a bot" in full_error:
+                return "AUTH_REQUIRED"
+
+            if "cookies" in full_error:
+                return "AUTH_REQUIRED"
+
+            if "video unavailable" in full_error:
+                return "VIDEO_UNAVAILABLE"
+
+            if "private video" in full_error:
+                return "PRIVATE_VIDEO"
+
             return None
 
         lines = [x.strip() for x in result.stdout.splitlines() if x.strip()]
-
         if not lines:
             return None
 
-        # آخرین خط معمولاً id است
         return lines[-1]
 
     except Exception as e:
@@ -287,119 +291,46 @@ def _get_video_id_by_ytdlp(url):
         return None
 
 
-async def split_video_if_needed(original_file_path):
-    HARD_LIMIT = 14.5 * 1024 * 1024  # 14.5 MB
-
-    if os.path.getsize(original_file_path) <= HARD_LIMIT:
-        return [original_file_path]
-
-    files_to_process = [original_file_path]
-    final_valid_parts = []
-
-    part_counter = 1
-
-    base_name, ext = os.path.splitext(original_file_path)
-    if ext.lower() == ".part":
-        base_name, ext = os.path.splitext(base_name)
-        if not ext:
-            ext = ".mp4"
-
-    while files_to_process:
-        current_file = files_to_process.pop(0)
-
-        if os.path.getsize(current_file) <= HARD_LIMIT:
-            final_valid_parts.append(current_file)
-            continue
-
-        duration = get_video_duration(current_file)
-        if not duration or duration <= 0:
-            final_valid_parts.append(current_file)
-            continue
-
-        file_size = os.path.getsize(current_file)
-
-        num_chunks = math.ceil(file_size / HARD_LIMIT)
-        if num_chunks == 1:
-            num_chunks = 2
-
-        segment_time = duration / num_chunks
-
-        output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
-        part_counter += 1
-
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            current_file,
-            "-c",
-            "copy",
-            "-f",
-            "segment",
-            "-segment_time",
-            str(segment_time),
-            "-reset_timestamps",
-            "1",
-            output_pattern,
-        ]
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await process.communicate()
-
-            if process.returncode == 0:
-                new_parts = sorted(
-                    glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
-                )
-                # اصلاح اول: اضافه کردن پارت‌های جدید به ابتدای صف
-                files_to_process = new_parts + files_to_process
-
-                if current_file != original_file_path and os.path.exists(current_file):
-                    os.remove(current_file)
-            else:
-                final_valid_parts.append(current_file)
-
-        except Exception as e:
-            print(f"Error in ffmpeg: {e}")
-            final_valid_parts.append(current_file)
-
-    if original_file_path not in final_valid_parts and os.path.exists(
-        original_file_path
-    ):
-        os.remove(original_file_path)
-
-    # اصلاح دوم: حذف sorted برای حفظ ترتیب زمانی
-    return final_valid_parts
-
-
 def download_youtube_video(url, progress_dict=None):
     """
     دانلود ویدیو با subprocess.
-    اولویت با فرمت 18 است چون روی VPS تست شد و جواب داد.
+
+    خروجی موفق:
+      path_to_file
+
+    خروجی خطا:
+      TOO_LARGE
+      AUTH_REQUIRED
+      VIDEO_UNAVAILABLE
+      PRIVATE_VIDEO
+      METADATA_FAILED
+      DOWNLOAD_FAILED
     """
     req_id = uuid.uuid4().hex
 
     video_id = _get_video_id_by_ytdlp(url)
     if not video_id:
         print("❌ Could not detect video id")
-        return None
+        return "METADATA_FAILED"
+
+    if video_id in ["AUTH_REQUIRED", "VIDEO_UNAVAILABLE", "PRIVATE_VIDEO"]:
+        return video_id
 
     output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
 
     cmd = _base_ytdlp_cmd()
-
     cmd.extend(
         [
             "-f",
-            "best[height<=480][ext=mp4]/best[height<=480]/best",
+            "bestvideo+bestaudio/best",
+            "--merge-output-format",
+            "mp4",
             "--max-filesize",
-            str(MAX_DOWNLOAD_SIZE),
+            "300M",
             "-o",
             output_template,
+            "--no-playlist",
+            "--newline",
             url,
         ]
     )
@@ -407,151 +338,54 @@ def download_youtube_video(url, progress_dict=None):
     ok, output = _run_subprocess_and_capture(cmd, progress_dict=progress_dict)
 
     if not ok:
-        if "File is larger than max-filesize" in output or "max-filesize" in output:
+        output_lower = (output or "").lower()
+
+        if (
+            "file is larger than max-filesize" in output_lower
+            or "max-filesize" in output_lower
+        ):
             return "TOO_LARGE"
 
-        return None
+        if "sign in to confirm you're not a bot" in output_lower:
+            return "AUTH_REQUIRED"
 
-    final_file = _find_downloaded_file(video_id, req_id)
+        if "cookies" in output_lower:
+            return "AUTH_REQUIRED"
+
+        if "video unavailable" in output_lower:
+            return "VIDEO_UNAVAILABLE"
+
+        if "private video" in output_lower:
+            return "PRIVATE_VIDEO"
+
+        return "DOWNLOAD_FAILED"
+
+    final_file = None
+    download_path = Path(DOWNLOAD_DIR)
+
+    for file in download_path.iterdir():
+        if file.is_file() and file.stem.startswith(f"{video_id}_{req_id}"):
+            final_file = str(file)
+            break
 
     if not final_file or not os.path.exists(final_file):
         print("❌ Download finished but file not found")
-        return None
-
-    actual_size = os.path.getsize(final_file)
-
-    if actual_size > MAX_DOWNLOAD_SIZE:
-        try:
-            os.remove(final_file)
-        except Exception:
-            pass
-
-        return "TOO_LARGE"
+        return "DOWNLOAD_FAILED"
 
     return final_file
 
 
-def download_youtube_audio(video_id_or_url: str) -> str:
-    """
-    دانلود صدا با subprocess و تبدیل به mp3.
-    """
-    if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
-        url = video_id_or_url
-    else:
-        url = f"https://www.youtube.com/watch?v={video_id_or_url}"
-
-    req_id = uuid.uuid4().hex
-
-    video_id = _get_video_id_by_ytdlp(url)
-    if not video_id:
-        print("❌ Could not detect video id")
-        return None
-
-    output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
-
-    cmd = _base_ytdlp_cmd()
-
-    cmd.extend(
-        [
-            "-f",
-            "bestaudio/best",
-            "--extract-audio",
-            "--audio-format",
-            "mp3",
-            "--audio-quality",
-            "192K",
-            "--max-filesize",
-            str(MAX_DOWNLOAD_SIZE),
-            "-o",
-            output_template,
-            url,
-        ]
-    )
-
-    ok, output = _run_subprocess_and_capture(cmd)
-
-    if not ok:
-        if "File is larger than max-filesize" in output or "max-filesize" in output:
-            return "TOO_LARGE"
-
-        return None
-
-    final_file = _find_downloaded_file(video_id, req_id, preferred_ext="mp3")
-
-    if not final_file or not os.path.exists(final_file):
-        print("❌ Audio download finished but mp3 file not found")
-        return None
-
-    actual_size = os.path.getsize(final_file)
-
-    if actual_size > MAX_DOWNLOAD_SIZE:
-        try:
-            os.remove(final_file)
-        except Exception:
-            pass
-
-        return "TOO_LARGE"
-
-    return final_file
-
-
-def search_yt_videos(query, max_results=5):
-    """
-    سرچ یوتیوب با subprocess.
-    خروجی به صورت title و id گرفته می‌شود.
-    """
-    search_query = (
-        f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
-    )
-
-    cmd = _base_ytdlp_cmd()
-
-    cmd.extend(
-        [
-            "--flat-playlist",
-            "--print",
-            "%(title)s|||%(id)s",
-            "--skip-download",
-            search_query,
-        ]
-    )
-
+def cleanup_file(file_path: str):
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=90,
-        )
-
-        if result.returncode != 0:
-            print("❌ Error searching YT:")
-            print(result.stderr)
-            return []
-
-        results = []
-
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-
-            if "|||" not in line:
-                continue
-
-            title, video_id = line.split("|||", 1)
-
-            if video_id:
-                results.append(
-                    {
-                        "title": title or "Unknown",
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                    }
-                )
-
-        return results[:max_results]
-
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
     except Exception as e:
-        print(f"Error searching YT: {e}")
-        return []
+        print(f"cleanup_file error: {e}")
+
+
+def cleanup_dir(path: str):
+    try:
+        if path and os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+    except Exception as e:
+        print(f"cleanup_dir error: {e}")
