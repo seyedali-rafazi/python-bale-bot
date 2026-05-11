@@ -77,7 +77,7 @@ def upload_to_s3(
         presigned_url = s3.generate_presigned_url(
             ClientMethod="get_object",
             Params={"Bucket": ARVAN_BUCKET, "Key": object_name},
-            ExpiresIn=1800,
+            ExpiresIn=10800,
         )
 
         return presigned_url

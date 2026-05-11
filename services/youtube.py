@@ -139,6 +139,33 @@ def get_video_info(url: str):
     return None
 
 
+def get_video_filesize(url: str):
+    """
+    گرفتن حجم تقریبی ویدیو قبل از دانلود
+    برای جلوگیری از دانلود فایل‌های بزرگ
+    """
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(["--dump-json", "--skip-download", url])
+
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+        )
+
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+
+            size = data.get("filesize") or data.get("filesize_approx")
+
+            if size:
+                return int(size)
+
+    except Exception as e:
+        print(f"Error getting filesize: {e}")
+
+    return None
+
+
 def _run_subprocess_and_capture(cmd, progress_dict=None):
     """
     اجرای yt-dlp با subprocess.
