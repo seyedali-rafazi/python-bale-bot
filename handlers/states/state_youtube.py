@@ -25,7 +25,7 @@ from core.database import (
     save_cached_video,
     increment_yt_video_view,
 )
-from services.youtube import get_video_filesize
+
 from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
@@ -286,17 +286,6 @@ async def background_yt_download(
         except Exception:
             pass  # در صورت خطای لود عکس نادیده گرفته شود
 
-    # ✅ چک حجم قبل از شروع دانلود و قبل از ورود به صف
-    if format_type == "video":
-        size = await asyncio.to_thread(get_video_filesize, url)
-        if size and size > 300 * 1024 * 1024:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ حجم ویدیو بیشتر از 300MB است.",
-            )
-            await asyncio.to_thread(decrement_yt_downloads, chat_id)
-            return
-
     user_is_vip = await asyncio.to_thread(is_vip, chat_id)
     active_semaphore = vip_semaphore if user_is_vip else normal_semaphore
     max_concurrent = MAX_VIP_DOWNLOADS if user_is_vip else MAX_NORMAL_DOWNLOADS
@@ -418,16 +407,6 @@ async def background_yt_download(
 
                     except Exception as send_err:
                         print(f"❌ Video error: {send_err}")
-
-                        # ✅ اگر خطا مربوط به حجم بود، بکاپ نرو
-                        if "TOO_LARGE" in str(send_err):
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ حجم ویدیو بیشتر از حد مجاز (300MB) است.",
-                            )
-                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
-                            return
-
                         error_text = str(send_err).lower()
 
                         if any(
@@ -514,15 +493,6 @@ async def background_yt_download(
                             download_youtube_audio, url, progress_dict
                         )
                         progress_dict["is_finished"] = True
-
-                        # اضافه شدن بررسی حجم برای صوت
-                        if file_path == "TOO_LARGE":
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="⚠️ حجم فایل صوتی بیشتر از حد مجاز (300MB) است.",
-                            )
-                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
-                            return
 
                         if (
                             file_path
