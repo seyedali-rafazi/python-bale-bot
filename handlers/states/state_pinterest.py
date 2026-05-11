@@ -35,26 +35,32 @@ async def get_image_bytes(
         try:
             async with session.get(
                 url,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=20),
                 allow_redirects=True,
             ) as res:
-                if res.status != 200:
-                    return None
+                print(f"image download status={res.status} url={url}")
 
-                content_type = res.headers.get("Content-Type", "").lower()
-                if "image" not in content_type:
+                if res.status != 200:
                     return None
 
                 data = await res.read()
                 if not data:
                     return None
 
+                content_type = res.headers.get("Content-Type", "").lower()
+
+                # اگر content-type درست نبود ولی فایل واقعاً image بود، باز هم عبور کن
+                if "image" not in content_type:
+                    if len(data) < 500:
+                        return None
+
                 bio = BytesIO(data)
                 bio.name = "pinterest.jpg"
                 bio.seek(0)
                 return bio
+
         except Exception as e:
-            print(f"get_image_bytes error: {e}")
+            print(f"get_image_bytes error: {e} url={url}")
             return None
 
 
@@ -67,6 +73,7 @@ async def fetch_image_bytes(urls: List[str]) -> List[BytesIO]:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
         "Referer": "https://www.pinterest.com/",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
 
     async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
@@ -87,6 +94,7 @@ async def send_image_batch(
 ) -> int:
     sent_count = 0
     images = await fetch_image_bytes(urls)
+    print(f"Sending batch of {len(urls)} urls")
 
     for img in images:
         try:
@@ -124,12 +132,9 @@ async def handle_pinterest_state(
         print(f"Pinterest search error: {e}")
         image_urls = []
 
-    if not image_urls:
-        await msg.edit_text(
-            "❌ هیچ تصویر مناسبی از Pinterest پیدا نشد. عبارت دیگری امتحان کنید."
-        )
-        set_state(chat_id, "")
-        return
+    print(f"Pinterest found {len(image_urls)} image urls")
+    if image_urls:
+        print("Sample urls:", image_urls[:5])
 
     image_urls = list(dict.fromkeys(image_urls))
 
