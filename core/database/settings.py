@@ -1,23 +1,22 @@
 # core/database/settings.py
 
-from .base import get_connection
+import aiosqlite
+from .base import DB_NAME
 
 
-def get_setting(key, default=None):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else default
+async def get_setting(key, default=None):
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ) as cursor:
+            result = await cursor.fetchone()
+            return result[0] if result else default
 
 
-def set_setting(key, value):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        (key, str(value)),
-    )
-    conn.commit()
-    conn.close()
+async def set_setting(key, value):
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, str(value)),
+        )
+        await conn.commit()

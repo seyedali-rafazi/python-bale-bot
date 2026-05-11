@@ -1,105 +1,83 @@
 # core/database/tiktok.py
 
-from .base import get_connection
+import aiosqlite
+from .base import DB_NAME
 from .utils import get_tehran_today
 
 
-def get_tt_downloads(user_id):
-    conn = get_connection()
-    cursor = conn.cursor()
+async def get_tt_downloads(user_id):
     today = get_tehran_today()
-    cursor.execute(
-        "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
-    )
-    result = cursor.fetchone()
-    conn.close()
-    if result:
-        count, db_date = result
-        if db_date != today:
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+            if result:
+                return 0 if result[1] != today else result[0]
             return 0
-        return count
-    return 0
 
 
-def increment_tt_downloads(user_id):
-    conn = get_connection()
-    cursor = conn.cursor()
+async def increment_tt_downloads(user_id):
     today = get_tehran_today()
-    cursor.execute(
-        "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
-    )
-    result = cursor.fetchone()
-    if result:
-        count, db_date = result
-        new_count = 1 if db_date != today else count + 1
-        cursor.execute(
-            "UPDATE users SET tt_dl_count = ?, tt_dl_date = ? WHERE user_id = ?",
-            (new_count, today, user_id),
-        )
-    conn.commit()
-    conn.close()
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+        if result:
+            new_count = 1 if result[1] != today else result[0] + 1
+            await conn.execute(
+                "UPDATE users SET tt_dl_count = ?, tt_dl_date = ? WHERE user_id = ?",
+                (new_count, today, user_id),
+            )
+        await conn.commit()
 
 
-def get_tt_explores(user_id):
-    conn = get_connection()
-    cursor = conn.cursor()
+async def get_tt_explores(user_id):
     today = get_tehran_today()
-    cursor.execute(
-        "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
-    )
-    result = cursor.fetchone()
-    conn.close()
-    if result:
-        count, db_date = result
-        if db_date != today:
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+            if result:
+                return 0 if result[1] != today else result[0]
             return 0
-        return count
-    return 0
 
 
-def increment_tt_explores(user_id):
-    conn = get_connection()
-    cursor = conn.cursor()
+async def increment_tt_explores(user_id):
     today = get_tehran_today()
-    cursor.execute(
-        "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
-    )
-    result = cursor.fetchone()
-    if result:
-        count, db_date = result
-        new_count = 1 if db_date != today else count + 1
-        cursor.execute(
-            "UPDATE users SET tt_exp_count = ?, tt_exp_date = ? WHERE user_id = ?",
-            (new_count, today, user_id),
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT tt_exp_count, tt_exp_date FROM users WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+        if result:
+            new_count = 1 if result[1] != today else result[0] + 1
+            await conn.execute(
+                "UPDATE users SET tt_exp_count = ?, tt_exp_date = ? WHERE user_id = ?",
+                (new_count, today, user_id),
+            )
+        await conn.commit()
+
+
+async def add_tiktok_explore_video(file_id):
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute(
+            "INSERT OR IGNORE INTO tiktok_explore (file_id) VALUES (?)", (file_id,)
         )
-    conn.commit()
-    conn.close()
+        await conn.commit()
 
 
-def add_tiktok_explore_video(file_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR IGNORE INTO tiktok_explore (file_id) VALUES (?)", (file_id,)
-    )
-    conn.commit()
-    conn.close()
+async def get_random_tiktok_explore_videos(limit=5):
+    async with aiosqlite.connect(DB_NAME) as conn:
+        async with conn.execute(
+            "SELECT file_id FROM tiktok_explore ORDER BY RANDOM() LIMIT ?", (limit,)
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
 
 
-def get_random_tiktok_explore_videos(limit=5):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT file_id FROM tiktok_explore ORDER BY RANDOM() LIMIT ?", (limit,)
-    )
-    results = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return results
-
-
-def delete_invalid_video_from_db(file_id: str):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM tiktok_explore WHERE file_id = ?", (file_id,))
-    conn.commit()
-    conn.close()
+async def delete_invalid_video_from_db(file_id: str):
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("DELETE FROM tiktok_explore WHERE file_id = ?", (file_id,))
+        await conn.commit()
