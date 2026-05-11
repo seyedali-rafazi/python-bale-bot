@@ -1,8 +1,7 @@
 # services/pinterest_queue.py
 
 import asyncio
-import time
-from typing import Dict, List, Tuple
+from typing import List, Callable, Awaitable, Optional
 
 from services.pinterest import search_pinterest_images
 
@@ -10,41 +9,49 @@ from services.pinterest import search_pinterest_images
 # تعداد سرچ همزمان مجاز
 PINTEREST_SEARCH_CONCURRENCY = 1
 
-# مدت کش
-CACHE_TTL = 1800  # 30 دقیقه
-
 _search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
-_cache: Dict[str, Tuple[float, List[str]]] = {}
-_cache_lock = asyncio.Lock()
+
+_queue_lock = asyncio.Lock()
+_waiting_count = 0
 
 
-async def queued_pinterest_search(query: str, max_results: int = 30) -> List[str]:
-    key = query.strip().lower()
+async def queued_pinterest_search(
+    query: str,
+    max_results: int = 30,
+    on_queue_position: Optional[Callable[[int], Awaitable[None]]] = None,
+) -> List[str]:
+    global _waiting_count
 
-    # چک cache
-    async with _cache_lock:
-        cached = _cache.get(key)
-        if cached:
-            ts, data = cached
-            if time.time() - ts < CACHE_TTL:
-                print(f"Pinterest cache hit: {query}")
-                return data[:max_results]
+    # ثبت کاربر در صف
+    async with _queue_lock:
+        _waiting_count += 1
+        position = _waiting_count
 
-    # اجرا در صف
-    async with _search_semaphore:
-        # چک مجدد cache بعد از انتظار
-        async with _cache_lock:
-            cached = _cache.get(key)
-            if cached:
-                ts, data = cached
-                if time.time() - ts < CACHE_TTL:
-                    print(f"Pinterest cache hit after wait: {query}")
-                    return data[:max_results]
+    # اطلاع به کاربر
+    if on_queue_position:
+        try:
+            await on_queue_position(position)
+        except Exception:
+            pass
 
-        print(f"Pinterest queued search start: {query}")
-        data = await search_pinterest_images(query=query, max_results=max_results)
+    try:
+        async with _search_semaphore:
+            # وقتی نوبتش شروع شد، از تعداد منتظرها کم می‌کنیم
+            async with _queue_lock:
+                _waiting_count -= 1
 
-        async with _cache_lock:
-            _cache[key] = (time.time(), data)
+            print(f"Pinterest queued search start: {query}")
 
-        return data[:max_results]
+            data = await search_pinterest_images(
+                query=query,
+                max_results=max_results,
+            )
+
+            return data[:max_results]
+
+    except Exception:
+        # اگر قبل از ورود به semaphore خطا خورد، تعداد را اصلاح کن
+        async with _queue_lock:
+            if _waiting_count > 0:
+                _waiting_count -= 1
+        raise

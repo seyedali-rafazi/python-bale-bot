@@ -2,8 +2,8 @@
 
 import re
 import html
-from typing import List, Optional
-from urllib.parse import quote
+from typing import List, Optional, Dict
+from urllib.parse import quote, urlparse
 
 from playwright.async_api import (
     async_playwright,
@@ -27,24 +27,44 @@ class PinterestService:
         if not html_text:
             return []
 
-        image_urls = self._extract_pinimg_urls(html_text)
+        raw_urls = self._extract_pinimg_urls(html_text)
 
-        results = []
-        seen = set()
+        best_by_image: Dict[str, str] = {}
 
-        for url in image_urls:
-            candidates = self._build_quality_candidates(url)
+        for raw_url in raw_urls:
+            clean_url = self._clean_url(raw_url)
+            if not clean_url:
+                continue
+
+            candidates = self._build_quality_candidates(clean_url)
 
             for candidate in candidates:
-                if candidate and candidate not in seen:
-                    seen.add(candidate)
-                    results.append(candidate)
-                    break
+                image_key = self._get_image_key(candidate)
+                if not image_key:
+                    continue
 
-            if len(results) >= max_results:
-                break
+                current = best_by_image.get(image_key)
 
-        print(f"Pinterest Playwright extracted {len(results)} images for query={query}")
+                if not current:
+                    best_by_image[image_key] = candidate
+                else:
+                    if self._quality_score(candidate) < self._quality_score(current):
+                        best_by_image[image_key] = candidate
+
+        sorted_urls = sorted(
+            best_by_image.values(),
+            key=lambda u: self._quality_score(u),
+        )
+
+        results = sorted_urls[:max_results]
+
+        print(
+            f"Pinterest Playwright extracted {len(results)} unique high-quality images for query={query}"
+        )
+
+        if results:
+            print("Pinterest sample images:", results[:5])
+
         return results
 
     async def _load_search_page(self, query: str) -> Optional[str]:
@@ -87,12 +107,11 @@ class PinterestService:
 
                 try:
                     await page.wait_for_timeout(3000)
-                    await page.mouse.wheel(0, 2500)
-                    await page.wait_for_timeout(2000)
-                    await page.mouse.wheel(0, 2500)
-                    await page.wait_for_timeout(2000)
-                    await page.mouse.wheel(0, 3000)
-                    await page.wait_for_timeout(2000)
+
+                    for _ in range(4):
+                        await page.mouse.wheel(0, 2500)
+                        await page.wait_for_timeout(1500)
+
                 except Exception:
                     pass
 
@@ -117,6 +136,7 @@ class PinterestService:
             r'"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"image"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"images"\s*:\s*\{.*?"orig"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
+            r'"images"\s*:\s*\{.*?"originals"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"images"\s*:\s*\{.*?"736x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"images"\s*:\s*\{.*?"564x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
             r'"images"\s*:\s*\{.*?"474x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
@@ -142,7 +162,7 @@ class PinterestService:
 
         url = html.unescape(url.strip())
         url = url.replace("\\/", "/")
-        url = url.rstrip("\"',")
+        url = url.rstrip("\"',);")
 
         if url.startswith("//"):
             url = "https:" + url
@@ -153,16 +173,15 @@ class PinterestService:
         if "i.pinimg.com" not in url:
             return None
 
+        # حذف query string اگر وجود داشت
+        url = url.split("?")[0]
+
         return url
 
     def _build_quality_candidates(self, url: str) -> List[str]:
         """
-        از یک URL کم‌کیفیت چند کاندید باکیفیت‌تر می‌سازد.
-        ترتیب اهمیت:
-        1) originals
-        2) 736x
-        3) 564x
-        4) خود لینک اصلی
+        برای هر URL، فقط کاندیدهای کیفیت بالاتر می‌سازد.
+        بعداً بر اساس image_key فقط بهترینشان انتخاب می‌شود.
         """
         clean = self._clean_url(url)
         if not clean:
@@ -172,60 +191,106 @@ class PinterestService:
         seen = set()
 
         def add(u: str):
+            u = self._clean_url(u)
             if u and u not in seen:
                 seen.add(u)
                 candidates.append(u)
 
-        # اگر خودش originals باشد
-        add(clean)
-
-        # تبدیل سایزهای thumbnail به originals
+        # نسخه‌های احتمالی بهتر
         originals_url = re.sub(
             r"/(236x|474x|564x|736x)/",
             "/originals/",
             clean,
             flags=re.I,
         )
-        add(originals_url)
 
-        # تبدیل به 736x
         x736_url = re.sub(
             r"/(236x|474x|564x|originals)/",
             "/736x/",
             clean,
             flags=re.I,
         )
-        add(x736_url)
 
-        # تبدیل به 564x
         x564_url = re.sub(
             r"/(236x|474x|736x|originals)/",
             "/564x/",
             clean,
             flags=re.I,
         )
+
+        x474_url = re.sub(
+            r"/(236x|564x|736x|originals)/",
+            "/474x/",
+            clean,
+            flags=re.I,
+        )
+
+        x236_url = re.sub(
+            r"/(474x|564x|736x|originals)/",
+            "/236x/",
+            clean,
+            flags=re.I,
+        )
+
+        # ترتیب اضافه کردن مهم است
+        add(originals_url)
+        add(x736_url)
         add(x564_url)
+        add(x474_url)
+        add(x236_url)
+        add(clean)
 
-        # اگر URL شامل originals بود، نسخه 736x هم ساخته شود
-        if "/originals/" in clean:
-            add(clean.replace("/originals/", "/736x/"))
+        candidates.sort(key=self._quality_score)
 
-        # اولویت‌بندی بهتر:
-        def score(u: str) -> int:
-            if "/originals/" in u:
-                return 0
-            if "/736x/" in u:
-                return 1
-            if "/564x/" in u:
-                return 2
-            if "/474x/" in u:
-                return 3
-            if "/236x/" in u:
-                return 4
-            return 5
-
-        candidates.sort(key=score)
         return candidates
+
+    def _get_image_key(self, url: str) -> Optional[str]:
+        """
+        کلید یکتا برای تشخیص اینکه چند URL با سایزهای مختلف مربوط به یک عکس هستند.
+
+        مثال:
+        https://i.pinimg.com/236x/aa/bb/cc/img.jpg
+        https://i.pinimg.com/736x/aa/bb/cc/img.jpg
+        https://i.pinimg.com/originals/aa/bb/cc/img.jpg
+
+        همه تبدیل می‌شوند به:
+        aa/bb/cc/img.jpg
+        """
+        clean = self._clean_url(url)
+        if not clean:
+            return None
+
+        try:
+            parsed = urlparse(clean)
+            path = parsed.path
+
+            path = re.sub(
+                r"^/(236x|474x|564x|736x|originals)/",
+                "",
+                path,
+                flags=re.I,
+            )
+
+            return path.lower()
+
+        except Exception:
+            return None
+
+    def _quality_score(self, url: str) -> int:
+        """
+        عدد کمتر یعنی کیفیت بهتر.
+        """
+        if "/originals/" in url:
+            return 0
+        if "/736x/" in url:
+            return 1
+        if "/564x/" in url:
+            return 2
+        if "/474x/" in url:
+            return 3
+        if "/236x/" in url:
+            return 4
+        return 5
 
 
 async def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
