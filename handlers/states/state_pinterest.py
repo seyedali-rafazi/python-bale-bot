@@ -4,13 +4,12 @@
 import asyncio
 import aiohttp
 import requests
-import json
-from bs4 import BeautifulSoup
 from io import BytesIO
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
+import re
 
 # محدود کردن تعداد دانلودهای همزمان کل ربات
 download_semaphore = asyncio.Semaphore(5)
@@ -19,33 +18,28 @@ download_semaphore = asyncio.Semaphore(5)
 # -------------------------------------------------------------
 # تابع جدید برای اسکرپ مستقیم از پینترست (جایگزین داک‌داک‌گو)
 # -------------------------------------------------------------
-def search_pinterest_images(query, max_results=50):
+def search_pinterest_images(query, max_results=10):
+    url = f"https://www.pinterest.com/search/pins/?q={query}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    }
+
     try:
-        url = f"https://www.pinterest.com/search/pins/?q={query}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
+        response = requests.get(url, headers=headers, timeout=15)
 
-        # استخراج دیتای جاوااسکریپت پینترست
-        images = []
-        for script in soup.find_all("script", id="__PWS_DATA__"):
-            data = json.loads(script.string)
-            # مسیر رسیدن به عکس‌ها در دیتای پینترست
-            try:
-                results = data["props"]["initialReduxState"]["pins"]
-                for pin_id, pin_data in results.items():
-                    if "images" in pin_data and "orig" in pin_data["images"]:
-                        images.append(pin_data["images"]["orig"]["url"])
-                        if len(images) >= max_results:
-                            break
-            except KeyError:
-                continue
+        # پینترست لینک عکس‌های باکیفیت (originals) را در سورس صفحه مخفی می‌کند
+        # با استفاده از Regex این لینک‌ها را پیدا می‌کنیم
+        image_urls = re.findall(
+            r"https://i\.pinimg\.com/originals/[a-zA-Z0-9/_\-]+\.jpg", response.text
+        )
 
-        return images[:max_results]
+        # حذف لینک‌های تکراری
+        unique_urls = list(set(image_urls))
+
+        return unique_urls[:max_results]
+
     except Exception as e:
-        print(f"Pinterest Direct Scraping Error: {e}")
+        print(f"Error scraping Pinterest: {e}")
         return []
 
 
