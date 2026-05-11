@@ -1,16 +1,52 @@
 # handlers/states/state_pinterest.py
 
+
 import asyncio
 import aiohttp
+import requests
+import json
+from bs4 import BeautifulSoup
 from io import BytesIO
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_pinterest_downloads, increment_pinterest_downloads, is_vip
-from services.pinterest import search_pinterest_images
 
 # محدود کردن تعداد دانلودهای همزمان کل ربات
 download_semaphore = asyncio.Semaphore(5)
+
+
+# -------------------------------------------------------------
+# تابع جدید برای اسکرپ مستقیم از پینترست (جایگزین داک‌داک‌گو)
+# -------------------------------------------------------------
+def search_pinterest_images(query, max_results=50):
+    try:
+        url = f"https://www.pinterest.com/search/pins/?q={query}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # استخراج دیتای جاوااسکریپت پینترست
+        images = []
+        for script in soup.find_all("script", id="__PWS_DATA__"):
+            data = json.loads(script.string)
+            # مسیر رسیدن به عکس‌ها در دیتای پینترست
+            try:
+                results = data["props"]["initialReduxState"]["pins"]
+                for pin_id, pin_data in results.items():
+                    if "images" in pin_data and "orig" in pin_data["images"]:
+                        images.append(pin_data["images"]["orig"]["url"])
+                        if len(images) >= max_results:
+                            break
+            except KeyError:
+                continue
+
+        return images[:max_results]
+    except Exception as e:
+        print(f"Pinterest Direct Scraping Error: {e}")
+        return []
 
 
 async def get_image_bytes(session, url):
@@ -40,9 +76,8 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    msg = await update.message.reply_text("⏳ در حال جستجو و دریافت تصاویر...")
+    msg = await update.message.reply_text("⏳ در حال جستجو مستقیم در پینترست...")
 
-    # افزایش تعداد نتایج جستجو برای داشتن عکس برای دفعات بعدی
     images_urls = search_pinterest_images(text, max_results=50)
 
     if not images_urls:
@@ -50,32 +85,31 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    media_group = []
-
     async with aiohttp.ClientSession() as session:
-        # ۱۰ لینک اول را بررسی میکنیم
         tasks = [get_image_bytes(session, url) for url in images_urls[:10]]
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
-
-    if not media_group:
+    if not successful_images:
         await msg.edit_text("❌ خطا در دانلود تصاویر. کلمه دیگری تست کنید.")
         set_state(chat_id, "")
         return
 
     try:
         await msg.delete()
-        await context.bot.send_media_group(chat_id=chat_id, media=media_group)
+
+        # --- تغییر جدید: ارسال عکس‌ها به صورت تک‌تک ---
+        for img_bytes in successful_images[:5]:
+            await context.bot.send_photo(chat_id=chat_id, photo=img_bytes)
+            # برای جلوگیری از خطای فلود تلگرام یه مکث خیلی کوتاه
+            await asyncio.sleep(0.3)
+
         increment_pinterest_downloads(user_id)
 
         context.user_data["pin_images"] = images_urls
-        context.user_data["pin_index"] = 10  # ۱۰ لینک مصرف شد
+        context.user_data["pin_index"] = 10
 
-        # نمایش دکمه عکس‌های بیشتر در صورت وجود عکس
         if context.user_data["pin_index"] < len(images_urls):
             keyboard = [
                 [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
@@ -86,7 +120,6 @@ async def handle_pinterest_state(
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
-            # تغییر جدید: اگر از همان سرچ اول عکس‌های کمی پیدا شده بود
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
@@ -94,7 +127,7 @@ async def handle_pinterest_state(
     except Exception as e:
         print(f"Error: {e}")
         await context.bot.send_message(
-            chat_id=chat_id, text="❌ ارسال تصاویر پشتیبانی نشد."
+            chat_id=chat_id, text="❌ ارسال تصاویر با مشکل مواجه شد."
         )
     finally:
         set_state(chat_id, "")
@@ -108,12 +141,10 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     usage = get_pinterest_downloads(user_id)
     limit = 30 if is_vip(user_id) else 5
 
-    # بررسی محدودیت روزانه در دفعات بعدی
     if usage >= limit:
         await query.edit_message_text("❌ محدودیت روزانه شما به پایان رسیده است!")
         return
 
-    # حذف پیغام حاوی دکمه قدیمی
     await query.message.delete()
 
     msg = await context.bot.send_message(
@@ -123,41 +154,33 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     images = context.user_data.get("pin_images", [])
     index = context.user_data.get("pin_index", 0)
 
-    # تغییر جدید: پیام اتمام در صورت زدن دکمه اضافی
     if index >= len(images):
         await msg.edit_text(
             "✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید."
         )
         return
 
-    media_group = []
-
     async with aiohttp.ClientSession() as session:
-        # ۱۰ لینک بعدی را بررسی میکنیم
         tasks = [get_image_bytes(session, url) for url in images[index : index + 10]]
         results = await asyncio.gather(*tasks)
 
     successful_images = [BytesIO(res.getvalue()) for res in results if res is not None]
 
-    for img_bytes in successful_images[:5]:
-        media_group.append(InputMediaPhoto(media=img_bytes))
-
-    if not media_group:
+    if not successful_images:
         await msg.edit_text("❌ تصاویر بعدی قابل دریافت نیستند.")
         return
 
     try:
         await msg.delete()
-        await context.bot.send_media_group(
-            chat_id=query.message.chat_id, media=media_group
-        )
 
-        # اضافه شدن به شمارش مصرف کاربر
+        # --- تغییر جدید: ارسال عکس‌ها به صورت تک‌تک ---
+        for img_bytes in successful_images[:5]:
+            await context.bot.send_photo(chat_id=query.message.chat_id, photo=img_bytes)
+            await asyncio.sleep(0.3)
+
         increment_pinterest_downloads(user_id)
+        context.user_data["pin_index"] = index + 10
 
-        context.user_data["pin_index"] = index + 10  # آپدیت کردن ایندکس لینک‌ها
-
-        # ارسال مجدد دکمه در زیر عکس‌های سری جدید
         if context.user_data["pin_index"] < len(images):
             keyboard = [
                 [InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]
@@ -168,7 +191,6 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
-            # تغییر جدید: ارسال پیام اتمام وقتی که لیست عکس‌ها تمام شد
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="✅ تمام عکس‌های مرتبط با این موضوع ارسال شد. لطفاً موضوع جدیدی سرچ کنید.",
