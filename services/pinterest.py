@@ -4,8 +4,7 @@ import re
 import html
 import aiohttp
 import asyncio
-import xml.etree.ElementTree as ET
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 
@@ -24,37 +23,60 @@ class PinterestService:
         }
 
     async def search_images(self, query: str, max_results: int = 30) -> List[str]:
-        pin_links = await self._search_pin_links_via_rss(
-            query, max_results=max_results * 2
-        )
-        if not pin_links:
+        items = await self._search_rss_items(query=query, max_results=max_results * 2)
+        if not items:
             return []
 
-        pin_links = list(dict.fromkeys(pin_links))[: max_results * 2]
+        direct_images = []
+        pin_links = []
 
-        connector = aiohttp.TCPConnector(limit=10, ssl=False)
-        async with aiohttp.ClientSession(
-            headers=self.headers, connector=connector
-        ) as session:
-            tasks = [self._extract_image_from_pin(session, url) for url in pin_links]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        for pin_link, desc_image in items:
+            if desc_image and desc_image.startswith("http"):
+                direct_images.append(desc_image)
+            elif pin_link:
+                pin_links.append(pin_link)
 
-        images = []
+        direct_images = list(dict.fromkeys(direct_images))
+        pin_links = list(dict.fromkeys(pin_links))
+
+        results = []
         seen = set()
 
-        for item in results:
-            if isinstance(item, str) and item.startswith("http"):
-                if item not in seen:
+        for img in direct_images:
+            if img not in seen:
+                seen.add(img)
+                results.append(img)
+            if len(results) >= max_results:
+                return results
+
+        if pin_links:
+            connector = aiohttp.TCPConnector(limit=10, ssl=False)
+            async with aiohttp.ClientSession(
+                headers=self.headers, connector=connector
+            ) as session:
+                tasks = [
+                    self._extract_image_from_pin(session, url) for url in pin_links
+                ]
+                fetched = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for item in fetched:
+                if (
+                    isinstance(item, str)
+                    and item.startswith("http")
+                    and item not in seen
+                ):
                     seen.add(item)
-                    images.append(item)
-            if len(images) >= max_results:
-                break
+                    results.append(item)
+                if len(results) >= max_results:
+                    break
 
-        return images
+        return results
 
-    async def _search_pin_links_via_rss(
-        self, query: str, max_results: int = 50
-    ) -> List[str]:
+    async def _search_rss_items(
+        self,
+        query: str,
+        max_results: int = 50,
+    ) -> List[Tuple[Optional[str], Optional[str]]]:
         q = quote(query)
         rss_url = (
             f"https://www.pinterest.com/search/pins/"
@@ -64,33 +86,89 @@ class PinterestService:
         try:
             async with aiohttp.ClientSession(headers=self.headers) as session:
                 async with session.get(
-                    rss_url, timeout=aiohttp.ClientTimeout(total=15)
+                    rss_url,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                    allow_redirects=True,
                 ) as resp:
                     if resp.status != 200:
                         print(f"Pinterest RSS status={resp.status}")
                         return []
 
-                    xml_text = await resp.text()
+                    rss_text = await resp.text(errors="ignore")
 
-            root = ET.fromstring(xml_text)
-            items = root.findall(".//item")
-
-            links = []
-            for item in items:
-                link_el = item.find("link")
-                if link_el is not None and link_el.text:
-                    links.append(link_el.text.strip())
-                if len(links) >= max_results:
-                    break
-
-            return links
+            return self._extract_items_from_rss_text(rss_text, max_results=max_results)
 
         except Exception as e:
             print(f"Pinterest RSS search error: {e}")
             return []
 
+    def _extract_items_from_rss_text(
+        self,
+        rss_text: str,
+        max_results: int = 50,
+    ) -> List[Tuple[Optional[str], Optional[str]]]:
+        items_data = []
+
+        item_blocks = re.findall(
+            r"<item\b.*?>.*?</item>", rss_text, flags=re.DOTALL | re.IGNORECASE
+        )
+
+        for block in item_blocks:
+            link = self._extract_tag(block, "link")
+            description = self._extract_tag(block, "description")
+
+            desc_image = self._extract_image_from_description(description or "")
+
+            items_data.append((link, desc_image))
+
+            if len(items_data) >= max_results:
+                break
+
+        return items_data
+
+    def _extract_tag(self, text: str, tag: str) -> Optional[str]:
+        patterns = [
+            rf"<{tag}>(.*?)</{tag}>",
+            rf"<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.DOTALL | re.IGNORECASE)
+            if match:
+                return html.unescape(match.group(1).strip())
+
+        return None
+
+    def _extract_image_from_description(self, description: str) -> Optional[str]:
+        if not description:
+            return None
+
+        description = html.unescape(description)
+
+        # اول img src
+        img_src = re.search(
+            r'<img[^>]+src=["\']([^"\']+)["\']',
+            description,
+            flags=re.IGNORECASE,
+        )
+        if img_src:
+            return img_src.group(1)
+
+        # fallback روی pinimg
+        raw_pinimg = re.search(
+            r'https://i\.pinimg\.com/[^\s"\']+',
+            description,
+            flags=re.IGNORECASE,
+        )
+        if raw_pinimg:
+            return raw_pinimg.group(0)
+
+        return None
+
     async def _extract_image_from_pin(
-        self, session: aiohttp.ClientSession, pin_url: str
+        self,
+        session: aiohttp.ClientSession,
+        pin_url: str,
     ) -> Optional[str]:
         try:
             async with session.get(
@@ -101,34 +179,20 @@ class PinterestService:
                 if resp.status != 200:
                     return None
 
-                text = await resp.text()
+                text = await resp.text(errors="ignore")
 
-            # 1) og:image
-            og_match = re.search(
-                r'<meta\s+property="og:image"\s+content="([^"]+)"',
-                text,
-                re.IGNORECASE,
-            )
-            if og_match:
-                return html.unescape(og_match.group(1))
-
-            # 2) twitter:image
-            tw_match = re.search(
-                r'<meta\s+name="twitter:image"\s+content="([^"]+)"',
-                text,
-                re.IGNORECASE,
-            )
-            if tw_match:
-                return html.unescape(tw_match.group(1))
-
-            # 3) fallback direct image URL in html
-            img_match = re.search(
+            patterns = [
+                r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+                r'<meta\s+name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']',
                 r'https://i\.pinimg\.com/[^\s"\']+',
-                text,
-                re.IGNORECASE,
-            )
-            if img_match:
-                return html.unescape(img_match.group(0))
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, text, flags=re.IGNORECASE)
+                if match:
+                    return html.unescape(
+                        match.group(1) if match.groups() else match.group(0)
+                    )
 
             return None
 
@@ -139,4 +203,4 @@ class PinterestService:
 
 async def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
     service = PinterestService()
-    return await service.search_images(query, max_results=max_results)
+    return await service.search_images(query=query, max_results=max_results)
