@@ -377,21 +377,13 @@ async def split_video_if_needed(original_file_path):
 
 
 def download_youtube_video(url, progress_dict=None):
-    """
-    دانلود ویدیو با subprocess.
-    اولویت با فرمت 18 است چون روی VPS تست شد و جواب داد.
-    """
     req_id = uuid.uuid4().hex
-
     video_id = _get_video_id_by_ytdlp(url)
     if not video_id:
-        print("❌ Could not detect video id")
         return None
 
     output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
-
     cmd = _base_ytdlp_cmd()
-
     cmd.extend(
         [
             "-f",
@@ -406,26 +398,29 @@ def download_youtube_video(url, progress_dict=None):
 
     ok, output = _run_subprocess_and_capture(cmd, progress_dict=progress_dict)
 
-    if not ok:
-        if "File is larger than max-filesize" in output or "max-filesize" in output:
-            return "TOO_LARGE"
+    # بررسی حجم حتی اگر فرآیند به ظاهر موفق (ok=True) بوده باشد
+    output_lower = output.lower()
+    if (
+        "larger than max-filesize" in output_lower
+        or "max-filesize" in output_lower
+        or "file is larger" in output_lower
+    ):
+        return "TOO_LARGE"
 
+    if not ok:
         return None
 
     final_file = _find_downloaded_file(video_id, req_id)
 
     if not final_file or not os.path.exists(final_file):
-        print("❌ Download finished but file not found")
         return None
 
     actual_size = os.path.getsize(final_file)
-
     if actual_size > MAX_DOWNLOAD_SIZE:
         try:
             os.remove(final_file)
         except Exception:
             pass
-
         return "TOO_LARGE"
 
     return final_file
@@ -470,10 +465,15 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
     ok, output = _run_subprocess_and_capture(cmd)
 
-    if not ok:
-        if "File is larger than max-filesize" in output or "max-filesize" in output:
-            return "TOO_LARGE"
+    output_lower = output.lower()
+    if (
+        "larger than max-filesize" in output_lower
+        or "max-filesize" in output_lower
+        or "file is larger" in output_lower
+    ):
+        return "TOO_LARGE"
 
+    if not ok:
         return None
 
     final_file = _find_downloaded_file(video_id, req_id, preferred_ext="mp3")

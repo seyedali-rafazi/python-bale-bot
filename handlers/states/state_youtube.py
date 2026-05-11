@@ -515,6 +515,15 @@ async def background_yt_download(
                         )
                         progress_dict["is_finished"] = True
 
+                        # اضافه شدن بررسی حجم برای صوت
+                        if file_path == "TOO_LARGE":
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="⚠️ حجم فایل صوتی بیشتر از حد مجاز (300MB) است.",
+                            )
+                            await asyncio.to_thread(decrement_yt_downloads, chat_id)
+                            return
+
                         if (
                             file_path
                             and isinstance(file_path, str)
