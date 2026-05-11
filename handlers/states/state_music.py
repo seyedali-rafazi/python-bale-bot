@@ -71,8 +71,8 @@ async def background_download_task(
                     connect_timeout=60,
                 )
 
-                # ثبت آمار پس از موفقیت
-                increment_music_downloads(chat_id)
+                # ثبت آمار پس از موفقیت (اصلاح شد: اضافه شدن await)
+                await increment_music_downloads(chat_id)
 
                 try:
                     await context.bot.edit_message_text(
@@ -268,10 +268,10 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("dltrack_"):
         track_id = data.split("_", 1)[1]
 
-        # 1. بررسی محدودیت کاربر
-        user_vip_status = is_vip(chat_id)
+        # 1. بررسی محدودیت کاربر (اصلاح شد: اضافه شدن await)
+        user_vip_status = await is_vip(chat_id)
         limit = 20 if user_vip_status else 6
-        current_downloads = get_music_downloads(chat_id)
+        current_downloads = await get_music_downloads(chat_id)
 
         if current_downloads >= limit:
             await query.message.reply_text(

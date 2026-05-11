@@ -114,8 +114,8 @@ async def handle_pinterest_state(
 ):
     user_id = str(update.effective_user.id)
 
-    usage = get_pinterest_downloads(user_id)
-    limit = get_limit("pinterest_search", is_vip(user_id))
+    usage = await get_pinterest_downloads(user_id)
+    limit = get_limit("pinterest_search", await is_vip(user_id))
 
     if usage >= limit:
         await update.message.reply_text(
@@ -154,7 +154,7 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    increment_pinterest_downloads(user_id)
+    await increment_pinterest_downloads(user_id)
 
     context.user_data["pin_images"] = image_urls
     context.user_data["pin_index"] = SEND_BATCH_SIZE
@@ -179,8 +179,8 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
 
     user_id = str(update.effective_user.id)
-    usage = get_pinterest_downloads(user_id)
-    limit = get_limit("pinterest_search", is_vip(user_id))
+    usage = await get_pinterest_downloads(user_id)
+    limit = get_limit("pinterest_search", await is_vip(user_id))
 
     if usage >= limit:
         await query.edit_message_text("❌ محدودیت روزانه شما به پایان رسیده است!")
@@ -224,7 +224,7 @@ async def handle_more_pins_callback(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
-    increment_pinterest_downloads(user_id)
+    await increment_pinterest_downloads(user_id)
     context.user_data["pin_index"] = index + SEND_BATCH_SIZE
 
     if context.user_data["pin_index"] < len(images):

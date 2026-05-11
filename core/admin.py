@@ -1,5 +1,6 @@
 # core/admin.py
 
+
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.database import (
@@ -13,7 +14,7 @@ from core.database import (
 import os
 from dotenv import load_dotenv
 import asyncio
-import sqlite3
+import aiosqlite
 from core.database import DB_NAME
 from core.database import get_setting, set_setting
 
@@ -28,8 +29,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_ID:
         return
 
-    total_users = get_total_users()
-    vip_users = get_total_vip_users()
+    total_users = await get_total_users()
+    vip_users = await get_total_vip_users()
     normal_users = total_users - vip_users
 
     await update.message.reply_text(
@@ -54,7 +55,7 @@ async def cmd_setvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_user = context.args[0]
     status = int(context.args[1])
 
-    set_vip(target_user, status)
+    await set_vip(target_user, status)
     status_text = "VIP شد 🌟" if status == 1 else "از VIP خارج شد ❌"
 
     await update.message.reply_text(f"✅ کاربر {target_user} {status_text}")
@@ -82,7 +83,7 @@ async def cmd_messageuser(update, context):
 
     # قسمت دوم (ایندکس 1) شامل تمام متن همراه با اینترها است
     message_text = parts[1]
-    users = get_all_users()
+    users = await get_all_users()
 
     await update.message.reply_text(
         f"⏳ در حال ارسال پیام به $ {len(users)} $ کاربر..."
@@ -109,20 +110,14 @@ async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_ID:
         return
 
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    # صفر کردن تعداد دفعات استفاده برای همه کاربران
-
-    cursor.execute(
-        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
-    )
-
-    # در صورت نیاز به پاک کردن جدول لاگ مصرف روزانه
-    # cursor.execute("DELETE FROM usage_stats")
-
-    conn.commit()
-    conn.close()
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # صفر کردن تعداد دفعات استفاده برای همه کاربران
+        await conn.execute(
+            "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
+        )
+        # در صورت نیاز به پاک کردن جدول لاگ مصرف روزانه
+        # await conn.execute("DELETE FROM usage_stats")
+        await conn.commit()
 
     await update.message.reply_text("✅ محدودیت‌های تمامی کاربران با موفقیت ریست شد.")
 
@@ -133,11 +128,11 @@ async def cmd_toggle_yt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # دریافت وضعیت فعلی
-    current_status = get_setting("youtube_enabled", "1")
+    current_status = await get_setting("youtube_enabled", "1")
 
     # تغییر وضعیت
     new_status = "0" if current_status == "1" else "1"
-    set_setting("youtube_enabled", new_status)
+    await set_setting("youtube_enabled", new_status)
 
     status_text = "فعال ✅" if new_status == "1" else "غیرفعال ❌"
     await update.message.reply_text(f"وضعیت دانلودر یوتیوب: {status_text}")
@@ -156,7 +151,7 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     target_user = context.args[0]
 
-    reset_user_limits(target_user)
+    await reset_user_limits(target_user)
 
     await update.message.reply_text(
         f"✅ محدودیت‌های کاربر $ {target_user} $ با موفقیت ریست شد."
@@ -180,7 +175,7 @@ async def cmd_addvip_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لطفاً یک عدد صحیح وارد کنید.")
         return
 
-    updated_users = add_vip_time_to_all(days)
+    updated_users = await add_vip_time_to_all(days)
     await update.message.reply_text(
         f"✅ با موفقیت $ {days} $ روز به اشتراک $ {updated_users} $ کاربر ویژه (پرو) اضافه شد."
     )

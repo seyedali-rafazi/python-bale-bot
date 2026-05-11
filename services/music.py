@@ -1,7 +1,6 @@
 # services/music.py
 
 from ytmusicapi import YTMusic
-import os
 
 ytmusic = YTMusic()
 

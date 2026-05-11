@@ -17,18 +17,18 @@ async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # دریافت اطلاعات کاربر از دیتابیس
     user_id = update.effective_user.id
-    user_info = get_user_info(user_id)
+    user_info = await get_user_info(user_id)
 
     # بررسی VIP بودن (is_vip در ایندکس 1 خروجی دیتابیس است)
     is_vip = user_info[1] if user_info else 0
 
     if not is_vip:
         await update.message.reply_text(
-            "❌ به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro  میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید .❌"
+            "❌ به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید .❌"
         )
         return
 
-    if get_setting("youtube_enabled", "1") == "0":
+    if await get_setting("youtube_enabled", "1") == "0":
         await update.message.reply_text(
             "❌ بخش یوتیوب فعلاً توسط ادمین غیرفعال شده است."
         )
@@ -108,7 +108,7 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
-    top_videos = get_top_cached_videos(4)
+    top_videos = await get_top_cached_videos(4)
 
     if not top_videos:
         await update.message.reply_text("📭 هنوز ویدیویی در کش سیستم ثبت نشده است.")

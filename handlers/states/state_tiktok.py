@@ -1,6 +1,5 @@
 # handlers/states/state_tiktok.py
 
-
 import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -26,9 +25,9 @@ DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 
 async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
-    vip = is_vip(user_id)
+    vip = await is_vip(user_id)  # اضافه شدن await
     max_dl = get_limit("tiktok_download", vip)
-    current_dl = get_tt_downloads(user_id)
+    current_dl = await get_tt_downloads(user_id)  # اضافه شدن await
 
     if current_dl >= max_dl:
         await update.message.reply_text(
@@ -84,7 +83,7 @@ async def background_tt_download(
                     write_timeout=300,
                 )
                 file_id = channel_msg.video.file_id
-                add_tiktok_explore_video(file_id)
+                await add_tiktok_explore_video(file_id)  # اضافه شدن await
 
         await context.bot.send_video(
             chat_id=chat_id,
@@ -93,7 +92,7 @@ async def background_tt_download(
         )
 
         # افزایش محدودیت کاربر فقط در اینجا (پس از ارسال موفق) انجام می‌شود
-        increment_tt_downloads(user_id)
+        await increment_tt_downloads(user_id)  # اضافه شدن await
 
         await context.bot.delete_message(
             chat_id=chat_id, message_id=status_msg.message_id

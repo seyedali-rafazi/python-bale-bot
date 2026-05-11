@@ -15,8 +15,6 @@ from core.database import (
     get_tt_downloads,
     get_tt_explores,
     get_gh_downloads,
-    get_book_download_count,  # اضافه شد
-    get_citation_count,  # اضافه شد
 )
 from core.limits import get_limit
 
@@ -35,7 +33,8 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
-    user_info = get_user_info(user_id)
+    # اضافه شدن await
+    user_info = await get_user_info(user_id)
 
     if not user_info:
         await update.message.reply_text(
@@ -68,15 +67,15 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Error parsing date for user {user_id}: {e}")
                 vip_duration_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا)"
 
-    # دریافت آمار قبلی
-    yt_count = get_yt_downloads(user_id)
-    music_count = get_music_downloads(user_id)
-    pinterest_count = get_pinterest_downloads(user_id)
-    tt_dl_count = get_tt_downloads(user_id)
-    tt_exp_count = get_tt_explores(user_id)
-    gh_count = get_gh_downloads(user_id)
+    # اضافه شدن await به دریافت آمار قبلی
+    yt_count = await get_yt_downloads(user_id)
+    music_count = await get_music_downloads(user_id)
+    pinterest_count = await get_pinterest_downloads(user_id)
+    tt_dl_count = await get_tt_downloads(user_id)
+    tt_exp_count = await get_tt_explores(user_id)
+    gh_count = await get_gh_downloads(user_id)
 
-    # تعیین لیمیت‌های قبلی
+    # تعیین لیمیت‌های قبلی (فرض بر این است که get_limit یک تابع سینک معمولی در فایل limits است)
     yt_limit = get_limit("youtube_download", is_vip)
     music_limit = get_limit("music_download", is_vip)
     pinterest_limit = get_limit("pinterest_search", is_vip)
@@ -98,7 +97,6 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
-
 
 """
 

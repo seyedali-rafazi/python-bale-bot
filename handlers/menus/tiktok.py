@@ -1,3 +1,5 @@
+# handlers/menus/tiktok.py
+
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 
@@ -65,9 +67,9 @@ async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = str(update.effective_user.id)
     chat_id = str(update.effective_chat.id)
 
-    vip = is_vip(user_id)
+    vip = await is_vip(user_id)  # اضافه شدن await
     max_exp = get_limit("tiktok_explore", vip)
-    current_exp = get_tt_explores(user_id)
+    current_exp = await get_tt_explores(user_id)  # اضافه شدن await
 
     if current_exp >= max_exp:
         await update.message.reply_text(
@@ -75,7 +77,7 @@ async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    videos = get_random_tiktok_explore_videos(20)
+    videos = await get_random_tiktok_explore_videos(20)  # اضافه شدن await
     if not videos:
         await update.message.reply_text("❌ هنوز ویدیویی در اکسپلور ذخیره نشده است.")
         return
@@ -94,10 +96,10 @@ async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         except Exception as e:
             print(f"Error sending video {vid}: {e}")
-            delete_invalid_video_from_db(vid)
+            await delete_invalid_video_from_db(vid)  # اضافه شدن await
 
     if sent_count > 0:
-        increment_tt_explores(user_id)
+        await increment_tt_explores(user_id)  # اضافه شدن await
     else:
         await update.message.reply_text(
             "❌ متاسفانه ویدیوهای موجود منقضی شده‌اند. در حال پاکسازی دیتابیس..."

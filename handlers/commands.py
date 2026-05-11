@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 
 
 load_dotenv()
-CHANNEL_ID = os.getenv("CHANNEL_ID")  
-CHANNEL_URL = os.getenv("CHANNEL_URL")  
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 async def check_membership(bot, user_id):
@@ -33,8 +33,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     username = update.effective_chat.username
 
-    # ثبت کاربر در دیتابیس
-    add_user(chat_id, username)
+    # ثبت کاربر در دیتابیس (اضافه شدن await)
+    await add_user(chat_id, username)
 
     # بررسی جوین اجباری
     is_member = await check_membership(context.bot, chat_id)

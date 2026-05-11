@@ -1,7 +1,5 @@
 # main.py
 
-# main.py
-
 import logging
 import asyncio
 from telegram import Bot
@@ -50,14 +48,27 @@ async def cleanup_old_downloads(context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Error cleaning file {file_path}: {e}")
 
 
-def main():
-    init_db()
+async def post_init(application: Application):
+    """توابع ناهمگامی که باید هنگام اجرای ربات استارت شوند"""
+    await init_db()
+    await startup_telethon_client()
+    await startup_research_client()
 
+
+async def post_shutdown(application: Application):
+    """توابع ناهمگامی که باید هنگام خاموش شدن ربات متوقف شوند"""
+    await shutdown_telethon_client()
+    await shutdown_research_client()
+
+
+def main():
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
+        .post_init(post_init)  # اجرای توابع راه‌اندازی (مانند دیتابیس)
+        .post_shutdown(post_shutdown)  # اجرای توابع توقف
         .build()
     )
 
@@ -70,6 +81,7 @@ def main():
     logger.info("✅ ربات با صف دانلود و معماری بهینه راه‌اندازی شد...")
     PORT = int(os.environ.get("PORT", BALE_LISTENING_PORT))
     WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
+
     application.run_webhook(
         listen="0.0.0.0", port=PORT, url_path=BALE_TOKEN, webhook_url=WEBHOOK_URL
     )

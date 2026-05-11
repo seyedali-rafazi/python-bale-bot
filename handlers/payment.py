@@ -1,6 +1,5 @@
 # handlers/payment.py
 
-
 from telegram import Update, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.database import add_vip_time, add_transaction
@@ -104,16 +103,16 @@ async def successful_payment_callback(
     provider_charge_id = payment_info.provider_payment_charge_id
 
     try:
-        # ثبت تراکنش در دیتابیس
-        add_transaction(
+        # ثبت تراکنش در دیتابیس (اضافه شدن await)
+        await add_transaction(
             user_id=chat_id,
             amount=total_amount,
             payload=payload,
             provider_charge_id=provider_charge_id,
         )
 
-        # افزایش زمان VIP کاربر
-        add_vip_time(chat_id, VIP_LIMIT_VALUE)
+        # افزایش زمان VIP کاربر (اضافه شدن await)
+        await add_vip_time(chat_id, VIP_LIMIT_VALUE)
 
         amount_toman = int(total_amount / 10)  # محاسبه تومان
 

@@ -35,7 +35,7 @@ async def enqueue_download(
 
     position = download_queue.qsize()
     await context.bot.send_message(
-        chat_id, f"⏳ درخواست شما در صف قرار گرفت. (نفرات قبل از شما: ${position}$)"
+        chat_id, f"⏳ درخواست شما در صف قرار گرفت. (نفرات قبل از شما: $ {position} $)"
     )
 
     # ارسال به صف
@@ -57,14 +57,15 @@ async def handle_github_state(
 ):
 
     user_id = update.effective_user.id
-    vip_status = is_vip(str(user_id))
+    vip_status = await is_vip(str(user_id))
     max_dl = 20 if vip_status else 4
 
-    if get_gh_downloads(str(user_id)) >= max_dl:
+    downloads_count = await get_gh_downloads(str(user_id))
+    if downloads_count >= max_dl:
         await update.message.reply_text(
             "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
         )
-        clear_state(chat_id)
+        await clear_state(chat_id)
         return
 
     if step == "waiting_gh_dl":
@@ -198,7 +199,7 @@ async def process_github_download(
                             await context.bot.send_document(
                                 chat_id=chat_id, document=temp_path, filename=file_name
                             )
-                            increment_gh_downloads(user_id)
+                            await increment_gh_downloads(user_id)
                 else:
                     await context.bot.send_message(
                         chat_id,
@@ -210,7 +211,7 @@ async def process_github_download(
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        clear_state(chat_id)
+        await clear_state(chat_id)
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,10 +223,11 @@ async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 
     if data.startswith("ghdl_"):
         repo_path = data.split("ghdl_")[1]
-        vip_status = is_vip(user_id)
+        vip_status = await is_vip(user_id)
         max_dl = 20 if vip_status else 4
 
-        if get_gh_downloads(user_id) >= max_dl:
+        downloads_count = await get_gh_downloads(user_id)
+        if downloads_count >= max_dl:
             await query.message.reply_text(
                 "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
             )
