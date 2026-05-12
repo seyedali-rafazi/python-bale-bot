@@ -1,6 +1,7 @@
 # services/pinterest_queue.py
 
 import asyncio
+import functools
 from typing import List, Callable, Awaitable, Optional
 
 from services.pinterest import search_pinterest_images
@@ -13,6 +14,19 @@ _search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
 
 _queue_lock = asyncio.Lock()
 _waiting_count = 0
+
+
+def _pinterest_search_worker(query: str, max_results: int) -> List[str]:
+    """
+    این تابع در یک Thread جداگانه اجرا می‌شود تا Playwright باعث قفل شدن ربات نشود.
+    """
+    try:
+        return asyncio.run(
+            search_pinterest_images(query=query, max_results=max_results)
+        )
+    except Exception as e:
+        print(f"Error in _pinterest_search_worker: {e}")
+        return []
 
 
 async def queued_pinterest_search(
@@ -42,10 +56,15 @@ async def queued_pinterest_search(
 
             print(f"Pinterest queued search start: {query}")
 
-            data = await search_pinterest_images(
-                query=query,
-                max_results=max_results,
+            loop = asyncio.get_running_loop()
+
+            # استفاده از executor برای اجرای تابع سنگین در یک thread دیگر
+            worker_func = functools.partial(
+                _pinterest_search_worker, query=query, max_results=max_results
             )
+
+            # منتظر می‌مانیم تا نتیجه برگردد بدون اینکه loop اصلی تلگرام قفل شود
+            data = await loop.run_in_executor(None, worker_func)
 
             return data[:max_results]
 
