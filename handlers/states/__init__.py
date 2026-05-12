@@ -14,7 +14,6 @@ from .state_weather import handle_weather_state
 from .state_pinterest import handle_pinterest_state
 from .state_tiktok import handle_tiktok_state
 from .state_github import handle_github_state
-from .state_article import handle_article_state
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,9 +70,6 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step.startswith("waiting_gh"):
         await handle_github_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_article"):
-        await handle_article_state(update, context, step, text, chat_id, state_data)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -37,7 +37,6 @@ from .translation import (
 )
 
 from .weather import btn_weather_req
-from .books import btn_book_req
 
 from .support import (
     btn_support_req,
@@ -74,15 +73,4 @@ from .github import (
     btn_gh_dl_req,
     btn_gh_user_req,
     btn_gh_search_req,
-)
-
-from .books import (
-    btn_article_menu,
-    btn_search_doi_req,
-    btn_search_name_req,
-    btn_citation_req,
-    btn_smart_abstract_req,
-    btn_bibtex_req,
-    btn_book_search_req,
-    inline_buttons_handler,
 )

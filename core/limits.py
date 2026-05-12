@@ -7,9 +7,7 @@ FREE_LIMITS = {
     "tiktok_download": 5,
     "tiktok_explore": 3,
     "github_download": 2,
-    "article_download": 2,
     "smart_abstract": 2,
-    "book_download": 2,
     "citation": 2,
 }
 
@@ -20,9 +18,7 @@ VIP_LIMITS = {
     "tiktok_download": 30,
     "tiktok_explore": 15,
     "github_download": 20,
-    "article_download": 20,
     "smart_abstract": 20,
-    "book_download": 20,
     "citation": 20,
 }
 

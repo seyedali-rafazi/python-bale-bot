@@ -1,22 +1,16 @@
 # main.py
 
 import logging
-import asyncio
-from telegram import Bot
-from telegram.ext import Application, ApplicationBuilder, ContextTypes
-from handlers import register_all_handlers
 import os
 import time
+
 from dotenv import load_dotenv
+from telegram.ext import ApplicationBuilder, ContextTypes
 
 # ایمپورت‌های مربوط به دیتابیس، صف دانلود و سرویس‌ها
-from core.database import init_db, increment_book_download_count
-from services.book.queue_manager import download_queue
-from services.book.book_service import download_book_pdf
+from handlers import register_all_handlers
 
 # === ایمپورت‌های جدید برای مدیریت چرخه عمر کلاینت Telethon ===
-from services.ai_abstract import startup_telethon_client, shutdown_telethon_client
-from services.research import startup_research_client, shutdown_research_client
 
 
 load_dotenv()
@@ -48,27 +42,12 @@ async def cleanup_old_downloads(context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Error cleaning file {file_path}: {e}")
 
 
-async def post_init(application: Application):
-    """توابع ناهمگامی که باید هنگام اجرای ربات استارت شوند"""
-    await init_db()
-    await startup_telethon_client()
-    await startup_research_client()
-
-
-async def post_shutdown(application: Application):
-    """توابع ناهمگامی که باید هنگام خاموش شدن ربات متوقف شوند"""
-    await shutdown_telethon_client()
-    await shutdown_research_client()
-
-
 def main():
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
-        .post_init(post_init)  # اجرای توابع راه‌اندازی (مانند دیتابیس)
-        .post_shutdown(post_shutdown)  # اجرای توابع توقف
         .build()
     )
 
