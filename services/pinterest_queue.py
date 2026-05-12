@@ -1,11 +1,10 @@
 # services/pinterest_queue.py
 
 import asyncio
-import functools
+from concurrent.futures import ProcessPoolExecutor
 from typing import List, Callable, Awaitable, Optional
 
 from services.pinterest import search_pinterest_images
-
 
 PINTEREST_SEARCH_CONCURRENCY = 1
 _search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
@@ -13,17 +12,8 @@ _search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
 _queue_lock = asyncio.Lock()
 _waiting_count = 0
 
-
-def _pinterest_search_worker(query: str, max_results: int) -> List[str]:
-    """
-    تابع در یک Thread جداگانه اجرا می‌شود.
-    چون جستجو به طور کامل sync شده، مستقیماً و بدون مشکل در ترد اجرا می‌شود.
-    """
-    try:
-        return search_pinterest_images(query=query, max_results=max_results)
-    except Exception as e:
-        print(f"Error in _pinterest_search_worker: {e}")
-        return []
+# ایجاد یک ProcessPool مجزا برای اجرای کاملا ایزوله مرورگر
+_process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_CONCURRENCY)
 
 
 async def queued_pinterest_search(
@@ -52,16 +42,15 @@ async def queued_pinterest_search(
 
             loop = asyncio.get_running_loop()
 
-            worker_func = functools.partial(
-                _pinterest_search_worker, query=query, max_results=max_results
+            # اجرای تابع در یک پروسه جداگانه سیستم‌عامل به جای نخ (Thread)
+            data = await loop.run_in_executor(
+                _process_pool, search_pinterest_images, query, max_results
             )
-
-            # اینجا thread کاملا مستقل عمل می‌کند
-            data = await loop.run_in_executor(None, worker_func)
 
             return data[:max_results]
 
-    except Exception:
+    except Exception as e:
+        print(f"Pinterest ProcessPool error: {e}")
         async with _queue_lock:
             if _waiting_count > 0:
                 _waiting_count -= 1
