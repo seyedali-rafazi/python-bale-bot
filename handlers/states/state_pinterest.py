@@ -304,14 +304,12 @@ async def handle_pinterest_state(
     )
 
 
-async def handle_more_pins_callback(
+async def process_more_pins(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
     query = update.callback_query
-
-    await query.answer()
 
     images = context.user_data.get("pin_images", [])
 
@@ -364,7 +362,7 @@ async def handle_more_pins_callback(
     if context.user_data["pin_index"] < len(images):
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text=("برای تصاویر بیشتر روی دکمه زیر بزنید:"),
+            text="برای تصاویر بیشتر روی دکمه زیر بزنید:",
             reply_markup=build_more_keyboard(),
         )
 
@@ -373,3 +371,20 @@ async def handle_more_pins_callback(
             chat_id=query.message.chat_id,
             text="✅ همه تصاویر ارسال شدند",
         )
+
+
+async def handle_more_pins_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    asyncio.create_task(
+        process_more_pins(
+            update,
+            context,
+        )
+    )
