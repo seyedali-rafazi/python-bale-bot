@@ -2,55 +2,82 @@
 
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
-from typing import List, Callable, Awaitable, Optional
+from typing import List
 
 from services.pinterest import search_pinterest_images
 
-PINTEREST_SEARCH_CONCURRENCY = 1
-_search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
+# تعداد سرچ همزمان Pinterest
+PINTEREST_SEARCH_WORKERS = 4
 
-_queue_lock = asyncio.Lock()
-_waiting_count = 0
+# تعداد worker واقعی
+_process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS)
 
-_process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_CONCURRENCY)
+# queue اصلی سرچ‌ها
+search_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
+
+
+class PinterestJob:
+    def __init__(
+        self,
+        query: str,
+        max_results: int,
+        future: asyncio.Future,
+    ):
+        self.query = query
+        self.max_results = max_results
+        self.future = future
+
+
+async def pinterest_worker(worker_id: int):
+    loop = asyncio.get_running_loop()
+
+    while True:
+        job: PinterestJob = await search_queue.get()
+
+        try:
+            print(f"[Pinterest Worker {worker_id}] searching: {job.query}")
+
+            data = await loop.run_in_executor(
+                _process_pool,
+                search_pinterest_images,
+                job.query,
+                job.max_results,
+            )
+
+            if not job.future.done():
+                job.future.set_result(data)
+
+        except Exception as e:
+            print(f"Pinterest worker error: {e}")
+
+            if not job.future.done():
+                job.future.set_exception(e)
+
+        finally:
+            search_queue.task_done()
+
+
+async def start_pinterest_workers():
+    for i in range(PINTEREST_SEARCH_WORKERS):
+        asyncio.create_task(pinterest_worker(i + 1))
+
+    print(f"✅ Started {PINTEREST_SEARCH_WORKERS} Pinterest workers")
 
 
 async def queued_pinterest_search(
     query: str,
     max_results: int = 30,
-    on_queue_position: Optional[Callable[[int], Awaitable[None]]] = None,
 ) -> List[str]:
-    global _waiting_count
+    loop = asyncio.get_running_loop()
 
-    async with _queue_lock:
-        _waiting_count += 1
-        position = _waiting_count
+    future = loop.create_future()
 
-    if on_queue_position:
-        try:
-            await on_queue_position(position)
-        except Exception:
-            pass
+    await search_queue.put(
+        PinterestJob(
+            query=query,
+            max_results=max_results,
+            future=future,
+        )
+    )
 
-    try:
-        async with _search_semaphore:
-            async with _queue_lock:
-                _waiting_count -= 1
-
-            print(f"Pinterest queued search start: {query}")
-
-            loop = asyncio.get_running_loop()
-
-            # اجرای در پروسه جداگانه
-            data = await loop.run_in_executor(
-                _process_pool, search_pinterest_images, query, max_results
-            )
-
-            return data[:max_results]
-
-    except Exception as e:
-        print(f"Pinterest ProcessPool error: {e}")
-        async with _queue_lock:
-            if _waiting_count > 0:
-                _waiting_count -= 1
-        raise
+    return await future

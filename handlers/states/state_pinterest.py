@@ -1,30 +1,57 @@
 # handlers/states/state_pinterest.py
 
 import asyncio
-import aiohttp
 from io import BytesIO
 from typing import List, Optional
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import aiohttp
+
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    InputMediaPhoto,
+)
+
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
+
 from core.database import (
     get_pinterest_downloads,
     increment_pinterest_downloads,
     is_vip,
 )
+
 from core.limits import get_limit
-from services.pinterest_queue import queued_pinterest_search
+
+from services.pinterest_queue import (
+    queued_pinterest_search,
+)
+
+# =========================
+# تنظیمات Performance
+# =========================
+
+DOWNLOAD_CONCURRENCY = 100
+
+SEND_BATCH_SIZE = 10
+
+download_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+
+# =========================
 
 
-download_semaphore = asyncio.Semaphore(5)
-SEND_BATCH_SIZE = 5
-
-
-def build_more_keyboard() -> InlineKeyboardMarkup:
+def build_more_keyboard():
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("➕ عکس‌های بیشتر", callback_data="more_pins")]]
+        [
+            [
+                InlineKeyboardButton(
+                    "➕ عکس‌های بیشتر",
+                    callback_data="more_pins",
+                )
+            ]
+        ]
     )
 
 
@@ -32,6 +59,7 @@ async def get_image_bytes(
     session: aiohttp.ClientSession,
     url: str,
 ) -> Optional[BytesIO]:
+
     async with download_semaphore:
         try:
             async with session.get(
@@ -39,51 +67,61 @@ async def get_image_bytes(
                 timeout=aiohttp.ClientTimeout(total=20),
                 allow_redirects=True,
             ) as res:
-                print(f"image download status={res.status} url={url}")
-
                 if res.status != 200:
-                    return None
-
-                data = await res.read()
-
-                if not data:
                     return None
 
                 content_type = res.headers.get("Content-Type", "").lower()
 
                 if "image" not in content_type:
-                    if len(data) < 500:
-                        return None
+                    return None
 
-                bio = BytesIO(data)
-                bio.name = "pinterest.jpg"
+                bio = BytesIO()
+
+                async for chunk in res.content.iter_chunked(65536):
+                    bio.write(chunk)
+
                 bio.seek(0)
+                bio.name = "pinterest.jpg"
 
                 return bio
 
         except Exception as e:
-            print(f"get_image_bytes error: {e} url={url}")
+            print(f"download image error: {e}")
             return None
 
 
-async def fetch_image_bytes(urls: List[str]) -> List[BytesIO]:
-    connector = aiohttp.TCPConnector(limit=10, ssl=False)
+async def fetch_image_bytes(
+    urls: List[str],
+) -> List[BytesIO]:
+
+    connector = aiohttp.TCPConnector(
+        limit=200,
+        ssl=False,
+    )
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0.0.0 "
+            "Safari/537.36"
         ),
         "Referer": "https://www.pinterest.com/",
-        "Accept": ("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"),
     }
 
     async with aiohttp.ClientSession(
         connector=connector,
         headers=headers,
     ) as session:
-        tasks = [get_image_bytes(session, url) for url in urls]
+        tasks = [
+            get_image_bytes(
+                session,
+                url,
+            )
+            for url in urls
+        ]
 
         results = await asyncio.gather(
             *tasks,
@@ -105,25 +143,27 @@ async def send_image_batch(
     urls: List[str],
 ) -> int:
 
-    sent_count = 0
+    try:
+        images = await fetch_image_bytes(urls)
 
-    images = await fetch_image_bytes(urls)
+        if not images:
+            return 0
 
-    print(f"Sending batch of {len(urls)} urls")
+        media_group = []
 
-    for img in images:
-        try:
-            await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=img,
-            )
+        for img in images[:10]:
+            media_group.append(InputMediaPhoto(media=img))
 
-            sent_count += 1
+        await context.bot.send_media_group(
+            chat_id=chat_id,
+            media=media_group,
+        )
 
-        except Exception as e:
-            print(f"send_photo error: {e}")
+        return len(media_group)
 
-    return sent_count
+    except Exception as e:
+        print(f"send_image_batch error: {e}")
+        return 0
 
 
 async def process_pinterest_search(
@@ -134,6 +174,7 @@ async def process_pinterest_search(
     user_id: str,
     loading_message_id: int,
 ):
+
     try:
         image_urls = await queued_pinterest_search(
             text,
@@ -159,12 +200,6 @@ async def process_pinterest_search(
         set_state(chat_id, "")
         return
 
-    print(f"Pinterest found {len(image_urls)} image urls")
-
-    if image_urls:
-        print("Sample urls:", image_urls[:5])
-
-    # حذف duplicate ها
     image_urls = list(dict.fromkeys(image_urls))
 
     if not image_urls:
@@ -187,12 +222,11 @@ async def process_pinterest_search(
     first_batch = image_urls[:SEND_BATCH_SIZE]
 
     sent_count = await send_image_batch(
-        chat_id,
-        context,
-        first_batch,
+        chat_id=chat_id,
+        context=context,
+        urls=first_batch,
     )
 
-    # حذف loading message
     try:
         await context.bot.delete_message(
             chat_id=chat_id,
@@ -204,7 +238,7 @@ async def process_pinterest_search(
     if sent_count == 0:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=("❌ دانلود یا ارسال تصاویر با خطا مواجه شد. لطفاً دوباره تلاش کنید."),
+            text=("❌ ارسال تصاویر با خطا مواجه شد"),
         )
 
         set_state(chat_id, "")
@@ -213,19 +247,20 @@ async def process_pinterest_search(
     await increment_pinterest_downloads(user_id)
 
     context.user_data["pin_images"] = image_urls
+
     context.user_data["pin_index"] = SEND_BATCH_SIZE
 
     if SEND_BATCH_SIZE < len(image_urls):
         await context.bot.send_message(
             chat_id=chat_id,
-            text="برای دریافت عکس‌های بیشتر روی دکمه زیر بزنید:",
+            text=("برای دریافت عکس‌های بیشتر روی دکمه زیر بزنید:"),
             reply_markup=build_more_keyboard(),
         )
 
     else:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="✅ همه تصاویر مرتبط ارسال شدند.",
+            text="✅ همه تصاویر ارسال شدند.",
         )
 
     set_state(chat_id, "")
@@ -237,6 +272,7 @@ async def handle_pinterest_state(
     text: str,
     chat_id: str,
 ):
+
     user_id = str(update.effective_user.id)
 
     usage = await get_pinterest_downloads(user_id)
@@ -247,19 +283,15 @@ async def handle_pinterest_state(
     )
 
     if usage >= limit:
-        await update.message.reply_text(
-            (
-                "❌ محدودیت روزانه شما به پایان رسیده است.\n"
-                "محدودیت‌ها ساعت ۱۲ شب به وقت تهران ریست می‌شوند."
-            )
-        )
+        await update.message.reply_text(("❌ محدودیت روزانه شما به پایان رسیده است."))
 
         set_state(chat_id, "")
         return
 
-    msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر Pinterest...")
+    msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر...")
 
-    # اجرای background task
+    # مهم:
+    # handler فوری آزاد می‌شود
     asyncio.create_task(
         process_pinterest_search(
             update=update,
@@ -271,59 +303,42 @@ async def handle_pinterest_state(
         )
     )
 
-    # مهم:
-    # handler فوراً آزاد می‌شود
-    return
-
 
 async def handle_more_pins_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+
     query = update.callback_query
 
     await query.answer()
-
-    user_id = str(update.effective_user.id)
-
-    usage = await get_pinterest_downloads(user_id)
-
-    limit = get_limit(
-        "pinterest_search",
-        await is_vip(user_id),
-    )
-
-    if usage >= limit:
-        await query.edit_message_text("❌ محدودیت روزانه شما به پایان رسیده است!")
-        return
 
     images = context.user_data.get("pin_images", [])
 
     index = context.user_data.get("pin_index", 0)
 
-    if not images or index >= len(images):
-        try:
-            await query.edit_message_text("✅ همه تصاویر این جستجو قبلاً ارسال شده‌اند.")
-
-        except Exception:
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="✅ همه تصاویر این جستجو قبلاً ارسال شده‌اند.",
-            )
+    if not images:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="❌ داده‌ای یافت نشد",
+        )
 
         return
 
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
+    next_batch = images[index : index + SEND_BATCH_SIZE]
+
+    if not next_batch:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="✅ همه تصاویر ارسال شدند",
+        )
+
+        return
 
     msg = await context.bot.send_message(
         chat_id=query.message.chat_id,
-        text="⏳ در حال دریافت عکس‌های بیشتر...",
+        text="⏳ در حال ارسال...",
     )
-
-    next_batch = images[index : index + SEND_BATCH_SIZE]
 
     sent_count = await send_image_batch(
         query.message.chat_id,
@@ -339,24 +354,22 @@ async def handle_more_pins_callback(
     if sent_count == 0:
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text=("❌ تصاویر بعدی قابل ارسال نیستند. لطفاً جستجوی جدید انجام دهید."),
+            text="❌ خطا در ارسال تصاویر",
         )
 
         return
-
-    await increment_pinterest_downloads(user_id)
 
     context.user_data["pin_index"] = index + SEND_BATCH_SIZE
 
     if context.user_data["pin_index"] < len(images):
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="برای دریافت عکس‌های بیشتر روی دکمه زیر بزنید:",
+            text=("برای تصاویر بیشتر روی دکمه زیر بزنید:"),
             reply_markup=build_more_keyboard(),
         )
 
     else:
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="✅ تمام تصاویر مرتبط با این موضوع ارسال شد.",
+            text="✅ همه تصاویر ارسال شدند",
         )
