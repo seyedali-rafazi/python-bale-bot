@@ -12,7 +12,6 @@ _search_semaphore = asyncio.Semaphore(PINTEREST_SEARCH_CONCURRENCY)
 _queue_lock = asyncio.Lock()
 _waiting_count = 0
 
-# ایجاد یک ProcessPool مجزا برای اجرای کاملا ایزوله مرورگر
 _process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_CONCURRENCY)
 
 
@@ -42,7 +41,7 @@ async def queued_pinterest_search(
 
             loop = asyncio.get_running_loop()
 
-            # اجرای تابع در یک پروسه جداگانه سیستم‌عامل به جای نخ (Thread)
+            # اجرای در پروسه جداگانه
             data = await loop.run_in_executor(
                 _process_pool, search_pinterest_images, query, max_results
             )
