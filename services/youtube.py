@@ -1,6 +1,5 @@
 # services/youtube.py
 
-
 import os
 import glob
 import uuid
@@ -52,39 +51,11 @@ def get_video_duration(file_path):
 
 
 def _cookie_args():
-    """
-    اگر فایل کوکی وجود داشته باشد، آرگومان cookies را برمی‌گرداند.
-    """
     if COOKIE_FILE and os.path.exists(COOKIE_FILE):
         return ["--cookies", COOKIE_FILE]
 
     print(f"⚠️ Cookie file not found: {COOKIE_FILE}")
     return []
-
-
-# def _base_ytdlp_cmd():
-#     """
-#     آرگومان‌های پایه yt-dlp که روی VPS جواب داده‌اند.
-#     بدون proxy، برای استفاده از مسیر شبکه خود سرور/WARP.
-#     """
-#     cmd = [
-#         "yt-dlp",
-#         # 1. اگر سرورتان IPv6 دارد، خط زیر را فعال کنید (بسیار موثر است)
-#         # در غیر این صورت اگر ارور شبکه گرفتید، این خط را کامنت کنید.
-#         "--force-ipv6",
-#         "--js-runtimes",
-#         "node",
-#         "--remote-components",
-#         "ejs:github",
-#         # 2. تغییر کلاینت از وب به موبایل و تلویزیون برای دور زدن ربات‌گیر یوتیوب
-#         "--extractor-args",
-#         "youtube:client=ANDROID,IOS,TV_EMBED",
-#         "--no-playlist",
-#     ]
-
-#     cmd.extend(_cookie_args())
-
-#     return cmd
 
 
 def _base_ytdlp_cmd():
@@ -111,39 +82,92 @@ def _base_ytdlp_cmd():
 
 
 def generate_progress_bar(percent: float, length: int = 10) -> str:
-    """ساخت نوار پیشرفت گرافیکی"""
     filled = int((percent / 100) * length)
     bar = "█" * filled + "░" * (length - filled)
-    return f"[{bar}] $$ {percent:.1f} \\% $$"
+    return f"[{bar}] {percent:.1f}%"
 
 
 def get_video_info(url: str):
-    """گرفتن متادیتا شامل تامنیل، تایتل و مدت زمان"""
     cmd = _base_ytdlp_cmd()
     cmd.extend(["--dump-json", "--skip-download", url])
 
     try:
         result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
         )
+
         if result.returncode == 0:
             data = json.loads(result.stdout)
+
             return {
                 "title": data.get("title", "بدون عنوان"),
                 "thumbnail": data.get("thumbnail"),
                 "duration": data.get("duration", 0),
                 "uploader": data.get("uploader", "ناشناس"),
             }
+
     except Exception as e:
         print(f"Error getting video info: {e}")
+
     return None
 
 
+def get_video_filesize(
+    url: str,
+    format_selector="best[height<=480][ext=mp4]/best[height<=480]/best",
+):
+    """
+    گرفتن حجم فایل قبل دانلود
+    """
+
+    cmd = _base_ytdlp_cmd()
+
+    cmd.extend(
+        [
+            "-f",
+            format_selector,
+            "--print",
+            "%(filesize,filesize_approx)s",
+            "--skip-download",
+            url,
+        ]
+    )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            print("❌ Failed getting filesize")
+            print(result.stderr)
+            return None
+
+        lines = [x.strip() for x in result.stdout.splitlines() if x.strip()]
+
+        if not lines:
+            return None
+
+        size = int(float(lines[-1]))
+
+        print(f"📦 Estimated size: {size / (1024 * 1024):.2f} MB")
+
+        return size
+
+    except Exception as e:
+        print(f"❌ Error getting filesize: {e}")
+        return None
+
+
 def _run_subprocess_and_capture(cmd, progress_dict=None):
-    """
-    اجرای yt-dlp با subprocess.
-    خروجی خط‌به‌خط خوانده می‌شود تا هم لاگ داشته باشیم، هم در صورت نیاز progress_dict آپدیت شود.
-    """
     print("Running command:")
     print(" ".join(cmd))
 
@@ -164,18 +188,19 @@ def _run_subprocess_and_capture(cmd, progress_dict=None):
 
         if progress_dict is not None:
             if "[download]" in line and "%" in line:
-                # استخراج درصد با regex
                 match = re.search(r"(\d+\.\d+)%", line)
+
                 if match:
                     percent = float(match.group(1))
                     bar = generate_progress_bar(percent)
-                    # حذف بخش [download] برای تمیزی متن
+
                     clean_line = line.split("]", 1)[-1].strip()
-                    progress_dict["text"] = (
-                        f"📥 در حال دانلود...\n{bar}\n`{clean_line}`"
-                    )
+
+                    progress_dict["text"] = f"📥 در حال دانلود...\n{bar}\n{clean_line}"
+
             elif "Destination:" in line:
                 progress_dict["text"] = "📥 شروع دانلود..."
+
     process.wait()
 
     full_output = "\n".join(output_lines)
@@ -189,19 +214,17 @@ def _run_subprocess_and_capture(cmd, progress_dict=None):
 
 
 def _find_downloaded_file(video_id, req_id, preferred_ext=None):
-    """
-    فایل دانلود شده را بر اساس id و req_id پیدا می‌کند.
-    """
     if preferred_ext:
         pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.{preferred_ext}")
         files = glob.glob(pattern)
+
         if files:
             return files[0]
 
     pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
+
     files = glob.glob(pattern)
 
-    # فایل‌های موقت را حذف از انتخاب
     files = [
         f
         for f in files
@@ -213,17 +236,14 @@ def _find_downloaded_file(video_id, req_id, preferred_ext=None):
     if not files:
         return None
 
-    # اگر چند فایل بود، بزرگ‌ترین را بردار
     files.sort(key=lambda x: os.path.getsize(x), reverse=True)
+
     return files[0]
 
 
 def _get_video_id_by_ytdlp(url):
-    """
-    گرفتن video id با yt-dlp.
-    برای ساخت نام فایل قابل پیش‌بینی.
-    """
     cmd = _base_ytdlp_cmd()
+
     cmd.extend(
         [
             "--print",
@@ -252,7 +272,6 @@ def _get_video_id_by_ytdlp(url):
         if not lines:
             return None
 
-        # آخرین خط معمولاً id است
         return lines[-1]
 
     except Exception as e:
@@ -261,7 +280,7 @@ def _get_video_id_by_ytdlp(url):
 
 
 async def split_video_if_needed(original_file_path):
-    HARD_LIMIT = 14.5 * 1024 * 1024  # 14.5 MB
+    HARD_LIMIT = 14.5 * 1024 * 1024
 
     if os.path.getsize(original_file_path) <= HARD_LIMIT:
         return [original_file_path]
@@ -272,8 +291,10 @@ async def split_video_if_needed(original_file_path):
     part_counter = 1
 
     base_name, ext = os.path.splitext(original_file_path)
+
     if ext.lower() == ".part":
         base_name, ext = os.path.splitext(base_name)
+
         if not ext:
             ext = ".mp4"
 
@@ -285,6 +306,7 @@ async def split_video_if_needed(original_file_path):
             continue
 
         duration = get_video_duration(current_file)
+
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
             continue
@@ -292,12 +314,14 @@ async def split_video_if_needed(original_file_path):
         file_size = os.path.getsize(current_file)
 
         num_chunks = math.ceil(file_size / HARD_LIMIT)
+
         if num_chunks == 1:
             num_chunks = 2
 
         segment_time = duration / num_chunks
 
         output_pattern = f"{base_name}_temp_{part_counter}_%03d{ext}"
+
         part_counter += 1
 
         cmd = [
@@ -322,17 +346,19 @@ async def split_video_if_needed(original_file_path):
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
+
             await process.communicate()
 
             if process.returncode == 0:
                 new_parts = sorted(
                     glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
                 )
-                # اصلاح اول: اضافه کردن پارت‌های جدید به ابتدای صف
+
                 files_to_process = new_parts + files_to_process
 
                 if current_file != original_file_path and os.path.exists(current_file):
                     os.remove(current_file)
+
             else:
                 final_valid_parts.append(current_file)
 
@@ -345,18 +371,14 @@ async def split_video_if_needed(original_file_path):
     ):
         os.remove(original_file_path)
 
-    # اصلاح دوم: حذف sorted برای حفظ ترتیب زمانی
     return final_valid_parts
 
 
 def download_youtube_video(url, progress_dict=None):
-    """
-    دانلود ویدیو با subprocess.
-    اولویت با فرمت 18 است چون روی VPS تست شد و جواب داد.
-    """
     req_id = uuid.uuid4().hex
 
     video_id = _get_video_id_by_ytdlp(url)
+
     if not video_id:
         print("❌ Could not detect video id")
         return None
@@ -404,10 +426,7 @@ def download_youtube_video(url, progress_dict=None):
     return final_file
 
 
-def download_youtube_audio(video_id_or_url: str) -> str:
-    """
-    دانلود صدا با subprocess و تبدیل به mp3.
-    """
+def download_youtube_audio(video_id_or_url: str):
     if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
         url = video_id_or_url
     else:
@@ -416,6 +435,7 @@ def download_youtube_audio(video_id_or_url: str) -> str:
     req_id = uuid.uuid4().hex
 
     video_id = _get_video_id_by_ytdlp(url)
+
     if not video_id:
         print("❌ Could not detect video id")
         return None
@@ -469,10 +489,6 @@ def download_youtube_audio(video_id_or_url: str) -> str:
 
 
 def search_yt_videos(query, max_results=5):
-    """
-    سرچ یوتیوب با subprocess.
-    خروجی به صورت title و id گرفته می‌شود.
-    """
     search_query = (
         f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
     )
@@ -507,6 +523,7 @@ def search_yt_videos(query, max_results=5):
 
         for line in result.stdout.splitlines():
             line = line.strip()
+
             if not line:
                 continue
 
