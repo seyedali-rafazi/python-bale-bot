@@ -149,17 +149,21 @@ async def send_image_batch(
         if not images:
             return 0
 
-        media_group = []
+        sent = 0
 
         for img in images[:10]:
-            media_group.append(InputMediaPhoto(media=img))
+            try:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=img,
+                )
 
-        await context.bot.send_media_group(
-            chat_id=chat_id,
-            media=media_group,
-        )
+                sent += 1
 
-        return len(media_group)
+            except Exception as e:
+                print(f"send photo error: {e}")
+
+        return sent
 
     except Exception as e:
         print(f"send_image_batch error: {e}")
