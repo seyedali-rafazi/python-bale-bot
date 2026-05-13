@@ -4,8 +4,9 @@ import uuid
 import asyncio
 import glob
 import json
-import aiohttp
+
 from dotenv import load_dotenv
+
 from services.http_client import get_http_session
 
 load_dotenv()
@@ -64,65 +65,65 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                 if response.status != 200:
                     return results
 
-                    text_data = await response.text()
+                text_data = await response.text()
 
-                    try:
-                        data = json.loads(text_data)
-                    except json.JSONDecodeError:
-                        print("[TikTok] JSON decode error")
-                        return results
+                try:
+                    data = json.loads(text_data)
+                except json.JSONDecodeError:
+                    print("[TikTok] JSON decode error")
+                    return results
 
-                    if not isinstance(data, dict):
-                        return results
+                if not isinstance(data, dict):
+                    return results
 
-                    if data.get("code") != 0:
-                        return results
+                if data.get("code") != 0:
+                    return results
 
-                    data_block = data.get("data")
+                data_block = data.get("data")
 
-                    if not isinstance(data_block, dict):
-                        return results
+                if not isinstance(data_block, dict):
+                    return results
 
-                    videos = data_block.get("videos")
+                videos = data_block.get("videos")
 
-                    if not isinstance(videos, list):
-                        return results
+                if not isinstance(videos, list):
+                    return results
 
-                    for item in videos:
-                        if not isinstance(item, dict):
-                            continue
+                for item in videos:
+                    if not isinstance(item, dict):
+                        continue
 
-                        title = item.get("title") or "بدون کپشن"
-                        title = title.strip()
-                        if not title:
-                            title = "بدون کپشن"
+                    title = item.get("title") or "بدون کپشن"
+                    title = title.strip()
+                    if not title:
+                        title = "بدون کپشن"
 
-                        if len(title) > 50:
-                            title = title[:50] + "..."
+                    if len(title) > 50:
+                        title = title[:50] + "..."
 
-                        video_id = item.get("video_id") or item.get("id")
-                        if not video_id:
-                            continue
+                    video_id = item.get("video_id") or item.get("id")
+                    if not video_id:
+                        continue
 
-                        author_data = item.get("author")
+                    author_data = item.get("author")
 
-                        if isinstance(author_data, dict):
-                            author = (
-                                author_data.get("unique_id")
-                                or author_data.get("id")
-                                or "user"
-                            )
-                        elif isinstance(author_data, str):
-                            author = author_data
-                        else:
-                            author = "user"
+                    if isinstance(author_data, dict):
+                        author = (
+                            author_data.get("unique_id")
+                            or author_data.get("id")
+                            or "user"
+                        )
+                    elif isinstance(author_data, str):
+                        author = author_data
+                    else:
+                        author = "user"
 
-                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
-                        results.append({"title": title, "url": link})
+                    results.append({"title": title, "url": link})
 
-                        if len(results) >= max_results:
-                            break
+                    if len(results) >= max_results:
+                        break
 
         except Exception as e:
             print(f"[TikTok] Search API Error: {e}")
@@ -147,36 +148,36 @@ async def get_tiktok_trends(count: int = 10):
 
                 data = await response.json()
 
-                    if not isinstance(data, dict):
-                        return results
+                if not isinstance(data, dict):
+                    return results
 
-                    data_block = data.get("data")
+                data_block = data.get("data")
 
-                    if not isinstance(data_block, list):
-                        return results
+                if not isinstance(data_block, list):
+                    return results
 
-                    for item in data_block:
-                        if not isinstance(item, dict):
-                            continue
+                for item in data_block:
+                    if not isinstance(item, dict):
+                        continue
 
-                        title = item.get("title") or "Trending video"
-                        video_id = item.get("video_id")
+                    title = item.get("title") or "Trending video"
+                    video_id = item.get("video_id")
 
-                        author_data = item.get("author")
-                        if isinstance(author_data, dict):
-                            author = author_data.get("unique_id", "user")
-                        else:
-                            author = "user"
+                    author_data = item.get("author")
+                    if isinstance(author_data, dict):
+                        author = author_data.get("unique_id", "user")
+                    else:
+                        author = "user"
 
-                        if not video_id:
-                            continue
+                    if not video_id:
+                        continue
 
-                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
-                        results.append({"title": title, "url": link})
+                    results.append({"title": title, "url": link})
 
-                        if len(results) >= count:
-                            break
+                    if len(results) >= count:
+                        break
 
         except Exception as e:
             print(f"[TikTok] Trends API Error: {e}")

@@ -82,25 +82,25 @@ async def handle_github_state(
             timeout=60,
         ) as resp:
             if resp.status == 200:
-                    repos = await resp.json()
-                    msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
-                    keyboard = []
-                    for i, repo in enumerate(repos):
-                        msg += f"{i + 1}. {repo['name']}\n"
-                        keyboard.append(
-                            [
-                                InlineKeyboardButton(
-                                    f"📥 دانلود {repo['name']}",
-                                    callback_data=f"ghdl_{repo['full_name']}",
-                                )
-                            ]
-                        )
-
-                    await update.message.reply_text(
-                        msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                repos = await resp.json()
+                msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
+                keyboard = []
+                for i, repo in enumerate(repos):
+                    msg += f"{i + 1}. {repo['name']}\n"
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                f"📥 دانلود {repo['name']}",
+                                callback_data=f"ghdl_{repo['full_name']}",
+                            )
+                        ]
                     )
-                else:
-                    await update.message.reply_text("❌ کاربر یافت نشد.")
+
+                await update.message.reply_text(
+                    msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await update.message.reply_text("❌ کاربر یافت نشد.")
 
     elif step == "waiting_gh_search":
         await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
@@ -110,30 +110,30 @@ async def handle_github_state(
             timeout=60,
         ) as resp:
             if resp.status == 200:
-                    data = await resp.json()
-                    repos = data.get("items", [])
-                    if not repos:
-                        await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
-                        return
+                data = await resp.json()
+                repos = data.get("items", [])
+                if not repos:
+                    await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
+                    return
 
-                    msg = f"🔍 ۱۰ نتیجه برتر برای «{text}»:\n\n"
-                    keyboard = []
-                    for i, repo in enumerate(repos):
-                        msg += f"{i + 1}. {repo['full_name']} (⭐ {repo['stargazers_count']})\n"
-                        keyboard.append(
-                            [
-                                InlineKeyboardButton(
-                                    f"📥 دانلود {repo['name']}",
-                                    callback_data=f"ghdl_{repo['full_name']}",
-                                )
-                            ]
-                        )
-
-                    await update.message.reply_text(
-                        msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                msg = f"🔍 ۱۰ نتیجه برتر برای «{text}»:\n\n"
+                keyboard = []
+                for i, repo in enumerate(repos):
+                    msg += f"{i + 1}. {repo['full_name']} (⭐ {repo['stargazers_count']})\n"
+                    keyboard.append(
+                        [
+                            InlineKeyboardButton(
+                                f"📥 دانلود {repo['name']}",
+                                callback_data=f"ghdl_{repo['full_name']}",
+                            )
+                        ]
                     )
-                else:
-                    await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
+
+                await update.message.reply_text(
+                    msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
 
 
 async def process_github_download(
@@ -172,42 +172,42 @@ async def process_github_download(
         async with session.get(
             zip_url, headers=headers, allow_redirects=True, timeout=120
         ) as resp:
-                if resp.status == 200:
-                    downloaded_size = 0
-                    is_oversized = False
-                    max_bytes = 20 * 1024 * 1024  # محدودیت 20 مگابایت
+            if resp.status == 200:
+                downloaded_size = 0
+                is_oversized = False
+                max_bytes = 20 * 1024 * 1024  # محدودیت 20 مگابایت
 
-                    with open(temp_path, "wb") as f:
-                        # دانلود تکه‌تکه برای کنترل حجم در حین دانلود
-                        async for chunk in resp.content.iter_chunked(1024 * 1024):
-                            downloaded_size += len(chunk)
-                            if downloaded_size > max_bytes:
-                                is_oversized = True
-                                break
-                            f.write(chunk)
+                with open(temp_path, "wb") as f:
+                    # دانلود تکه‌تکه برای کنترل حجم در حین دانلود
+                    async for chunk in resp.content.iter_chunked(1024 * 1024):
+                        downloaded_size += len(chunk)
+                        if downloaded_size > max_bytes:
+                            is_oversized = True
+                            break
+                        f.write(chunk)
 
-                    if is_oversized:
-                        await context.bot.send_message(
-                            chat_id,
-                            "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۲۰ مگابایت است).",
-                        )
-                    else:
-                        file_size_mb = downloaded_size / (1024 * 1024)
-                        if file_size_mb < 0.001:
-                            await context.bot.send_message(
-                                chat_id,
-                                "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
-                            )
-                        else:
-                            await context.bot.send_document(
-                                chat_id=chat_id, document=temp_path, filename=file_name
-                            )
-                            await increment_gh_downloads(user_id)
-                else:
+                if is_oversized:
                     await context.bot.send_message(
                         chat_id,
-                        f"❌ خطایی در دریافت فایل رخ داد. (کد خطا: {resp.status})",
+                        "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۲۰ مگابایت است).",
                     )
+                else:
+                    file_size_mb = downloaded_size / (1024 * 1024)
+                    if file_size_mb < 0.001:
+                        await context.bot.send_message(
+                            chat_id,
+                            "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
+                        )
+                    else:
+                        await context.bot.send_document(
+                            chat_id=chat_id, document=temp_path, filename=file_name
+                        )
+                        await increment_gh_downloads(user_id)
+            else:
+                await context.bot.send_message(
+                    chat_id,
+                    f"❌ خطایی در دریافت فایل رخ داد. (کد خطا: {resp.status})",
+                )
     except Exception as e:
         await context.bot.send_message(chat_id, "❌ خطا در پردازش یا آپلود فایل.")
         print(f"GitHub Error: {e}")
