@@ -1,5 +1,7 @@
 # main.py
 
+# main.py
+
 import logging
 import os
 import time
@@ -14,10 +16,18 @@ from telegram.ext import (
 from handlers import register_all_handlers
 
 from core.database import init_db
-from services.http_client import init_http_session, close_http_session
-from services.pinterest_queue import start_pinterest_workers
-from services.ai import init_ai_client
 
+from services.http_client import (
+    init_http_session,
+)
+
+from services.pinterest_queue import (
+    start_pinterest_workers,
+)
+
+from services.ai import (
+    init_ai_client,
+)
 
 load_dotenv()
 
@@ -28,11 +38,16 @@ BALE_URL = os.getenv("BALE_URL")
 BALE_LISTENING_PORT = os.getenv("BALE_LISTENING_PORT")
 
 logging.basicConfig(
-    format=("%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# CLEANUP
+# =========================================================
 
 
 async def cleanup_old_downloads(
@@ -41,12 +56,12 @@ async def cleanup_old_downloads(
 
     now = time.time()
 
-    directories_to_clean = [
+    directories = [
         "downloads",
         "ig_downloads",
     ]
 
-    for directory in directories_to_clean:
+    for directory in directories:
         if not os.path.exists(directory):
             continue
 
@@ -56,27 +71,43 @@ async def cleanup_old_downloads(
                 f,
             )
 
-            if os.path.isfile(file_path):
+            if not os.path.isfile(file_path):
+                continue
+
+            try:
                 if os.stat(file_path).st_mtime < now - 7200:
-                    try:
-                        os.remove(file_path)
+                    os.remove(file_path)
 
-                        logger.info(f"🗑️ cleaned: {file_path}")
+                    logger.info(f"🗑️ deleted: {file_path}")
 
-                    except Exception as e:
-                        logger.error(f"cleanup error: {e}")
+            except Exception:
+                logger.exception("cleanup failed")
+
+
+# =========================================================
+# STARTUP
+# =========================================================
 
 
 async def on_startup(app):
+
     await init_http_session()
+
     await init_db()
+
     await start_pinterest_workers()
+
     await init_ai_client()
 
-    logger.info("✅ HTTP session created")
-    logger.info("✅ SQLite initialized")
-    logger.info("✅ Pinterest workers started")
-    logger.info("✅ Telethon connected")
+    logger.info("✅ HTTP Session initialized")
+    logger.info("✅ Database initialized")
+    logger.info("✅ Pinterest workers initialized")
+    logger.info("✅ AI Client initialized")
+
+
+# =========================================================
+# MAIN
+# =========================================================
 
 
 def main():
@@ -86,6 +117,7 @@ def main():
         .token(BALE_TOKEN)
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
+        .concurrent_updates(True)
         .post_init(on_startup)
         .build()
     )
@@ -94,15 +126,15 @@ def main():
         application.job_queue.run_repeating(
             cleanup_old_downloads,
             interval=7200,
-            first=10,
+            first=30,
         )
 
     register_all_handlers(application)
 
-    logger.info("✅ Optimized bot started...")
+    logger.info("✅ Bot Started")
 
     PORT = int(
-        os.environ.get(
+        os.getenv(
             "PORT",
             BALE_LISTENING_PORT,
         )
@@ -115,6 +147,8 @@ def main():
         port=PORT,
         url_path=BALE_TOKEN,
         webhook_url=WEBHOOK_URL,
+        drop_pending_updates=True,
+        allowed_updates=None,
     )
 
 
