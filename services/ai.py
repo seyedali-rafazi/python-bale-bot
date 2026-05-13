@@ -1,9 +1,7 @@
 # services/ai.py
 
-
 import os
 import io
-import uuid
 import asyncio
 import logging
 import urllib.parse
@@ -12,7 +10,7 @@ import aiohttp
 from dotenv import load_dotenv
 from gtts import gTTS
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
 
 from services.http_client import get_http_session
@@ -33,17 +31,18 @@ SESSION_NAME = os.getenv("AI_SESSION_NAME", "ai_session")
 # =========================================================
 
 _ai_client: TelegramClient | None = None
+
 _ai_client_lock = asyncio.Lock()
+
+# مهم‌ترین بخش
+# فقط AI interaction serialize میشه
+_ai_chat_lock = asyncio.Lock()
+
 _ai_connected = False
-
-# request_id -> Future
-_pending_ai_requests: dict[str, asyncio.Future] = {}
-
-# جلوگیری از اسپم بیش از حد
-_ai_send_semaphore = asyncio.Semaphore(5)
 
 
 def _build_ai_client() -> TelegramClient:
+
     return TelegramClient(
         SESSION_NAME,
         API_ID,
@@ -52,6 +51,7 @@ def _build_ai_client() -> TelegramClient:
 
 
 async def init_ai_client():
+
     global _ai_client, _ai_connected
 
     async with _ai_client_lock:
@@ -64,20 +64,20 @@ async def init_ai_client():
             if not await _ai_client.is_user_authorized():
                 raise Exception("Telethon account is not authorized")
 
-            _register_ai_handlers(_ai_client)
-
             _ai_connected = True
 
             logger.info("✅ AI Telethon connected")
 
 
 async def close_ai_client():
+
     global _ai_connected
 
     async with _ai_client_lock:
         if _ai_client:
             try:
                 await _ai_client.disconnect()
+
             except Exception:
                 logger.exception("close_ai_client failed")
 
@@ -100,79 +100,33 @@ async def _ensure_ai_client() -> TelegramClient:
 
 
 # =========================================================
-# EVENT BASED RESPONSE HANDLER
-# =========================================================
-
-
-def _register_ai_handlers(client: TelegramClient):
-
-    @client.on(events.NewMessage(from_users=CHATGPT_BOT_USERNAME))
-    async def ai_message_handler(event):
-
-        try:
-            text = event.raw_text
-
-            if not text:
-                return
-
-            lines = text.splitlines()
-
-            if not lines:
-                return
-
-            first_line = lines[0].strip()
-
-            if not first_line.startswith("[REQ_ID:"):
-                return
-
-            request_id = first_line.replace("[REQ_ID:", "").replace("]", "").strip()
-
-            future = _pending_ai_requests.get(request_id)
-
-            if not future:
-                return
-
-            answer = "\n".join(lines[1:]).strip()
-
-            if not answer:
-                answer = "❌ پاسخ خالی دریافت شد."
-
-            if not future.done():
-                future.set_result(answer)
-
-            _pending_ai_requests.pop(request_id, None)
-
-        except Exception:
-            logger.exception("ai_message_handler failed")
-
-
-# =========================================================
-# CHAT BOT
+# AI CHAT
 # =========================================================
 
 
 async def ask_chatbot(text: str) -> str:
 
-    request_id = str(uuid.uuid4())[:8]
+    # فقط این قسمت queue میشه
+    async with _ai_chat_lock:
+        try:
+            client = await _ensure_ai_client()
 
-    loop = asyncio.get_running_loop()
+            prompt = (
+                "این درخواست کاملاً مستقل است.\n"
+                "از پیام‌های قبلی استفاده نکن.\n"
+                "بدون سلام و احوالپرسی پاسخ بده.\n\n"
+                f"{text}"
+            )
 
-    future = loop.create_future()
+            # آخرین پیام قبل از ارسال
+            before_messages = await client.get_messages(
+                CHATGPT_BOT_USERNAME,
+                limit=1,
+            )
 
-    _pending_ai_requests[request_id] = future
+            before_id = before_messages[0].id if before_messages else 0
 
-    try:
-        client = await _ensure_ai_client()
-
-        prompt = (
-            f"[REQ_ID:{request_id}]\n\n"
-            "این درخواست کاملاً مستقل است.\n"
-            "از پیام‌های قبلی استفاده نکن.\n"
-            "بدون سلام و احوالپرسی پاسخ بده.\n\n"
-            f"{text}"
-        )
-
-        async with _ai_send_semaphore:
+            # ارسال پیام
             await asyncio.wait_for(
                 client.send_message(
                     CHATGPT_BOT_USERNAME,
@@ -181,36 +135,77 @@ async def ask_chatbot(text: str) -> str:
                 timeout=15,
             )
 
-        answer = await asyncio.wait_for(
-            future,
-            timeout=90,
-        )
+            # انتظار پاسخ
+            last_text = ""
 
-        return answer
+            stable_count = 0
 
-    except asyncio.TimeoutError:
-        _pending_ai_requests.pop(request_id, None)
+            for _ in range(45):
+                await asyncio.sleep(2)
 
-        return "⏳ زمان پاسخ AI به پایان رسید."
+                messages = await client.get_messages(
+                    CHATGPT_BOT_USERNAME,
+                    limit=5,
+                )
 
-    except FloodWaitError as e:
-        _pending_ai_requests.pop(request_id, None)
+                if not messages:
+                    continue
 
-        return f"⛔ محدودیت تلگرام.\n{e.seconds} ثانیه بعد دوباره تلاش کنید."
+                candidate = None
 
-    except RPCError:
-        logger.exception("Telethon RPC Error")
+                for msg in messages:
+                    if msg.id <= before_id:
+                        continue
 
-        _pending_ai_requests.pop(request_id, None)
+                    if msg.out:
+                        continue
 
-        return "❌ خطا در ارتباط با تلگرام."
+                    if getattr(msg, "sticker", None):
+                        continue
 
-    except Exception:
-        logger.exception("ask_chatbot failed")
+                    if not msg.text:
+                        continue
 
-        _pending_ai_requests.pop(request_id, None)
+                    current_text = msg.text.strip()
 
-        return "❌ خطا در ارتباط با AI."
+                    if len(current_text) < 5:
+                        continue
+
+                    candidate = current_text
+
+                    break
+
+                if not candidate:
+                    continue
+
+                # بررسی stable شدن پاسخ
+                if candidate == last_text:
+                    stable_count += 1
+                else:
+                    last_text = candidate
+                    stable_count = 0
+
+                # پاسخ کامل شد
+                if stable_count >= 1:
+                    return candidate
+
+            return "❌ AI پاسخ کامل نداد."
+
+        except asyncio.TimeoutError:
+            return "⏳ زمان پاسخ AI تمام شد."
+
+        except FloodWaitError as e:
+            return f"⛔ محدودیت تلگرام.\n{e.seconds} ثانیه بعد تلاش کنید."
+
+        except RPCError:
+            logger.exception("Telethon RPC Error")
+
+            return "❌ خطا در ارتباط با تلگرام."
+
+        except Exception:
+            logger.exception("ask_chatbot failed")
+
+            return "❌ خطا در ارتباط با AI."
 
 
 # =========================================================
@@ -224,6 +219,7 @@ async def perform_ocr(image_bytes: bytes) -> str:
         data = aiohttp.FormData()
 
         data.add_field("apikey", OCR_SPACE_API_KEY)
+
         data.add_field("language", "ara")
 
         data.add_field(
@@ -264,6 +260,7 @@ async def perform_ocr(image_bytes: bytes) -> str:
 
     except Exception:
         logger.exception("perform_ocr failed")
+
         return "❌ خطا در OCR."
 
 
@@ -301,11 +298,12 @@ async def text_to_speech(text: str):
 
     except Exception:
         logger.exception("text_to_speech failed")
+
         return None
 
 
 # =========================================================
-# IMAGE GENERATION
+# IMAGE
 # =========================================================
 
 
