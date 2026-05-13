@@ -8,6 +8,7 @@ import aiohttp
 from dotenv import load_dotenv
 from gtts import gTTS
 from telethon import TelegramClient
+from services.http_client import get_http_session
 
 load_dotenv()
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
@@ -88,11 +89,13 @@ async def perform_ocr(image_bytes: bytes):
         )
 
         timeout = aiohttp.ClientTimeout(total=25)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                "https://api.ocr.space/parse/image", data=data
-            ) as response:
-                result = await response.json()
+        session = await get_http_session()
+        async with session.post(
+            "https://api.ocr.space/parse/image",
+            data=data,
+            timeout=timeout,
+        ) as response:
+            result = await response.json()
 
         if result.get("IsErroredOnProcessing"):
             return "❌ خطا در پردازش تصویر توسط سرور OCR."
@@ -131,11 +134,11 @@ async def generate_image(prompt):
         url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
 
         timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    image_bytes = await response.read()
-                    return io.BytesIO(image_bytes)
+        session = await get_http_session()
+        async with session.get(url, timeout=timeout) as response:
+            if response.status == 200:
+                image_bytes = await response.read()
+                return io.BytesIO(image_bytes)
         return None
     except asyncio.TimeoutError:
         print("Image Gen Error: Timeout")

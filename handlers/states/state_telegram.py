@@ -4,6 +4,7 @@ import re
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
+from services.http_client import get_http_session
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
@@ -16,10 +17,10 @@ processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 async def fetch_url_async(url: str) -> str:
     """دریافت محتوای صفحه به صورت کاملاً غیرهمگام بدون درگیر کردن Thread"""
     timeout = aiohttp.ClientTimeout(total=15)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url) as response:
-            response.raise_for_status()  # اگر ارور 404 یا 500 بود خطا بدهد
-            return await response.text()
+    session = await get_http_session()
+    async with session.get(url, timeout=timeout) as response:
+        response.raise_for_status()  # اگر ارور 404 یا 500 بود خطا بدهد
+        return await response.text()
 
 
 async def handle_telegram_state(

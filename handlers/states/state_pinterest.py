@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import List, Optional
 
 import aiohttp
+from services.http_client import get_http_session
 
 from telegram import (
     Update,
@@ -58,14 +59,17 @@ def build_more_keyboard():
 async def get_image_bytes(
     session: aiohttp.ClientSession,
     url: str,
+    headers: dict,
 ) -> Optional[BytesIO]:
 
     async with download_semaphore:
         try:
             async with session.get(
                 url,
+                headers=headers,
                 timeout=aiohttp.ClientTimeout(total=20),
                 allow_redirects=True,
+                ssl=False,
             ) as res:
                 if res.status != 200:
                     return None
@@ -94,11 +98,6 @@ async def fetch_image_bytes(
     urls: List[str],
 ) -> List[BytesIO]:
 
-    connector = aiohttp.TCPConnector(
-        limit=200,
-        ssl=False,
-    )
-
     headers = {
         "User-Agent": (
             "Mozilla/5.0 "
@@ -111,22 +110,20 @@ async def fetch_image_bytes(
         "Referer": "https://www.pinterest.com/",
     }
 
-    async with aiohttp.ClientSession(
-        connector=connector,
-        headers=headers,
-    ) as session:
-        tasks = [
-            get_image_bytes(
-                session,
-                url,
-            )
-            for url in urls
-        ]
-
-        results = await asyncio.gather(
-            *tasks,
-            return_exceptions=True,
+    session = await get_http_session()
+    tasks = [
+        get_image_bytes(
+            session,
+            url,
+            headers=headers,
         )
+        for url in urls
+    ]
+
+    results = await asyncio.gather(
+        *tasks,
+        return_exceptions=True,
+    )
 
     images = []
 

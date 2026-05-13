@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from services.http_client import get_http_session
 from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip
 from core.state_manager import clear_state
@@ -75,11 +76,12 @@ async def handle_github_state(
 
     elif step == "waiting_gh_user":
         await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"https://api.github.com/users/{text}/repos?sort=updated&per_page=10"
-            ) as resp:
-                if resp.status == 200:
+        session = await get_http_session()
+        async with session.get(
+            f"https://api.github.com/users/{text}/repos?sort=updated&per_page=10",
+            timeout=60,
+        ) as resp:
+            if resp.status == 200:
                     repos = await resp.json()
                     msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
                     keyboard = []
@@ -102,11 +104,12 @@ async def handle_github_state(
 
     elif step == "waiting_gh_search":
         await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"https://api.github.com/search/repositories?q={text}&per_page=10"
-            ) as resp:
-                if resp.status == 200:
+        session = await get_http_session()
+        async with session.get(
+            f"https://api.github.com/search/repositories?q={text}&per_page=10",
+            timeout=60,
+        ) as resp:
+            if resp.status == 200:
                     data = await resp.json()
                     repos = data.get("items", [])
                     if not repos:
@@ -153,22 +156,22 @@ async def process_github_download(
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            try:
-                await asyncio.wait_for(
-                    context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=screenshot_url,
-                        caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
-                    ),
-                    timeout=5.0,
-                )
-            except Exception:
-                pass
+        session = await get_http_session()
+        try:
+            await asyncio.wait_for(
+                context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=screenshot_url,
+                    caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
+                ),
+                timeout=5.0,
+            )
+        except Exception:
+            pass
 
-            async with session.get(
-                zip_url, headers=headers, allow_redirects=True
-            ) as resp:
+        async with session.get(
+            zip_url, headers=headers, allow_redirects=True, timeout=120
+        ) as resp:
                 if resp.status == 200:
                     downloaded_size = 0
                     is_oversized = False

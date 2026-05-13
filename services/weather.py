@@ -2,6 +2,7 @@
 
 import aiohttp
 import asyncio
+from services.http_client import get_http_session
 
 
 def get_wmo_description(code):
@@ -23,23 +24,22 @@ def get_wmo_description(code):
 async def get_weather_forecast(city_name):
     try:
         timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # 1. دریافت مختصات شهر
-            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city_name}&count=1&language=en&format=json"
-            async with session.get(geo_url) as geo_resp:
-                geo_data = await geo_resp.json()
+        session = await get_http_session()
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city_name}&count=1&language=en&format=json"
+        async with session.get(geo_url, timeout=timeout) as geo_resp:
+            geo_data = await geo_resp.json()
 
-            if "results" not in geo_data or not geo_data["results"]:
-                return f"❌ شهری با نام `{city_name}` پیدا نشد."
+        if "results" not in geo_data or not geo_data["results"]:
+            return f"❌ شهری با نام `{city_name}` پیدا نشد."
 
-            location = geo_data["results"][0]
-            lat, lon = location["latitude"], location["longitude"]
-            city, country = location["name"], location.get("country", "نامشخص")
+        location = geo_data["results"][0]
+        lat, lon = location["latitude"], location["longitude"]
+        city, country = location["name"], location.get("country", "نامشخص")
 
-            # 2. دریافت وضعیت آب و هوا با مختصات
-            weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=3"
-            async with session.get(weather_url) as weather_resp:
-                weather_data = await weather_resp.json()
+        # 2. دریافت وضعیت آب و هوا با مختصات
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=3"
+        async with session.get(weather_url, timeout=timeout) as weather_resp:
+            weather_data = await weather_resp.json()
 
         daily = weather_data.get("daily", {})
         result_text = f"🌍 **پیش‌بینی آب و هوای {city}** ({country})\n\n"

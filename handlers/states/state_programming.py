@@ -6,6 +6,7 @@ import uuid
 import aiohttp
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from services.http_client import get_http_session
 from telegram.ext import ContextTypes
 from core.state_manager import clear_state
 from ddgs import DDGS
@@ -23,15 +24,15 @@ async def background_download(chat_id, bot, download_url, filename, caption):
         }
 
         async with DOWNLOAD_SEMAPHORE:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url, headers=headers) as response:
-                    if response.status == 200:
-                        # دانلود فایل به صورت تکه‌ای (Chunk) روی هارد به جای پر کردن RAM
-                        with open(temp_filepath, "wb") as f:
-                            async for chunk in response.content.iter_chunked(
-                                1024 * 1024
-                            ):  # تکه‌های 1 مگابایتی
-                                f.write(chunk)
+            session = await get_http_session()
+            async with session.get(download_url, headers=headers, timeout=120) as response:
+                if response.status == 200:
+                    # دانلود فایل به صورت تکه‌ای (Chunk) روی هارد به جای پر کردن RAM
+                    with open(temp_filepath, "wb") as f:
+                        async for chunk in response.content.iter_chunked(
+                            1024 * 1024
+                        ):  # تکه‌های 1 مگابایتی
+                            f.write(chunk)
 
                         # ارسال مستقیم فایل از روی هارد
                         await bot.send_document(
@@ -148,11 +149,11 @@ async def handle_programming_state(
         await update.message.reply_text("⏳ در صف دانلود...")
         search_url = f"https://addons.mozilla.org/api/v5/addons/search/?q={text}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(search_url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("results"):
+            session = await get_http_session()
+            async with session.get(search_url, timeout=60) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("results"):
                             addon = data["results"][0]
                             file_url = addon["current_version"]["file"]["url"]
                             filename = f"{addon['slug']}.xpi"

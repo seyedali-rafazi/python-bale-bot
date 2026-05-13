@@ -6,6 +6,7 @@ import glob
 import json
 import aiohttp
 from dotenv import load_dotenv
+from services.http_client import get_http_session
 
 load_dotenv()
 
@@ -58,10 +59,10 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
         await asyncio.sleep(1)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as response:
-                    if response.status != 200:
-                        return results
+            session = await get_http_session()
+            async with session.get(url, timeout=15) as response:
+                if response.status != 200:
+                    return results
 
                     text_data = await response.text()
 
@@ -139,12 +140,12 @@ async def get_tiktok_trends(count: int = 10):
         await asyncio.sleep(1)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as response:
-                    if response.status != 200:
-                        return results
+            session = await get_http_session()
+            async with session.get(url, timeout=15) as response:
+                if response.status != 200:
+                    return results
 
-                    data = await response.json()
+                data = await response.json()
 
                     if not isinstance(data, dict):
                         return results

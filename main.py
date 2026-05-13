@@ -13,9 +13,9 @@ from telegram.ext import (
 
 from handlers import register_all_handlers
 
-from services.pinterest_queue import (
-    start_pinterest_workers,
-)
+from core.database import init_db
+from services.http_client import init_http_session, close_http_session
+from services.pinterest_queue import start_pinterest_workers
 
 load_dotenv()
 
@@ -66,9 +66,12 @@ async def cleanup_old_downloads(
 
 
 async def on_startup(app):
-
+    await init_http_session()
+    await init_db()
     await start_pinterest_workers()
 
+    logger.info("✅ HTTP session created")
+    logger.info("✅ SQLite initialized")
     logger.info("✅ Pinterest workers started")
 
 
