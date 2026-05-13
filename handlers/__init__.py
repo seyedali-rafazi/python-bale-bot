@@ -79,7 +79,7 @@ from .payment import (
     handle_tos_acceptance,
 )
 from handlers.states.state_pinterest import handle_more_pins_callback
-from handlers.states.state_youtube import youtube_destination_callback
+from handlers.states.state_youtube import youtube_destination_callback, youtube_quality_callback
 from handlers.states.state_github import github_callback_handler
 
 
@@ -172,6 +172,9 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(youtube_destination_callback, pattern="^ytdest_")
+    )
+    application.add_handler(
+        CallbackQueryHandler(youtube_quality_callback, pattern="^ytqual_")
     )
     application.add_handler(
         MessageHandler(

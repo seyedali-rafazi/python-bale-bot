@@ -374,7 +374,7 @@ async def split_video_if_needed(original_file_path):
     return final_valid_parts
 
 
-def download_youtube_video(url, progress_dict=None):
+def download_youtube_video(url, quality="480", progress_dict=None):
     req_id = uuid.uuid4().hex
 
     video_id = _get_video_id_by_ytdlp(url)
@@ -387,10 +387,12 @@ def download_youtube_video(url, progress_dict=None):
 
     cmd = _base_ytdlp_cmd()
 
+    format_selector = f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
+
     cmd.extend(
         [
             "-f",
-            "best[height<=480][ext=mp4]/best[height<=480]/best",
+            format_selector,
             "--max-filesize",
             str(MAX_DOWNLOAD_SIZE),
             "-o",

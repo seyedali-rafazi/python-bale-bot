@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 
 from core.state_manager import set_state, get_state, clear_state
 from core.constants import BTN_YT_VIDEO, BTN_BACK
-from core.keyboards import get_yt_format_keyboard, get_main_menu_keyboard
+from core.keyboards import get_yt_format_keyboard, get_main_menu_keyboard, get_yt_quality_telegram_keyboard, get_yt_quality_server_keyboard
 from core.database import (
     is_vip,
     get_yt_downloads,
@@ -261,9 +261,10 @@ async def background_yt_download(
     chat_id: str,
     format_type: str,
     destination: str = "telegram",
+    quality: str = "480",
 ):
     video_id = extract_yt_id(url)
-    cache_key = f"{video_id}_{format_type}_{destination}"
+    cache_key = f"{video_id}_{format_type}_{destination}_{quality}"
 
     # =========================================
     # کش
@@ -296,26 +297,22 @@ async def background_yt_download(
 
     try:
         if format_type == "video":
-            estimated_size = await asyncio.to_thread(
-                get_video_filesize,
-                url,
-                "best[height<=480][ext=mp4]/best[height<=480]/best",
-            )
+            format_selector = f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
+            estimated_size = await asyncio.to_thread(get_video_filesize, url, format_selector)
         else:
-            estimated_size = await asyncio.to_thread(
-                get_video_filesize,
-                url,
-                "bestaudio/best",
-            )
+            estimated_size = await asyncio.to_thread(get_video_filesize, url, "bestaudio/best")
 
-        if estimated_size and estimated_size > 300 * 1024 * 1024:
+        limit = 1 * 1024 * 1024 * 1024 if destination == "telegram" else 300 * 1024 * 1024
+
+        if estimated_size and estimated_size > limit:
             size_mb = round(estimated_size / (1024 * 1024), 1)
+            limit_mb = round(limit / (1024 * 1024), 1)
 
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     f"❌ حجم فایل حدود {size_mb} مگابایت است.\n\n"
-                    f"ربات فقط فایل‌های زیر 300MB را پشتیبانی می‌کند."
+                    f"حداکثر حجم مجاز {limit_mb} مگابایت است."
                 ),
             )
 
@@ -416,6 +413,7 @@ async def background_yt_download(
                         raw_file = await asyncio.to_thread(
                             download_youtube_video,
                             url,
+                            quality,
                             progress_dict,
                         )
 
@@ -1096,6 +1094,74 @@ async def youtube_destination_callback(
     else:
         destination = "telegram"
 
+    await asyncio.to_thread(
+        set_state, chat_id, "waiting_yt_quality", yt_url=url, format=format_type, destination=destination
+    )
+
+    if destination == "telegram":
+        keyboard = get_yt_quality_telegram_keyboard()
+        msg = "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 1 گیگابایت):"
+    else:
+        keyboard = get_yt_quality_server_keyboard()
+        msg = "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 300 مگابایت):"
+
+    await query.edit_message_text(msg, reply_markup=keyboard)
+
+
+# -------------------- Quality Callback -------------------- #
+
+
+async def youtube_quality_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"⚠️ Error answering callback query: {e}")
+
+    data = query.data
+    chat_id = str(query.message.chat_id)
+
+    if not data.startswith("ytqual_"):
+        return
+
+    quality = data.split("_")[1]  # e.g., "144"
+
+    user_state = await asyncio.to_thread(get_state, chat_id)
+    if not user_state or user_state.get("step") != "waiting_yt_quality":
+        await query.edit_message_text(
+            "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
+        )
+        return
+
+    url = user_state.get("yt_url")
+    format_type = user_state.get("format")
+    destination = user_state.get("destination")
+
+    # چک سایز بر اساس کیفیت و destination
+    try:
+        if format_type == "video":
+            estimated_size = await asyncio.to_thread(get_video_filesize, url, quality)
+        else:
+            estimated_size = await asyncio.to_thread(get_video_filesize, url, "bestaudio")
+
+        if destination == "telegram":
+            limit = 1 * 1024 * 1024 * 1024  # 1GB
+        else:
+            limit = 300 * 1024 * 1024  # 300MB
+
+        if estimated_size and estimated_size > limit:
+            if destination == "telegram":
+                msg = "❌ فایل بزرگتر از 1 گیگابایت است. کیفیت پایین‌تری انتخاب کنید."
+            else:
+                msg = "❌ فایل بزرگتر از 300 مگابایت است. کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
+            await query.edit_message_text(msg)
+            return
+    except Exception as e:
+        print(f"⚠️ Error checking filesize: {e}")
+
     await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
 
     await asyncio.to_thread(clear_state, chat_id)
@@ -1109,5 +1175,5 @@ async def youtube_destination_callback(
     await increment_yt_downloads(chat_id)
 
     asyncio.create_task(
-        background_yt_download(context, url, chat_id, format_type, destination)
+        background_yt_download(context, url, chat_id, format_type, destination, quality=quality)
     )
