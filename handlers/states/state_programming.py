@@ -3,13 +3,14 @@
 import os
 import re
 import uuid
-import aiohttp
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from services.http_client import get_http_session
-from telegram.ext import ContextTypes
-from core.state_manager import clear_state
+
 from ddgs import DDGS
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from core.state_manager import clear_state
+from services.http_client import get_http_session
 
 # کنترل تعداد درخواست‌های همزمان برای جلوگیری از پر شدن منابع و مسدود شدن IP
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(5)
@@ -25,13 +26,13 @@ async def background_download(chat_id, bot, download_url, filename, caption):
 
         async with DOWNLOAD_SEMAPHORE:
             session = await get_http_session()
-            async with session.get(download_url, headers=headers, timeout=120) as response:
+            async with session.get(
+                download_url, headers=headers, timeout=120
+            ) as response:
                 if response.status == 200:
                     # دانلود فایل به صورت تکه‌ای (Chunk) روی هارد به جای پر کردن RAM
                     with open(temp_filepath, "wb") as f:
-                        async for chunk in response.content.iter_chunked(
-                            1024 * 1024
-                        ):  # تکه‌های 1 مگابایتی
+                        async for chunk in response.content.iter_chunked(1024 * 1024):
                             f.write(chunk)
 
                     # ارسال مستقیم فایل از روی هارد
@@ -77,7 +78,10 @@ async def handle_programming_state(
                 return
 
             await update.message.reply_text("⏳ درخواست شما در صف دانلود قرار گرفت...")
-            download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
+            download_url = (
+                "https://clients2.google.com/service/update2/crx"
+                f"?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
+            )
 
             asyncio.create_task(
                 background_download(
@@ -154,37 +158,47 @@ async def handle_programming_state(
                 if response.status == 200:
                     data = await response.json()
                     if data.get("results"):
-                            addon = data["results"][0]
-                            file_url = addon["current_version"]["file"]["url"]
-                            filename = f"{addon['slug']}.xpi"
+                        addon = data["results"][0]
+                        file_url = addon["current_version"]["file"]["url"]
+                        filename = f"{addon['slug']}.xpi"
 
-                            asyncio.create_task(
-                                background_download(
-                                    chat_id,
-                                    context.bot,
-                                    file_url,
-                                    filename,
-                                    f"🦊 افزونه فایرفاکس: {addon.get('name', {}).get('en-US', text)}",
-                                )
+                        asyncio.create_task(
+                            background_download(
+                                chat_id,
+                                context.bot,
+                                file_url,
+                                filename,
+                                f"🦊 افزونه فایرفاکس: {addon.get('name', {}).get('en-US', text)}",
                             )
-                        else:
-                            await update.message.reply_text("❌ یافت نشد.")
-                            clear_state(chat_id)
-        except Exception:
-            await update.message.reply_text("❌ خطا در ارتباط.")
+                        )
+                    else:
+                        await update.message.reply_text("❌ یافت نشد.")
+                        clear_state(chat_id)
+                else:
+                    await update.message.reply_text(
+                        f"❌ خطا در دریافت اطلاعات. کد: {response.status}"
+                    )
+                    clear_state(chat_id)
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در ارتباط: {e}")
             clear_state(chat_id)
 
     elif step == "waiting_prog_vscode":
         parts = text.split(".")
         if len(parts) != 2:
             await update.message.reply_text(
-                "❌ فرمت اشتباه است. مثال: `esbenp.prettier-vscode`"
+                "❌ فرمت اشتباه است. مثال: `esbenp.prettier-vscode`",
+                parse_mode="Markdown",
             )
             return
 
         await update.message.reply_text("⏳ در صف دانلود...")
         publisher, extension_name = parts
-        download_url = f"https://{publisher}.gallery.vsassets.io/_apis/public/gallery/publisher/{publisher}/extension/{extension_name}/latest/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
+        download_url = (
+            f"https://{publisher}.gallery.vsassets.io/_apis/public/gallery/"
+            f"publisher/{publisher}/extension/{extension_name}/latest/assetbyname/"
+            "Microsoft.VisualStudio.Services.VSIXPackage"
+        )
 
         asyncio.create_task(
             background_download(
@@ -206,11 +220,14 @@ async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     data = query.data
     if data.startswith("dlchrome_"):
-        ext_id = data.split("_")[1]
+        ext_id = data.split("_", 1)[1]
         chat_id = query.message.chat_id
 
         await query.message.reply_text("⏳ دانلود در پس‌زمینه شروع شد...")
-        download_url = f"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
+        download_url = (
+            "https://clients2.google.com/service/update2/crx"
+            f"?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
+        )
 
         asyncio.create_task(
             background_download(
