@@ -34,20 +34,20 @@ async def background_download(chat_id, bot, download_url, filename, caption):
                         ):  # تکه‌های 1 مگابایتی
                             f.write(chunk)
 
-                        # ارسال مستقیم فایل از روی هارد
-                        await bot.send_document(
-                            chat_id=chat_id,
-                            document=temp_filepath,
-                            filename=filename,
-                            caption=caption,
-                            read_timeout=120,
-                            write_timeout=120,
-                        )
-                    else:
-                        await bot.send_message(
-                            chat_id,
-                            f"❌ خطا در دریافت فایل. کد خطا: {response.status}",
-                        )
+                    # ارسال مستقیم فایل از روی هارد
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=temp_filepath,
+                        filename=filename,
+                        caption=caption,
+                        read_timeout=120,
+                        write_timeout=120,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ خطا در دریافت فایل. کد خطا: {response.status}",
+                    )
     except Exception as e:
         await bot.send_message(chat_id, f"❌ خطای غیرمنتظره در دانلود: {e}")
     finally:
