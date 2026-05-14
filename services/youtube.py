@@ -128,11 +128,17 @@ def get_video_filesize(
         quality = format_selector
 
         if quality == "720":
-            format_selector = "136+140/bestvideo[height<=720]+bestaudio/best[height<=720]"
+            format_selector = (
+                "136+140/bestvideo[height<=720]+bestaudio/best[height<=720]"
+            )
         elif quality == "480":
-            format_selector = "135+140/bestvideo[height<=480]+bestaudio/best[height<=480]"
+            format_selector = (
+                "135+140/bestvideo[height<=480]+bestaudio/best[height<=480]"
+            )
         elif quality == "360":
-            format_selector = "134+140/bestvideo[height<=360]+bestaudio/best[height<=360]"
+            format_selector = (
+                "134+140/bestvideo[height<=360]+bestaudio/best[height<=360]"
+            )
         else:
             format_selector = (
                 f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
