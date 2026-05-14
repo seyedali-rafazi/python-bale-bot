@@ -387,12 +387,18 @@ def download_youtube_video(url, quality="480", progress_dict=None):
 
     cmd = _base_ytdlp_cmd()
 
-    format_selector = f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
+    format_selector = (
+        f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
+        f"bv*[height<={quality}]+ba/"
+        f"b[height<={quality}]"
+    )
 
     cmd.extend(
         [
             "-f",
             format_selector,
+            "--merge-output-format",
+            "mp4",
             "--max-filesize",
             str(MAX_DOWNLOAD_SIZE),
             "-o",
