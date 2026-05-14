@@ -385,20 +385,30 @@ def download_youtube_video(url, quality="480", progress_dict=None):
 
     output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
 
-    cmd = _base_ytdlp_cmd()
+    # 🎯 MAP QUALITY → EXACT GOOD COMBOS
+    if str(quality) == "720":
+        format_selector = "136+140/bestvideo[height<=720]+bestaudio/best[height<=720]"
+    elif str(quality) == "480":
+        format_selector = "135+140/bestvideo[height<=480]+bestaudio/best[height<=480]"
+    elif str(quality) == "360":
+        format_selector = "134+140/bestvideo[height<=360]+bestaudio/best[height<=360]"
+    else:
+        format_selector = (
+            f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
+            f"bv*[height<={quality}]+ba/"
+            f"b[height<={quality}]"
+        )
 
-    format_selector = (
-        f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
-        f"bv*[height<={quality}]+ba/"
-        f"b[height<={quality}]"
-    )
+    cmd = _base_ytdlp_cmd()
 
     cmd.extend(
         [
             "-f",
             format_selector,
+            # 🔥 force proper merge like your working CLI
             "--merge-output-format",
             "mp4",
+            "--no-part",
             "--max-filesize",
             str(MAX_DOWNLOAD_SIZE),
             "-o",
@@ -412,7 +422,6 @@ def download_youtube_video(url, quality="480", progress_dict=None):
     if not ok:
         if "File is larger than max-filesize" in output or "max-filesize" in output:
             return "TOO_LARGE"
-
         return None
 
     final_file = _find_downloaded_file(video_id, req_id)
@@ -428,7 +437,6 @@ def download_youtube_video(url, quality="480", progress_dict=None):
             os.remove(final_file)
         except Exception:
             pass
-
         return "TOO_LARGE"
 
     return final_file
