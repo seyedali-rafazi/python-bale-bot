@@ -253,7 +253,6 @@ def _find_downloaded_file(video_id, req_id, preferred_ext=None):
             return files[0]
 
     pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
-
     files = glob.glob(pattern)
 
     files = [
@@ -265,7 +264,20 @@ def _find_downloaded_file(video_id, req_id, preferred_ext=None):
     ]
 
     if not files:
-        return None
+        # fallback if video id pattern missed due to metadata or output mismatch
+        fallback_pattern = os.path.join(DOWNLOAD_DIR, f"*_{req_id}.*")
+        files = glob.glob(fallback_pattern)
+        files = [
+            f
+            for f in files
+            if not f.endswith(".part")
+            and not f.endswith(".ytdl")
+            and not f.endswith(".temp")
+        ]
+
+        if not files:
+            print(f"❌ Could not locate downloaded file for req_id={req_id}")
+            return None
 
     files.sort(key=lambda x: os.path.getsize(x), reverse=True)
 
@@ -459,7 +471,7 @@ def download_youtube_video(
     final_file = _find_downloaded_file(video_id, req_id)
 
     if not final_file or not os.path.exists(final_file):
-        print("❌ Download finished but file not found")
+        print(f"❌ Download finished but file not found for video_id={video_id}, req_id={req_id}")
         return None
 
     actual_size = os.path.getsize(final_file)
