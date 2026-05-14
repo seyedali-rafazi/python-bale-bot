@@ -64,7 +64,7 @@ def _base_ytdlp_cmd():
 
     cmd = [
         "yt-dlp",
-        "--force-ipv6",
+        "--force-ipv4",
         "--source-address",
         random_ip,
         "--js-runtimes",
@@ -72,7 +72,7 @@ def _base_ytdlp_cmd():
         "--remote-components",
         "ejs:github",
         "--extractor-args",
-        "youtube:player_client=web",
+        "youtube:player_client=android,web,ios",
         "--no-playlist",
     ]
 
