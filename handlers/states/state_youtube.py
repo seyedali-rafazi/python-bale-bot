@@ -305,7 +305,7 @@ async def background_yt_download(
         else:
             estimated_size = await asyncio.to_thread(get_video_filesize, url, "bestaudio/best")
 
-        limit = 1 * 1024 * 1024 * 1024 if destination == "telegram" else 3000 * 1024 * 1024
+        limit = 1 * 1024 * 1024 * 1024 if destination == "telegram" else 300 * 1024 * 1024
 
         if estimated_size and estimated_size > limit:
             size_mb = round(estimated_size / (1024 * 1024), 1)
@@ -1177,13 +1177,13 @@ async def youtube_quality_callback(
         if destination == "telegram":
             limit = 1 * 1024 * 1024 * 1024  # 1GB
         else:
-            limit = 3000 * 1024 * 1024  # 3000MB / 3GB
+            limit = 300 * 1024 * 1024  # 300MB
 
         if estimated_size and estimated_size > limit:
             if destination == "telegram":
                 msg = "❌ فایل بزرگتر از 1 گیگابایت است. کیفیت پایین‌تری انتخاب کنید."
             else:
-                msg = "❌ فایل بزرگتر از 3000 مگابایت است. کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
+                msg = "❌ فایل بزرگتر از 300 مگابایت است. کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
 
             if destination == "telegram":
                 keyboard = get_yt_quality_telegram_keyboard()
