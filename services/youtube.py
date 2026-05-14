@@ -64,14 +64,15 @@ def _base_ytdlp_cmd():
 
     cmd = [
         "yt-dlp",
-        "--force-ipv4",
+        "--force-ipv6",
         "--source-address",
         random_ip,
         "--js-runtimes",
         "node",
         "--remote-components",
         "ejs:github",
-        "--extractor-args",
+        # "--extractor-args",
+        # "youtube:player_client=android,web,ios",
         "--no-playlist",
     ]
 
@@ -407,7 +408,7 @@ def download_youtube_video(url, quality="480", progress_dict=None):
             # 🔥 force proper merge like your working CLI
             "--merge-output-format",
             "mp4",
-            "--no-part",
+            # "--no-part",
             "--max-filesize",
             str(MAX_DOWNLOAD_SIZE),
             "-o",
