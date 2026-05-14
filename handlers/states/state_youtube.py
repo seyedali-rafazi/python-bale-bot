@@ -469,11 +469,17 @@ async def background_yt_download(
                     downloaded_files = []
 
                     try:
+                        max_size = (
+                            1 * 1024 * 1024 * 1024
+                            if destination == "telegram"
+                            else 300 * 1024 * 1024
+                        )
                         raw_file = await asyncio.to_thread(
                             download_youtube_video,
                             url,
                             quality,
                             progress_dict,
+                            max_size,
                         )
 
                         progress_dict["is_finished"] = True
@@ -483,10 +489,16 @@ async def background_yt_download(
                         # =========================
 
                         if raw_file == "TOO_LARGE":
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ حجم فایل بیشتر از 300MB است.",
-                            )
+                            if destination == "telegram":
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ حجم فایل بیش از 1 گیگابایت است.",
+                                )
+                            else:
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ حجم فایل بیشتر از 300MB است.",
+                                )
 
                             await decrement_yt_downloads(chat_id)
 
@@ -726,9 +738,15 @@ async def background_yt_download(
                     file_path = None
 
                     try:
+                        max_size = (
+                            1 * 1024 * 1024 * 1024
+                            if destination == "telegram"
+                            else 300 * 1024 * 1024
+                        )
                         file_path = await asyncio.to_thread(
                             download_youtube_audio,
                             url,
+                            max_size,
                         )
 
                         progress_dict["is_finished"] = True
@@ -738,10 +756,16 @@ async def background_yt_download(
                         # =========================
 
                         if file_path == "TOO_LARGE":
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ حجم فایل صوتی بیشتر از 300MB است.",
-                            )
+                            if destination == "telegram":
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ حجم فایل صوتی بیش از 1 گیگابایت است.",
+                                )
+                            else:
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="❌ حجم فایل صوتی بیشتر از 300MB است.",
+                                )
 
                             await decrement_yt_downloads(chat_id)
 

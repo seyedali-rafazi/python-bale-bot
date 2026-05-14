@@ -19,6 +19,7 @@ COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 300 * 1024 * 1024
+MAX_TELEGRAM_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 IPV6_PREFIX = os.getenv("IPV6_PREFIX")
@@ -178,7 +179,15 @@ def get_video_filesize(
         if not lines:
             return None
 
-        size = int(float(lines[-1]))
+        size_text = lines[-1].strip()
+        if size_text.upper() in {"NA", "N/A", "NONE"}:
+            return None
+
+        match = re.search(r"(\d+(?:\.\d+)?)", size_text)
+        if not match:
+            return None
+
+        size = int(float(match.group(1)))
 
         print(f"📦 Estimated size: {size / (1024 * 1024):.2f} MB")
 
@@ -396,7 +405,9 @@ async def split_video_if_needed(original_file_path):
     return final_valid_parts
 
 
-def download_youtube_video(url, quality="480", progress_dict=None):
+def download_youtube_video(
+    url, quality="480", progress_dict=None, max_filesize=MAX_DOWNLOAD_SIZE
+):
     req_id = uuid.uuid4().hex
 
     video_id = _get_video_id_by_ytdlp(url)
@@ -431,8 +442,7 @@ def download_youtube_video(url, quality="480", progress_dict=None):
             "--merge-output-format",
             "mp4",
             # "--no-part",
-            "--max-filesize",
-            str(MAX_DOWNLOAD_SIZE),
+            str(max_filesize),
             "-o",
             output_template,
             url,
@@ -454,7 +464,7 @@ def download_youtube_video(url, quality="480", progress_dict=None):
 
     actual_size = os.path.getsize(final_file)
 
-    if actual_size > MAX_DOWNLOAD_SIZE:
+    if actual_size > max_filesize:
         try:
             os.remove(final_file)
         except Exception:
@@ -464,7 +474,7 @@ def download_youtube_video(url, quality="480", progress_dict=None):
     return final_file
 
 
-def download_youtube_audio(video_id_or_url: str):
+def download_youtube_audio(video_id_or_url: str, max_filesize=MAX_DOWNLOAD_SIZE):
     if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
         url = video_id_or_url
     else:
@@ -491,8 +501,6 @@ def download_youtube_audio(video_id_or_url: str):
             "mp3",
             "--audio-quality",
             "192K",
-            "--max-filesize",
-            str(MAX_DOWNLOAD_SIZE),
             "-o",
             output_template,
             url,
@@ -515,7 +523,7 @@ def download_youtube_audio(video_id_or_url: str):
 
     actual_size = os.path.getsize(final_file)
 
-    if actual_size > MAX_DOWNLOAD_SIZE:
+    if actual_size > max_filesize:
         try:
             os.remove(final_file)
         except Exception:
