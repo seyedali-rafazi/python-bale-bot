@@ -43,10 +43,13 @@ except ImportError:
 
 
 MAX_NORMAL_DOWNLOADS = 1
-MAX_VIP_DOWNLOADS = 4
+MAX_VIP_DOWNLOADS = 6
 
-normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
-vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
+# Separate queues for faster Telegram uploads and slower cloud uploads.
+telegram_normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
+telegram_vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
+server_normal_semaphore = asyncio.Semaphore(MAX_NORMAL_DOWNLOADS)
+server_vip_semaphore = asyncio.Semaphore(MAX_VIP_DOWNLOADS)
 
 STORAGE_CHANNEL_ID = "@digiacharstorage"
 
@@ -302,7 +305,7 @@ async def background_yt_download(
         else:
             estimated_size = await asyncio.to_thread(get_video_filesize, url, "bestaudio/best")
 
-        limit = 1 * 1024 * 1024 * 1024 if destination == "telegram" else 300 * 1024 * 1024
+        limit = 1 * 1024 * 1024 * 1024 if destination == "telegram" else 3000 * 1024 * 1024
 
         if estimated_size and estimated_size > limit:
             size_mb = round(estimated_size / (1024 * 1024), 1)
@@ -351,7 +354,14 @@ async def background_yt_download(
 
     user_is_vip = await is_vip(chat_id)
 
-    active_semaphore = vip_semaphore if user_is_vip else normal_semaphore
+    if destination == "telegram":
+        active_semaphore = (
+            telegram_vip_semaphore if user_is_vip else telegram_normal_semaphore
+        )
+    else:
+        active_semaphore = (
+            server_vip_semaphore if user_is_vip else server_normal_semaphore
+        )
 
     max_concurrent = MAX_VIP_DOWNLOADS if user_is_vip else MAX_NORMAL_DOWNLOADS
 
@@ -1130,17 +1140,34 @@ async def youtube_quality_callback(
     quality = data.split("_")[1]  # e.g., "144"
 
     user_state = await asyncio.to_thread(get_state, chat_id)
-    if not user_state or user_state.get("step") != "waiting_yt_quality":
+    if not user_state or user_state.get("step") not in ["waiting_yt_quality", "processing_yt_quality"]:
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
         )
+        return
+
+    if user_state.get("step") == "processing_yt_quality":
+        await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
         return
 
     url = user_state.get("yt_url")
     format_type = user_state.get("format")
     destination = user_state.get("destination")
 
-    # چک سایز بر اساس کیفیت و destination
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await asyncio.to_thread(
+        set_state, chat_id, "processing_yt_quality", yt_url=url, format=format_type, destination=destination
+    )
+
+    try:
+        await query.edit_message_text("⏳ در حال بررسی کیفیت، لطفا صبر کنید...", reply_markup=None)
+    except Exception:
+        pass
+
     try:
         if format_type == "video":
             estimated_size = await asyncio.to_thread(get_video_filesize, url, quality)
@@ -1150,17 +1177,38 @@ async def youtube_quality_callback(
         if destination == "telegram":
             limit = 1 * 1024 * 1024 * 1024  # 1GB
         else:
-            limit = 300 * 1024 * 1024  # 300MB
+            limit = 3000 * 1024 * 1024  # 3000MB / 3GB
 
         if estimated_size and estimated_size > limit:
             if destination == "telegram":
                 msg = "❌ فایل بزرگتر از 1 گیگابایت است. کیفیت پایین‌تری انتخاب کنید."
             else:
-                msg = "❌ فایل بزرگتر از 300 مگابایت است. کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
-            await query.edit_message_text(msg)
+                msg = "❌ فایل بزرگتر از 3000 مگابایت است. کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
+
+            if destination == "telegram":
+                keyboard = get_yt_quality_telegram_keyboard()
+            else:
+                keyboard = get_yt_quality_server_keyboard()
+
+            await asyncio.to_thread(
+                set_state, chat_id, "waiting_yt_quality", yt_url=url, format=format_type, destination=destination
+            )
+            await query.edit_message_text(msg, reply_markup=keyboard)
             return
     except Exception as e:
         print(f"⚠️ Error checking filesize: {e}")
+        if destination == "telegram":
+            keyboard = get_yt_quality_telegram_keyboard()
+        else:
+            keyboard = get_yt_quality_server_keyboard()
+        await asyncio.to_thread(
+            set_state, chat_id, "waiting_yt_quality", yt_url=url, format=format_type, destination=destination
+        )
+        await query.edit_message_text(
+            "⚠️ خطا در محاسبه حجم فایل. لطفا دوباره یک کیفیت انتخاب کنید.",
+            reply_markup=keyboard,
+        )
+        return
 
     await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
 
