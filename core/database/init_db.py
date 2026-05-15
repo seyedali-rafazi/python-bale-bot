@@ -58,6 +58,14 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE users ADD COLUMN book_download_count INTEGER DEFAULT 0"
         )
+    if "cloud_total_mb" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN cloud_total_mb INTEGER DEFAULT 5000"
+        )
+    if "cloud_used_mb" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN cloud_used_mb INTEGER DEFAULT 0"
+        )
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (
@@ -95,6 +103,18 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cloud_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            file_name TEXT,
+            file_size_mb INTEGER,
+            download_link TEXT,
+            upload_date TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
     """)
 

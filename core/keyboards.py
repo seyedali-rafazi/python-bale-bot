@@ -13,6 +13,7 @@ def get_main_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROFILE), KeyboardButton(BTN_BUY_VIP)],
         [KeyboardButton(BTN_PROGRAMMING)],
+        [KeyboardButton(BTN_CLOUD_STORAGE)],
         [KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_DL_YOUTUBE)],
         [
@@ -133,6 +134,27 @@ def get_yt_quality_server_keyboard():
         [InlineKeyboardButton("240p", callback_data="ytqual_240")],
         [InlineKeyboardButton("360p", callback_data="ytqual_360")],
         [InlineKeyboardButton("480p", callback_data="ytqual_480")],
+    ])
+    return keyboard
+
+
+def get_cloud_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_UPLOAD_TO_CLOUD)],
+        [KeyboardButton(BTN_CLOUD_FILES)],
+        [KeyboardButton(BTN_BUY_CLOUD)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_cloud_buy_keyboard():
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("5 GB", callback_data="cloud_buy_5gb")],
+        [InlineKeyboardButton("10 GB", callback_data="cloud_buy_10gb")],
+        [InlineKeyboardButton("20 GB", callback_data="cloud_buy_20gb")],
+        [InlineKeyboardButton("50 GB", callback_data="cloud_buy_50gb")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="cloud_back")],
     ])
     return keyboard
 

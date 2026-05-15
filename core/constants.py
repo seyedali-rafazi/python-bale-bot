@@ -73,4 +73,14 @@ BTN_GH_DL_REPO = "📥 دانلود ریپازیتوری"
 BTN_GH_SEARCH = "🔍 جستجو در گیت‌هاب"
 BTN_GH_USER = "👤 ریپازیتوری‌های کاربر"
 
+# منوی فضای ابری
+BTN_CLOUD_STORAGE = "☁️ ذخیره ابری"
+BTN_BUY_CLOUD = "خرید حجم ابری 🌟"
+BTN_BUY_CLOUD_SIZE1 = "خرید  5GB حجم ابری 🌟"
+BTN_BUY_CLOUD_SIZE2 = "خرید  10GB حجم ابری 🌟"
+BTN_BUY_CLOUD_SIZE3 = "خرید  20GB حجم ابری 🌟"
+BTN_BUY_CLOUD_SIZE4 = "خرید 50GB حجم ابری 🌟"
+BTN_UPLOAD_TO_CLOUD = "📤 آپلود فایل"
+BTN_CLOUD_FILES = "📂 فایل‌های من"
+
 
