@@ -66,6 +66,24 @@ async def get_total_vip_users():
         return (await cursor.fetchone())[0]
 
 
+async def set_vip_expire_date(user_id, days: int):
+    """Set VIP expire date to X days from now"""
+    conn = await get_db()
+    try:
+        now = datetime.now()
+        expire_date = now + timedelta(days=days)
+        expire_iso = expire_date.isoformat()
+        
+        await conn.execute(
+            "UPDATE users SET is_vip = 1, vip_expire_date = ? WHERE user_id = ?",
+            (expire_iso, user_id),
+        )
+        await conn.commit()
+        return True, expire_date
+    except (ValueError, TypeError):
+        return False, None
+
+
 async def add_vip_time_to_all(days: int) -> int:
     now = datetime.now()
     updated_count = 0

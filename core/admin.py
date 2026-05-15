@@ -10,6 +10,8 @@ from core.database import (
     get_total_vip_users,
     reset_user_limits,
     add_vip_time_to_all,
+    set_vip_expire_date,
+    get_full_user_info,
 )
 import os
 from dotenv import load_dotenv
@@ -17,6 +19,7 @@ import asyncio
 import aiosqlite
 from core.database import DB_NAME
 from core.database import get_setting, set_setting
+from datetime import datetime
 
 
 load_dotenv()
@@ -59,6 +62,121 @@ async def cmd_setvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "VIP شد 🌟" if status == 1 else "از VIP خارج شد ❌"
 
     await update.message.reply_text(f"✅ کاربر {target_user} {status_text}")
+
+
+async def cmd_setexpire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ فرمت اشتباه است. مثال:\n"
+            "`/setexpire 123456789 27` - مجوز VIP برای 27 روز دیگر"
+        )
+        return
+
+    target_user = context.args[0]
+    try:
+        days = int(context.args[1])
+        if days < 1:
+            await update.message.reply_text("❌ تعداد روز باید بیشتر از صفر باشد.")
+            return
+    except ValueError:
+        await update.message.reply_text("❌ لطفاً یک عدد صحیح برای روز‌ها وارد کنید.")
+        return
+
+    success, expire_dt = await set_vip_expire_date(target_user, days)
+    
+    if success:
+        await update.message.reply_text(
+            f"✅ کاربر {target_user} VIP برای {days} روز دیگر شد.\n"
+            f"تاریخ انقضا: {expire_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    else:
+        await update.message.reply_text("❌ خطا در تنظیم VIP.")
+
+
+async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text(
+            "❌ فرمت اشتباه است. مثال:\n"
+            "`/userinfo 123456789`"
+        )
+        return
+
+    target_user = context.args[0]
+    user_data = await get_full_user_info(target_user)
+
+    if not user_data:
+        await update.message.reply_text(f"❌ کاربر {target_user} یافت نشد.")
+        return
+
+    # Parse the data
+    user_id, username, is_vip, join_date, vip_expire_date, \
+    yt_count, yt_date, music_count, music_date, \
+    pinterest_count, pinterest_date, tt_dl_count, tt_dl_date, \
+    tt_exp_count, tt_exp_date, gh_count, gh_date = user_data
+
+    # Format VIP status
+    vip_status = "✅ VIP" if is_vip == 1 else "❌ عادی"
+    
+    # Format expire date
+    if vip_expire_date:
+        try:
+            expire_dt = datetime.fromisoformat(vip_expire_date)
+            now = datetime.now()
+            if expire_dt > now:
+                remaining = (expire_dt - now).days
+                expire_text = f"{expire_dt.strftime('%Y-%m-%d %H:%M:%S')}\n({remaining} روز باقی مانده)"
+            else:
+                expire_text = f"{expire_dt.strftime('%Y-%m-%d %H:%M:%S')}\n(منقضی شده)"
+        except:
+            expire_text = vip_expire_date
+    else:
+        expire_text = "بدون تاریخ انقضا"
+
+    info_text = f"""
+📋 **اطلاعات کاربر {target_user}**
+
+👤 نام کاربری: {username if username else "تعیین نشده"}
+📱 شناسه: {user_id}
+🎯 وضعیت: {vip_status}
+📅 تاریخ انقضای VIP: {expire_text}
+📝 تاریخ عضویت: {join_date if join_date else "نامشخص"}
+
+📊 **آمار استفاده:**
+
+🎬 یوتیوب:
+   ├─ دانلود‌ها: {yt_count}
+   └─ آخرین استفاده: {yt_date if yt_date else "هرگز"}
+
+🎵 موسیقی:
+   ├─ دانلود‌ها: {music_count}
+   └─ آخرین استفاده: {music_date if music_date else "هرگز"}
+
+📌 Pinterest:
+   ├─ دانلود‌ها: {pinterest_count}
+   └─ آخرین استفاده: {pinterest_date if pinterest_date else "هرگز"}
+
+🎭 TikTok (دانلود):
+   ├─ دانلود‌ها: {tt_dl_count}
+   └─ آخرین استفاده: {tt_dl_date if tt_dl_date else "هرگز"}
+
+🎭 TikTok (Export):
+   ├─ Export‌ها: {tt_exp_count}
+   └─ آخرین استفاده: {tt_exp_date if tt_exp_date else "هرگز"}
+
+💻 GitHub:
+   ├─ دانلود‌ها: {gh_count}
+   └─ آخرین استفاده: {gh_date if gh_date else "هرگز"}
+"""
+
+    await update.message.reply_text(info_text)
 
 
 async def cmd_messageuser(update, context):

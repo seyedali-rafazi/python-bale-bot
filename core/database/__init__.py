@@ -9,11 +9,12 @@ from .users import (
     add_user,
     set_vip,
     get_user_info,
+    get_full_user_info,
     get_total_users,
     get_all_users,
     reset_user_limits,
 )
-from .vip import is_vip, add_vip_time, get_total_vip_users, add_vip_time_to_all
+from .vip import is_vip, add_vip_time, get_total_vip_users, add_vip_time_to_all, set_vip_expire_date
 from .music import get_music_downloads, increment_music_downloads
 from .youtube import (
     get_yt_downloads,

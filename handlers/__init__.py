@@ -62,6 +62,8 @@ from .states import process_state_input, process_photo_input
 from core.admin import (
     cmd_stats,
     cmd_setvip,
+    cmd_setexpire,
+    cmd_userinfo,
     cmd_messageuser,
     cmd_reset_limits,
     cmd_toggle_yt,
@@ -93,6 +95,8 @@ def register_all_handlers(application):
     # دستورات ادمین
     application.add_handler(CommandHandler("stats", cmd_stats))
     application.add_handler(CommandHandler("setvip", cmd_setvip))
+    application.add_handler(CommandHandler("setexpire", cmd_setexpire))
+    application.add_handler(CommandHandler("userinfo", cmd_userinfo))
     application.add_handler(CommandHandler("messageuser", cmd_messageuser))
     application.add_handler(CommandHandler("resetlimits", cmd_reset_limits))
     application.add_handler(CommandHandler("limit_yt", cmd_toggle_yt))
