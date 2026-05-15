@@ -84,6 +84,20 @@ from handlers.states.state_pinterest import handle_more_pins_callback
 from handlers.states.state_youtube import youtube_destination_callback, youtube_quality_callback
 from handlers.states.state_github import github_callback_handler
 from .menus.cloud import btn_cloud_storage_menu
+from handlers.states.state_cloud import (
+    start_cloud_upload,
+    handle_cloud_file_upload,
+    cancel_cloud_upload,
+    WAIT_FOR_FILE,
+)
+from .menus.cloud import (
+    btn_buy_cloud_menu,
+    btn_cloud_files,
+    btn_buy_cloud_size,
+)
+from .payment import (
+    accept_cloud_purchase_tos,
+)
 
 
 load_dotenv()
@@ -362,6 +376,87 @@ def register_all_handlers(application):
     # هندلر ذخیره ابری
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_CLOUD_STORAGE)}$"), btn_cloud_storage_menu)
+    )
+
+    # Cloud upload conversation handler
+    from telegram.ext import ConversationHandler
+    cloud_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_UPLOAD_TO_CLOUD)}$"), start_cloud_upload)
+        ],
+        states={
+            WAIT_FOR_FILE: [
+                MessageHandler(filters.DOCUMENT | filters.VIDEO | filters.AUDIO | filters.PHOTO, handle_cloud_file_upload),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_cloud_upload)],
+    )
+    application.add_handler(cloud_conv)
+
+    # Cloud storage callback handlers
+    application.add_handler(
+        CallbackQueryHandler(btn_cloud_storage_menu, pattern="^cloud_storage$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(btn_buy_cloud_menu, pattern="^cloud_buy_menu$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(btn_cloud_files, pattern="^cloud_files$")
+    )
+    
+    # Back to cloud menu handler
+    async def handle_cloud_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await btn_cloud_storage_menu(update, context)
+    
+    application.add_handler(
+        CallbackQueryHandler(handle_cloud_back, pattern="^cloud_back$")
+    )
+
+    # Cloud purchase size handlers
+    async def handle_cloud_buy_5gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await btn_buy_cloud_size(update, context, 5)
+    
+    async def handle_cloud_buy_10gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await btn_buy_cloud_size(update, context, 10)
+    
+    async def handle_cloud_buy_20gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await btn_buy_cloud_size(update, context, 20)
+    
+    async def handle_cloud_buy_50gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await btn_buy_cloud_size(update, context, 50)
+
+    application.add_handler(CallbackQueryHandler(handle_cloud_buy_5gb, pattern="^cloud_buy_5gb$"))
+    application.add_handler(CallbackQueryHandler(handle_cloud_buy_10gb, pattern="^cloud_buy_10gb$"))
+    application.add_handler(CallbackQueryHandler(handle_cloud_buy_20gb, pattern="^cloud_buy_20gb$"))
+    application.add_handler(CallbackQueryHandler(handle_cloud_buy_50gb, pattern="^cloud_buy_50gb$"))
+
+    # Cloud purchase TOS acceptance
+    async def handle_cloud_purchase_tos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        match = re.search(r'accept_cloud_purchase_(\d+)', query.data)
+        if match:
+            size_gb = int(match.group(1))
+            await accept_cloud_purchase_tos(update, context, size_gb)
+
+    application.add_handler(
+        CallbackQueryHandler(handle_cloud_purchase_tos, pattern=r"^accept_cloud_purchase_\d+$")
+    )
+
+    # Back to main menu handler
+    async def handle_back_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await cmd_start(update, context)
+    
+    application.add_handler(
+        CallbackQueryHandler(handle_back_main_menu, pattern="^back_main_menu$")
+    )
+
+    # Cloud upload start handler (from callback)
+    async def handle_cloud_upload_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await start_cloud_upload(update, context)
+    
+    application.add_handler(
+        CallbackQueryHandler(handle_cloud_upload_callback, pattern="^cloud_upload$")
     )
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
