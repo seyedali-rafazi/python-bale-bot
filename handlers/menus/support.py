@@ -15,6 +15,7 @@ from core.database import (
     get_tt_downloads,
     get_tt_explores,
     get_gh_downloads,
+    get_cloud_usage_stats,
 )
 from core.limits import get_limit
 
@@ -83,6 +84,29 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tt_exp_limit = get_limit("tiktok_explore", is_vip)
     gh_limit = get_limit("github_download", is_vip)
 
+    # دریافت آمار ذخیره‌سازی ابری
+    cloud_stats = await get_cloud_usage_stats(user_id)
+    cloud_info_text = ""
+    if cloud_stats:
+        available_mb = cloud_stats["total_quota"] - cloud_stats["used_quota"]
+        available_gb = available_mb / 1024
+        total_gb = cloud_stats["total_quota"] / 1024
+        used_gb = cloud_stats["used_quota"] / 1024
+        
+        # Create usage bar
+        usage_percent = (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100) if cloud_stats["total_quota"] > 0 else 0
+        filled = int((usage_percent / 100) * 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        
+        cloud_info_text = f"""
+☁️ **اطلاعات ذخیره‌سازی ابری:**
+📌 فایل‌های آپلود شده: {cloud_stats['file_count']} فایل
+💾 حجم استفاده شده: {used_gb:.2f} GB
+📈 حجم کل: {total_gb:.2f} GB
+⚡ فضای در دسترس: {available_gb:.2f} GB
+میزان استفاده: [{bar}] {usage_percent:.1f}%
+"""
+
     profile_text = f"""
 🪪 **مشخصات شما**
 🆔 ایدی عددی: `{user_id}`
@@ -97,7 +121,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
-
+{cloud_info_text}
 """
 
     await update.message.reply_text(profile_text.strip(), parse_mode="Markdown")

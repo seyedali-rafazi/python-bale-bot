@@ -83,6 +83,7 @@ from .payment import (
 from handlers.states.state_pinterest import handle_more_pins_callback
 from handlers.states.state_youtube import youtube_destination_callback, youtube_quality_callback
 from handlers.states.state_github import github_callback_handler
+from .menus.cloud import btn_cloud_storage_menu
 
 
 load_dotenv()
@@ -357,6 +358,12 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
     )
+
+    # هندلر ذخیره ابری
+    application.add_handler(
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_CLOUD_STORAGE)}$"), btn_cloud_storage_menu)
+    )
+
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input)
