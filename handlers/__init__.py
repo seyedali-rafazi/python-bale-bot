@@ -1,7 +1,7 @@
 # handlers/__init__.py
 
 import re
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     MessageHandler,
     CommandHandler,
@@ -9,6 +9,7 @@ from telegram.ext import (
     ApplicationHandlerStop,
     CallbackQueryHandler,
     PreCheckoutQueryHandler,
+    ContextTypes,
 )
 from core.constants import *
 from .commands import cmd_start, cmd_tr
@@ -386,7 +387,7 @@ def register_all_handlers(application):
         ],
         states={
             WAIT_FOR_FILE: [
-                MessageHandler(filters.DOCUMENT | filters.VIDEO | filters.AUDIO | filters.PHOTO, handle_cloud_file_upload),
+                MessageHandler(filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.PHOTO, handle_cloud_file_upload),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_cloud_upload)],

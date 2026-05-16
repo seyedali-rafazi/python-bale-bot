@@ -89,9 +89,10 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cloud_info_text = ""
     if cloud_stats:
         available_mb = cloud_stats["total_quota"] - cloud_stats["used_quota"]
-        available_gb = available_mb / 1024
-        total_gb = cloud_stats["total_quota"] / 1024
-        used_gb = cloud_stats["used_quota"] / 1024
+        # Round to nearest 0.5 GB for cleaner display
+        available_gb = round(available_mb / 1024 * 2) / 2
+        total_gb = round(cloud_stats["total_quota"] / 1024 * 2) / 2
+        used_gb = round(cloud_stats["used_quota"] / 1024 * 2) / 2
         
         # Create usage bar
         usage_percent = (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100) if cloud_stats["total_quota"] > 0 else 0
@@ -101,9 +102,9 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cloud_info_text = f"""
 ☁️ **اطلاعات ذخیره‌سازی ابری:**
 📌 فایل‌های آپلود شده: {cloud_stats['file_count']} فایل
-💾 حجم استفاده شده: {used_gb:.2f} GB
-📈 حجم کل: {total_gb:.2f} GB
-⚡ فضای در دسترس: {available_gb:.2f} GB
+💾 حجم استفاده شده: {used_gb:.1f} GB
+📈 حجم کل: {total_gb:.1f} GB
+⚡ فضای در دسترس: {available_gb:.1f} GB
 میزان استفاده: [{bar}] {usage_percent:.1f}%
 """
 
