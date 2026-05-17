@@ -88,23 +88,26 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cloud_stats = await get_cloud_usage_stats(user_id)
     cloud_info_text = ""
     if cloud_stats:
-        available_mb = cloud_stats["total_quota"] - cloud_stats["used_quota"]
-        # Round to nearest 0.5 GB for cleaner display
-        available_gb = round(available_mb / 1024 * 2) / 2
-        total_gb = round(cloud_stats["total_quota"] / 1024 * 2) / 2
-        used_gb = round(cloud_stats["used_quota"] / 1024 * 2) / 2
-        
+        # دریافت حجم‌ها به مگابایت و گرد کردن تا 2 رقم اعشار
+        available_mb = round(cloud_stats["total_quota"] - cloud_stats["used_quota"], 2)
+        total_mb = round(cloud_stats["total_quota"], 2)
+        used_mb = round(cloud_stats["used_quota"], 2)
+
         # Create usage bar
-        usage_percent = (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100) if cloud_stats["total_quota"] > 0 else 0
+        usage_percent = (
+            (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100)
+            if cloud_stats["total_quota"] > 0
+            else 0
+        )
         filled = int((usage_percent / 100) * 10)
         bar = "█" * filled + "░" * (10 - filled)
-        
+
         cloud_info_text = f"""
 ☁️ **اطلاعات ذخیره‌سازی ابری:**
-📌 فایل‌های آپلود شده: {cloud_stats['file_count']} فایل
-💾 حجم استفاده شده: {used_gb:.1f} GB
-📈 حجم کل: {total_gb:.1f} GB
-⚡ فضای در دسترس: {available_gb:.1f} GB
+📌 فایل‌های آپلود شده: {cloud_stats["file_count"]} فایل
+💾 حجم استفاده شده: {used_mb} MB
+📈 حجم کل: {total_mb} MB
+⚡ فضای در دسترس: {available_mb} MB
 میزان استفاده: [{bar}] {usage_percent:.1f}%
 """
 
