@@ -82,7 +82,7 @@ from .payment import (
     handle_tos_acceptance,
 )
 from handlers.states.state_pinterest import handle_more_pins_callback
-from handlers.states.state_youtube import (
+from handlers.states.youtube import (
     youtube_destination_callback,
     youtube_quality_callback,
 )
