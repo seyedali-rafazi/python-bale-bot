@@ -111,7 +111,7 @@ async def successful_payment_callback(
     provider_charge_id = payment_info.provider_payment_charge_id
 
     try:
-        # ثبت تراکنش در دیتابیس (اضافه شدن await)
+        # ثبت تراکنش در دیتابیس
         await add_transaction(
             user_id=chat_id,
             amount=total_amount,
@@ -119,30 +119,54 @@ async def successful_payment_callback(
             provider_charge_id=provider_charge_id,
         )
 
-        # افزایش زمان VIP کاربر (اضافه شدن await)
-        await add_vip_time(chat_id, VIP_LIMIT_VALUE)
-
         amount_toman = int(total_amount / 10)  # محاسبه تومان
 
-        # استفاده از HTML به جای Markdown برای جلوگیری از کرش کردن ارسال پیام
-        receipt_text = (
-            "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
-            "🧾 <b>رسید تراکنش شما:</b>\n"
-            f"👤 شناسه: <code>{chat_id}</code>\n"
-            f"💰 مبلغ: $ {amount_toman} $ تومان\n"
-            f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
-            f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
-        )
+        # تشخیص نوع پرداخت از payload
+        if payload.startswith("vip_charge_"):
+            # ===== پرداخت VIP =====
+            await add_vip_time(chat_id, VIP_LIMIT_VALUE)
+            
+            receipt_text = (
+                "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
+                "🧾 <b>رسید تراکنش شما:</b>\n"
+                f"👤 شناسه: <code>{chat_id}</code>\n"
+                f"💰 مبلغ: $ {amount_toman} $ تومان\n"
+                f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
+                f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
+            )
+
+        elif payload.startswith("cloud_charge_"):
+            # ===== پرداخت حجم ابری =====
+            parts = payload.split("_")
+            if len(parts) >= 4:
+                size_gb = int(parts[3])
+            else:
+                size_gb = 5
+            
+            size_mb = size_gb * 1024
+            await add_cloud_storage(chat_id, size_mb)
+            
+            receipt_text = (
+                "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
+                "🧾 <b>رسید تراکنش شما:</b>\n"
+                f"👤 شناسه: <code>{chat_id}</code>\n"
+                f"💾 حجم خریداری شده: <b>{size_gb} GB</b>\n"
+                f"💰 مبلغ: $ {amount_toman} $ تومان\n"
+                f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
+                f"☁️ حجم ابری شما به اندازه <b>{size_gb} GB</b> افزایش یافت!"
+            )
+        else:
+            receipt_text = "✅ <b>پرداخت موفق!</b>"
 
         await update.message.reply_text(text=receipt_text, parse_mode="HTML")
 
     except Exception as e:
-        # در صورتی که بعد از پرداخت موفق خطایی رخ دهد (مثلا در دیتابیس)
+        print(f"Error in payment: {e}")
         error_text = (
             "⚠️ <b>پرداخت شما انجام شد اما در ثبت سیستم مشکلی پیش آمد!</b>\n\n"
             f"کد پیگیری شما: <code>{provider_charge_id}</code>\n"
-            f" شناشه شما: <code>{chat_id}</code>\n"
-            "لطفاً این پیام را برای پشتیبانی ارسال کنید تا اشتراک شما دستی فعال شود."
+            f"شناسه شما: <code>{chat_id}</code>\n"
+            "لطفاً این پیام را برای پشتیبانی ارسال کنید.\n"
             "@digiacahr_admin"
         )
         await update.message.reply_text(text=error_text, parse_mode="HTML")
@@ -151,7 +175,11 @@ async def successful_payment_callback(
 async def accept_cloud_purchase_tos(update: Update, context: ContextTypes.DEFAULT_TYPE, size_gb: int):
     """Handle TOS acceptance for cloud storage purchase and proceed to payment"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()  # Try to answer, but don't fail if it's too old
+    except Exception as e:
+        print(f"Note: Could not answer callback query (may be too old): {e}")
 
     chat_id = update.effective_chat.id
     
@@ -159,8 +187,11 @@ async def accept_cloud_purchase_tos(update: Update, context: ContextTypes.DEFAUL
     price_toman = CLOUD_PRICES.get(size_gb, CLOUD_PRICES[5])
     price_rial = price_toman * 10  # Convert to Rial
     
-    # Delete previous message
-    await query.message.delete()
+    try:
+        # Try to delete previous message
+        await query.message.delete()
+    except Exception as e:
+        print(f"Note: Could not delete message: {e}")
 
     title = f"خریدگاه حجم ابری - {size_gb} GB"
     description = f"افزایش حجم ذخیره‌سازی ابری به میزان {size_gb} GB"
@@ -181,76 +212,4 @@ async def accept_cloud_purchase_tos(update: Update, context: ContextTypes.DEFAUL
     )
 
 
-async def handle_cloud_precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Validate cloud storage purchase before payment"""
-    query = update.pre_checkout_query
-    try:
-        if query.invoice_payload.startswith("cloud_charge_"):
-            await query.answer(ok=True)
-        else:
-            await query.answer(
-                ok=False,
-                error_message="❌ خطا در اطلاعات پرداخت. لطفاً دوباره تلاش کنید.",
-            )
-    except Exception as e:
-        await query.answer(
-            ok=False,
-            error_message="❌ مشکلی در ارتباط با درگاه پیش آمد. تراکنش انجام نشد.",
-        )
-
-
-async def successful_cloud_payment_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-):
-    """Handle successful cloud storage payment"""
-    chat_id = str(update.effective_chat.id)
-    payment_info = update.message.successful_payment
-
-    total_amount = payment_info.total_amount
-    payload = payment_info.invoice_payload
-    provider_charge_id = payment_info.provider_payment_charge_id
-
-    try:
-        # Parse the size from payload
-        parts = payload.split("_")
-        if len(parts) >= 4:
-            size_gb = int(parts[3])
-        else:
-            size_gb = 5  # Default to 5 GB
-
-        # Add transaction record
-        await add_transaction(
-            user_id=chat_id,
-            amount=total_amount,
-            payload=payload,
-            provider_charge_id=provider_charge_id,
-        )
-
-        # Add cloud storage to user
-        size_mb = size_gb * 1024  # Convert GB to MB
-        await add_cloud_storage(chat_id, size_mb)
-
-        amount_toman = int(total_amount / 10)  # Convert to Toman
-
-        receipt_text = (
-            "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
-            "🧾 <b>رسید تراکنش شما:</b>\n"
-            f"👤 شناسه: <code>{chat_id}</code>\n"
-            f"💾 حجم خریداری شده: <b>{size_gb} GB</b>\n"
-            f"💰 مبلغ: $ {amount_toman} $ تومان\n"
-            f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
-            f"☁️ حجم ابری شما به اندازه **{size_gb} GB** افزایش یافت!"
-        )
-
-        await update.message.reply_text(text=receipt_text, parse_mode="HTML")
-
-    except Exception as e:
-        print(f"Error in cloud payment: {e}")
-        error_text = (
-            "⚠️ <b>پرداخت شما انجام شد اما در ثبت سیستم مشکلی پیش آمد!</b>\n\n"
-            f"کد پیگیری شما: <code>{provider_charge_id}</code>\n"
-            f"شناسه شما: <code>{chat_id}</code>\n"
-            "لطفاً این پیام را برای پشتیبانی ارسال کنید تا حجم ابری شما دستی اضافه شود.\n"
-            "@digiacahr_admin"
-        )
-        await update.message.reply_text(text=error_text, parse_mode="HTML")
+# All payments (VIP and Cloud) are now handled in successful_payment_callback above

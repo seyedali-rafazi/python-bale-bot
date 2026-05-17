@@ -134,9 +134,13 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_buy_cloud_size(update: Update, context: ContextTypes.DEFAULT_TYPE, size_gb: int):
-    """Handle cloud size purchase button click"""
+    """Handle cloud size purchase button click - show TOS and payment button"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"Note: Could not answer callback (may be too old): {e}")
     
     # Store purchase info in context for payment handler
     context.user_data["cloud_purchase"] = size_gb
@@ -163,4 +167,9 @@ async def btn_buy_cloud_size(update: Update, context: ContextTypes.DEFAULT_TYPE,
     keyboard = [[InlineKeyboardButton("✅ تایید و پرداخت", callback_data=f"accept_cloud_purchase_{size_gb}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(tos_text, reply_markup=reply_markup, parse_mode="Markdown")
+    try:
+        await query.edit_message_text(tos_text, reply_markup=reply_markup, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Note: Could not edit message: {e}")
+        # If edit fails, send as new message
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=tos_text, reply_markup=reply_markup, parse_mode="Markdown")
