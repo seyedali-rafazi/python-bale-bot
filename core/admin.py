@@ -12,6 +12,7 @@ from core.database import (
     add_vip_time_to_all,
     set_vip_expire_date,
     get_full_user_info,
+    give_5gb_to_existing_vips,
 )
 import os
 from dotenv import load_dotenv
@@ -87,7 +88,7 @@ async def cmd_setexpire(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     success, expire_dt = await set_vip_expire_date(target_user, days)
-    
+
     if success:
         await update.message.reply_text(
             f"✅ کاربر {target_user} VIP برای {days} روز دیگر شد.\n"
@@ -104,8 +105,7 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 1:
         await update.message.reply_text(
-            "❌ فرمت اشتباه است. مثال:\n"
-            "`/userinfo 123456789`"
+            "❌ فرمت اشتباه است. مثال:\n`/userinfo 123456789`"
         )
         return
 
@@ -117,14 +117,29 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Parse the data
-    user_id, username, is_vip, join_date, vip_expire_date, \
-    yt_count, yt_date, music_count, music_date, \
-    pinterest_count, pinterest_date, tt_dl_count, tt_dl_date, \
-    tt_exp_count, tt_exp_date, gh_count, gh_date = user_data
+    (
+        user_id,
+        username,
+        is_vip,
+        join_date,
+        vip_expire_date,
+        yt_count,
+        yt_date,
+        music_count,
+        music_date,
+        pinterest_count,
+        pinterest_date,
+        tt_dl_count,
+        tt_dl_date,
+        tt_exp_count,
+        tt_exp_date,
+        gh_count,
+        gh_date,
+    ) = user_data
 
     # Format VIP status
     vip_status = "✅ VIP" if is_vip == 1 else "❌ عادی"
-    
+
     # Format expire date
     if vip_expire_date:
         try:
@@ -297,3 +312,21 @@ async def cmd_addvip_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ با موفقیت $ {days} $ روز به اشتراک $ {updated_users} $ کاربر ویژه (پرو) اضافه شد."
     )
+
+
+async def cmd_give_5gb_vips(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    await update.message.reply_text(
+        "⏳ در حال بررسی و اعمال حجم ابری برای کاربران VIP..."
+    )
+
+    try:
+        await give_5gb_to_existing_vips()
+        await update.message.reply_text(
+            "✅ ۵۰۰۰ مگابایت فضای ابری با موفقیت به کاربران VIP قدیمی که حجم نداشتند اضافه شد."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطایی رخ داد:\n`{str(e)}`")

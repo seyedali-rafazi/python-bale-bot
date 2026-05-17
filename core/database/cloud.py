@@ -51,7 +51,9 @@ async def reduce_cloud_storage(user_id, size_mb: int):
     await conn.commit()
 
 
-async def add_cloud_file(user_id, file_name: str, file_size_mb: int, download_link: str):
+async def add_cloud_file(
+    user_id, file_name: str, file_size_mb: int, download_link: str
+):
     """Add uploaded file to cloud files database"""
     conn = await get_db()
     upload_date = get_tehran_now_full()
@@ -83,7 +85,7 @@ async def get_user_cloud_files(user_id):
 async def delete_cloud_file(user_id, file_id: int):
     """Delete a file from cloud and free up storage space"""
     conn = await get_db()
-    
+
     # Get file size to free up space
     async with conn.execute(
         "SELECT file_size_mb FROM cloud_files WHERE id = ? AND user_id = ?",
@@ -92,22 +94,22 @@ async def delete_cloud_file(user_id, file_id: int):
         result = await cursor.fetchone()
         if result:
             file_size_mb = result[0]
-            
+
             # Delete the file from database
             await conn.execute(
                 "DELETE FROM cloud_files WHERE id = ? AND user_id = ?",
                 (file_id, user_id),
             )
-            
+
             # Reduce the used space
             await conn.execute(
                 "UPDATE users SET cloud_used_mb = MAX(0, cloud_used_mb - ?) WHERE user_id = ?",
                 (file_size_mb, user_id),
             )
-            
+
             await conn.commit()
             return True
-    
+
     return False
 
 
@@ -130,7 +132,22 @@ async def get_cloud_usage_stats(user_id):
             return {
                 "file_count": file_count or 0,
                 "total_file_size": total_file_size or 0,
-                "total_quota": total_quota or 5000,
+                "total_quota": total_quota or 0,  # <--- اینجا از 5000 به 0 تغییر یافت
                 "used_quota": used_quota or 0,
             }
         return None
+
+
+async def give_5gb_to_existing_vips():
+    """دادن 5000 مگابایت به کاربرانی که در حال حاضر VIP هستند اما حجم ابری ندارند"""
+    conn = await get_db()
+    # به تمام کسانی که VIP هستند (is_vip = 1) مقدار 5000 مگابایت اضافه می‌کنیم
+    # به شرطی که قبلاً نگرفته باشند (اگر الان 0 است)
+    await conn.execute(
+        """
+        UPDATE users 
+        SET cloud_total_mb = cloud_total_mb + 5000 
+        WHERE is_vip = 1 AND (cloud_total_mb IS NULL OR cloud_total_mb = 0)
+        """
+    )
+    await conn.commit()

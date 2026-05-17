@@ -14,7 +14,13 @@ from .users import (
     get_all_users,
     reset_user_limits,
 )
-from .vip import is_vip, add_vip_time, get_total_vip_users, add_vip_time_to_all, set_vip_expire_date
+from .vip import (
+    is_vip,
+    add_vip_time,
+    get_total_vip_users,
+    add_vip_time_to_all,
+    set_vip_expire_date,
+)
 from .music import get_music_downloads, increment_music_downloads
 from .youtube import (
     get_yt_downloads,
@@ -45,4 +51,5 @@ from .cloud import (
     get_user_cloud_files,
     delete_cloud_file,
     get_cloud_usage_stats,
+    give_5gb_to_existing_vips,
 )

@@ -85,7 +85,9 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.pre_checkout_query
     try:
         # بررسی صحت اطلاعات ارسالی پیش از کسر وجه
-        if query.invoice_payload.startswith("vip_charge_") or query.invoice_payload.startswith("cloud_charge_"):
+        if query.invoice_payload.startswith(
+            "vip_charge_"
+        ) or query.invoice_payload.startswith("cloud_charge_"):
             await query.answer(ok=True)
         else:
             await query.answer(
@@ -125,7 +127,9 @@ async def successful_payment_callback(
         if payload.startswith("vip_charge_"):
             # ===== پرداخت VIP =====
             await add_vip_time(chat_id, VIP_LIMIT_VALUE)
-            
+
+            await add_cloud_storage(chat_id, 5000)
+
             receipt_text = (
                 "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
                 "🧾 <b>رسید تراکنش شما:</b>\n"
@@ -133,6 +137,7 @@ async def successful_payment_callback(
                 f"💰 مبلغ: $ {amount_toman} $ تومان\n"
                 f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
                 f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
+                "☁️ <b>همچنین ۵۰۰۰ مگابایت (5GB) فضای ابری به حساب شما اضافه شد!</b>"
             )
 
         elif payload.startswith("cloud_charge_"):
@@ -142,10 +147,10 @@ async def successful_payment_callback(
                 size_gb = int(parts[3])
             else:
                 size_gb = 5
-            
+
             size_mb = size_gb * 1024
             await add_cloud_storage(chat_id, size_mb)
-            
+
             receipt_text = (
                 "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
                 "🧾 <b>رسید تراکنش شما:</b>\n"
@@ -172,21 +177,23 @@ async def successful_payment_callback(
         await update.message.reply_text(text=error_text, parse_mode="HTML")
 
 
-async def accept_cloud_purchase_tos(update: Update, context: ContextTypes.DEFAULT_TYPE, size_gb: int):
+async def accept_cloud_purchase_tos(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, size_gb: int
+):
     """Handle TOS acceptance for cloud storage purchase and proceed to payment"""
     query = update.callback_query
-    
+
     try:
         await query.answer()  # Try to answer, but don't fail if it's too old
     except Exception as e:
         print(f"Note: Could not answer callback query (may be too old): {e}")
 
     chat_id = update.effective_chat.id
-    
+
     # Get price for selected size
     price_toman = CLOUD_PRICES.get(size_gb, CLOUD_PRICES[5])
     price_rial = price_toman * 10  # Convert to Rial
-    
+
     try:
         # Try to delete previous message
         await query.message.delete()

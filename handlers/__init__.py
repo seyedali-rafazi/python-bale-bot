@@ -70,6 +70,7 @@ from core.admin import (
     cmd_toggle_yt,
     cmd_resetuser,
     cmd_addvip_all,
+    cmd_give_5gb_vips,
 )
 import os
 from dotenv import load_dotenv
@@ -121,6 +122,7 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("limit_yt", cmd_toggle_yt))
     application.add_handler(CommandHandler("resetuser", cmd_resetuser))
     application.add_handler(CommandHandler("addvipall", cmd_addvip_all))
+    application.add_handler(CommandHandler("give5gbvips", cmd_give_5gb_vips))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
