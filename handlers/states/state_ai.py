@@ -1,6 +1,5 @@
 # handlers/states/state_ai.py
 
-# handlers/states/state_ai.py
 
 import asyncio
 import logging
