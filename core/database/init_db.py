@@ -60,7 +60,7 @@ async def init_db():
         )
     if "cloud_total_mb" not in columns:
         await conn.execute(
-            "ALTER TABLE users ADD COLUMN cloud_total_mb INTEGER DEFAULT 5000"
+            "ALTER TABLE users ADD COLUMN cloud_total_mb INTEGER DEFAULT 0"
         )
     if "cloud_used_mb" not in columns:
         await conn.execute(

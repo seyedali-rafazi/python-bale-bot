@@ -132,7 +132,7 @@ async def get_cloud_usage_stats(user_id):
             return {
                 "file_count": file_count or 0,
                 "total_file_size": total_file_size or 0,
-                "total_quota": total_quota or 0,  # <--- اینجا از 5000 به 0 تغییر یافت
+                "total_quota": total_quota or 0,
                 "used_quota": used_quota or 0,
             }
         return None
