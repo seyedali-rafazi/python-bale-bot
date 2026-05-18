@@ -26,14 +26,14 @@ def search_web(query, max_results=10):
 async def create_single_file(url, output_path):
     """اجرای غیرهمزمان ابزار SingleFile CLI با هندل کردن پاپ‌آپ‌ها"""
     async with SINGLEFILE_SEMAPHORE:
-        # استفاده از آرگومان‌های مرورگر برای مسدود کردن دامنه‌های معروف کوکی و پاپ‌آپ
-        # همچنین مخفی کردن عناصر ثابت (fixed) که معمولاً پاپ‌آپ‌های کوکی هستند
+        # اصلاح نحوه پاس دادن آرگومان‌ها برای subprocess
         command = [
             "single-file",
-            '--browser-args=["--no-sandbox", "--disable-setuid-sandbox"]',
-            "--remove-hidden-elements=true",
-            "--remove-fixed-elements=true",  # حذف عناصر ثابت (مثل پاپ‌آپ کوکی و هدرهای مزاحم)
-            "--block-scripts=false",
+            "--browser-args",
+            '["--no-sandbox", "--disable-setuid-sandbox"]',
+            "--remove-hidden-elements",
+            # اگر ورژن single-file شما این فلگ را نمیشناسد، خط زیر را کامنت/حذف کنید
+            "--remove-fixed-elements",
             url,
             output_path,
         ]
@@ -45,11 +45,20 @@ async def create_single_file(url, output_path):
         try:
             # اعمال تایم‌اوت 60 ثانیه‌ای
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60.0)
+
             if process.returncode == 0 and os.path.exists(output_path):
                 return True
             else:
-                err_msg = stderr.decode() if stderr else "Unknown Error"
-                print(f"SingleFile failed. Error: {err_msg}")
+                # خواندن هر دو خروجی برای پیدا کردن دلیل اصلی ارور
+                out_msg = stdout.decode().strip() if stdout else ""
+                err_msg = stderr.decode().strip() if stderr else ""
+
+                error_details = (
+                    err_msg if err_msg else (out_msg if out_msg else "بدون پیام خطا")
+                )
+                print(
+                    f"SingleFile failed. Code: {process.returncode}. Details: {error_details}"
+                )
 
         except asyncio.TimeoutError:
             process.kill()
