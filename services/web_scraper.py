@@ -3,7 +3,7 @@
 import asyncio
 import os
 import time
-from duckduckgo_search import (
+from ddgs import (
     DDGS,
 )  # در صورت خطا در ایمپورت، این خط جایگزین from ddgs شد
 
