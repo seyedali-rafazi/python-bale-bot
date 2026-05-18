@@ -341,6 +341,44 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "آهنگ‌های برتر:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    # ===================================
+    # بررسی کال‌بک‌های دانلود به تلگرام و ابری (قبل از dltrack_ عام)
+    # ===================================
+    elif data.startswith("dltrack_tel_"):
+        track_id = data.split("_", 3)[2]
+        track_info = context.user_data.get(f"track_{track_id}", {})
+
+        asyncio.create_task(
+            background_download_task(
+                context,
+                chat_id,
+                track_id,
+                track_info.get("title", "Unknown"),
+                track_info.get("performer", "Unknown"),
+                track_info.get("safe_filename", "track"),
+                destination="telegram",
+            )
+        )
+
+    elif data.startswith("dltrack_cloud_"):
+        track_id = data.split("_", 3)[2]
+        track_info = context.user_data.get(f"track_{track_id}", {})
+
+        asyncio.create_task(
+            background_download_task(
+                context,
+                chat_id,
+                track_id,
+                track_info.get("title", "Unknown"),
+                track_info.get("performer", "Unknown"),
+                track_info.get("safe_filename", "track"),
+                destination="server",
+            )
+        )
+
+    # ===================================
+    # کال‌بک دانلود عام (انتخاب مقصد)
+    # ===================================
     elif data.startswith("dltrack_"):
         track_id = data.split("_", 1)[1]
 
@@ -402,35 +440,3 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "performer": performer,
             "safe_filename": safe_filename,
         }
-
-    elif data.startswith("dltrack_tel_"):
-        track_id = data.split("_", 3)[2]
-        track_info = context.user_data.get(f"track_{track_id}", {})
-
-        asyncio.create_task(
-            background_download_task(
-                context,
-                chat_id,
-                track_id,
-                track_info.get("title", "Unknown"),
-                track_info.get("performer", "Unknown"),
-                track_info.get("safe_filename", "track"),
-                destination="telegram",
-            )
-        )
-
-    elif data.startswith("dltrack_cloud_"):
-        track_id = data.split("_", 3)[2]
-        track_info = context.user_data.get(f"track_{track_id}", {})
-
-        asyncio.create_task(
-            background_download_task(
-                context,
-                chat_id,
-                track_id,
-                track_info.get("title", "Unknown"),
-                track_info.get("performer", "Unknown"),
-                track_info.get("safe_filename", "track"),
-                destination="server",
-            )
-        )

@@ -14,6 +14,15 @@ ARVAN_ACCESS_KEY = os.getenv("ARVAN_ACCESS_KEY", "YOUR_ACCESS_KEY")
 ARVAN_SECRET_KEY = os.getenv("ARVAN_SECRET_KEY", "YOUR_SECRET_KEY")
 ARVAN_BUCKET = os.getenv("ARVAN_BUCKET", "YOUR_BUCKET")
 
+# ==========================================
+# تنظیمات برای 10000 کاربر
+# ==========================================
+# تعداد بیشتری از اتصالات برای تحمل بار بالا
+MAX_POOL_CONNECTIONS = 100
+MAX_CONCURRENCY = 20
+MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+MULTIPART_CHUNKSIZE = 5 * 1024 * 1024  # 5 MB
+
 
 class ProgressPercentage(object):
     def __init__(self, filename, progress_dict=None):
@@ -55,13 +64,13 @@ def upload_to_s3(
         endpoint_url=ARVAN_ENDPOINT,
         aws_access_key_id=ARVAN_ACCESS_KEY,
         aws_secret_access_key=ARVAN_SECRET_KEY,
-        config=Config(signature_version="s3v4", max_pool_connections=50),
+        config=Config(signature_version="s3v4", max_pool_connections=MAX_POOL_CONNECTIONS),
     )
 
     transfer_config = TransferConfig(
-        multipart_threshold=5 * 1024 * 1024,
-        max_concurrency=10,
-        multipart_chunksize=5 * 1024 * 1024,
+        multipart_threshold=MULTIPART_THRESHOLD,
+        max_concurrency=MAX_CONCURRENCY,
+        multipart_chunksize=MULTIPART_CHUNKSIZE,
         use_threads=True,
     )
 
