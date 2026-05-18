@@ -18,7 +18,7 @@ def get_main_menu_keyboard():
         ],
         [
             KeyboardButton(BTN_PROGRAMMING),
-            [KeyboardButton(BTN_GOOGLE_SEARCH)],
+            KeyboardButton(BTN_GOOGLE_SEARCH),
         ],
         [KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_DL_YOUTUBE)],
