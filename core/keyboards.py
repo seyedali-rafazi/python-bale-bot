@@ -143,6 +143,7 @@ def get_yt_quality_server_keyboard():
             [InlineKeyboardButton("240p", callback_data="ytqual_240")],
             [InlineKeyboardButton("360p", callback_data="ytqual_360")],
             [InlineKeyboardButton("480p", callback_data="ytqual_480")],
+            [InlineKeyboardButton("720p", callback_data="ytqual_720")],
         ]
     )
     return keyboard

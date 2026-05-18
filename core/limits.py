@@ -9,6 +9,7 @@ FREE_LIMITS = {
     "github_download": 2,
     "smart_abstract": 2,
     "citation": 2,
+    "web_search": 1,
 }
 
 VIP_LIMITS = {
@@ -20,6 +21,7 @@ VIP_LIMITS = {
     "github_download": 20,
     "smart_abstract": 20,
     "citation": 20,
+    "web_search": 30,
 }
 
 

@@ -101,7 +101,9 @@ async def background_yt_download(
             )
 
         limit = (
-            1 * 1024 * 1024 * 1024 if destination == "telegram" else 300 * 1024 * 1024
+            1 * 1024 * 1024 * 1024
+            if destination == "telegram"
+            else 1 * 1024 * 1024 * 1024
         )
 
         if estimated_size:
@@ -248,7 +250,7 @@ async def background_yt_download(
                         max_size = (
                             1 * 1024 * 1024 * 1024
                             if destination == "telegram"
-                            else 300 * 1024 * 1024
+                            else 1 * 1024 * 1024 * 1024
                         )
                         raw_file = await asyncio.to_thread(
                             download_youtube_video,
@@ -273,7 +275,7 @@ async def background_yt_download(
                             else:
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="❌ حجم فایل بیشتر از 300MB است.",
+                                    text="❌ حجم فایل بیش از 1 گیگابایت است.",
                                 )
 
                             await decrement_yt_downloads(chat_id)
@@ -316,7 +318,10 @@ async def background_yt_download(
                                         os.path.getsize(file_path) / (1024 * 1024), 2
                                     )
 
-                                if user_storage_mb <= 0 or total_video_size_mb > user_storage_mb:
+                                if (
+                                    user_storage_mb <= 0
+                                    or total_video_size_mb > user_storage_mb
+                                ):
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text=(
@@ -423,7 +428,7 @@ async def background_yt_download(
                             for keyword in [
                                 "too large",
                                 "max-filesize",
-                                "300",
+                                "1000",
                                 "size",
                                 "exceed",
                                 "limit",
@@ -431,7 +436,7 @@ async def background_yt_download(
                         ):
                             await context.bot.send_message(
                                 chat_id=chat_id,
-                                text="❌ حجم فایل بیشتر از 300MB است.",
+                                text="❌ حجم فایل بیشتر از 1 گیگابایت است.",
                             )
 
                             await decrement_yt_downloads(chat_id)
@@ -455,7 +460,7 @@ async def background_yt_download(
 
                                 backup_size = os.path.getsize(backup_file)
 
-                                if backup_size > 300 * 1024 * 1024:
+                                if backup_size > 1 * 1024 * 1024 * 1024:
                                     try:
                                         os.remove(backup_file)
                                     except:
@@ -463,7 +468,7 @@ async def background_yt_download(
 
                                     await context.bot.send_message(
                                         chat_id=chat_id,
-                                        text="❌ فایل بکاپ بزرگ‌تر از 300MB است.",
+                                        text="❌ فایل بکاپ بزرگ‌تر از 1 گیگابایت است.",
                                     )
 
                                     await decrement_yt_downloads(chat_id)
@@ -481,7 +486,9 @@ async def background_yt_download(
                                     # =====================================
                                     # چک فضای ابری قبل از آپلود بکاپ
                                     # =====================================
-                                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                                    user_storage_mb = await get_available_cloud_mb(
+                                        chat_id
+                                    )
                                     if user_storage_mb is None or user_storage_mb <= 0:
                                         user_storage_mb = 0
 
@@ -489,7 +496,10 @@ async def background_yt_download(
                                         backup_size / (1024 * 1024), 2
                                     )
 
-                                    if user_storage_mb <= 0 or backup_size_mb > user_storage_mb:
+                                    if (
+                                        user_storage_mb <= 0
+                                        or backup_size_mb > user_storage_mb
+                                    ):
                                         await context.bot.send_message(
                                             chat_id=chat_id,
                                             text=(
@@ -597,7 +607,7 @@ async def background_yt_download(
                         max_size = (
                             1 * 1024 * 1024 * 1024
                             if destination == "telegram"
-                            else 300 * 1024 * 1024
+                            else 1 * 1024 * 1024 * 1024
                         )
                         file_path = await asyncio.to_thread(
                             download_youtube_audio,
@@ -620,7 +630,7 @@ async def background_yt_download(
                             else:
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="❌ حجم فایل صوتی بیشتر از 300MB است.",
+                                    text="❌ حجم فایل صوتی بیشتر از 1 گیگابایت است.",
                                 )
 
                             await decrement_yt_downloads(chat_id)
@@ -650,7 +660,10 @@ async def background_yt_download(
                                     os.path.getsize(file_path) / (1024 * 1024), 2
                                 )
 
-                                if user_storage_mb <= 0 or audio_size_mb > user_storage_mb:
+                                if (
+                                    user_storage_mb <= 0
+                                    or audio_size_mb > user_storage_mb
+                                ):
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text=(

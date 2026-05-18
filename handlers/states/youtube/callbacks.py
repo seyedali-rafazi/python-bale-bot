@@ -63,7 +63,7 @@ async def youtube_destination_callback(
         msg = "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 1 گیگابایت):"
     else:
         keyboard = get_yt_quality_server_keyboard()
-        msg = "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 300 مگابایت):"
+        msg = "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 1 گیگابایت):"
 
     await query.edit_message_text(msg, reply_markup=keyboard)
 
@@ -134,7 +134,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
         if destination == "telegram":
             limit = 1 * 1024 * 1024 * 1024  # 1GB
         else:
-            limit = 300 * 1024 * 1024  # 300MB
+            limit = 1 * 1024 * 1024 * 1024  # 1GB
 
         if estimated_size and estimated_size > limit:
             size_mb = round(estimated_size / (1024 * 1024), 1)
@@ -147,8 +147,8 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                 )
             else:
                 msg = (
-                    f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 300 مگابایت می‌باشد. "
-                    "لطفاً کیفیت پایین‌تری انتخاب کنید یا از آپلود مستقیم استفاده کنید."
+                    f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
+                    "لطفاً کیفیت پایین‌تری انتخاب کنید."
                 )
 
             if destination == "telegram":

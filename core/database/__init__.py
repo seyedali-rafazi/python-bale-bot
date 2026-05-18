@@ -55,3 +55,4 @@ from .cloud import (
     get_cloud_usage_stats,
     give_5gb_to_existing_vips,
 )
+from .web_scrapping import increment_web_search_downloads, get_web_search_downloads
