@@ -3,7 +3,7 @@
 import asyncio
 import os
 import time
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # محدودکننده برای جلوگیری از هنگ کردن سرور هنگام رندر همزمان صفحات سنگین
 SINGLEFILE_SEMAPHORE = asyncio.Semaphore(5)
