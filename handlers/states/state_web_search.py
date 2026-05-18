@@ -1,0 +1,96 @@
+# handlers/states/state_web_search.py
+
+import os
+import time
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes
+from core.state_manager import get_state, set_state, clear_state
+from services.web_scraper import create_single_file
+import asyncio
+from services.web_scraper import search_web
+
+
+async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = str(update.effective_chat.id)
+    data = query.data
+
+    index = int(data.split("_")[1])
+    state = get_state(chat_id)
+
+    urls = state.get("urls", [])
+    if not urls or index >= len(urls):
+        await query.message.reply_text(
+            "❌ نشست شما منقضی شده است. لطفاً مجدداً جستجو کنید."
+        )
+        return
+
+    target_url = urls[index]
+    wait_msg = await query.message.reply_text(
+        "⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)..."
+    )
+
+    os.makedirs("downloads", exist_ok=True)
+    output_filename = f"downloads/page_{chat_id}_{int(time.time())}.html"
+
+    success = await create_single_file(target_url, output_filename)
+
+    if success:
+        await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
+        try:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=open(output_filename, "rb"),
+                filename=f"WebPage_{index + 1}.html",
+                caption=f"🔗 لینک اصلی: {target_url}",
+            )
+        except Exception as e:
+            print(f"Send Document Error: {e}")
+            await wait_msg.edit_text("❌ خطا در ارسال فایل.")
+    else:
+        await wait_msg.edit_text(
+            "❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد)"
+        )
+
+
+# این تابع باید در process_state_input فراخوانی شود
+async def handle_web_search_state(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, chat_id: str
+):
+    wait_msg = await update.message.reply_text("⏳ در حال جستجو...")
+
+    # اجرای سرچ در ترد جداگانه
+    results = await asyncio.to_thread(search_web, text, 10)
+
+    if not results:
+        await wait_msg.edit_text("❌ نتیجه‌ای یافت نشد یا خطایی رخ داد.")
+        clear_state(chat_id)
+        return
+
+    # ذخیره لینک‌ها در context برای استفاده در دکمه‌های شیشه‌ای
+    # چون دکمه‌های شیشه‌ای محدودیت حجم Data دارند، لینک‌ها را در state ذخیره می‌کنیم
+    set_state(chat_id, "web_search_results", urls=[r["url"] for r in results])
+
+    msg_text = "🌐 **نتایج جستجو:**\n\n"
+    keyboard = []
+
+    for i, res in enumerate(results):
+        msg_text += f"{i + 1}. [{res['title']}]({res['url']})\n"
+        # دکمه‌ها را دو تا دو تا می‌چینیم
+        if i % 2 == 0:
+            keyboard.append(
+                [InlineKeyboardButton(f"نتیجه {i + 1}", callback_data=f"webres_{i}")]
+            )
+        else:
+            keyboard[-1].append(
+                InlineKeyboardButton(f"نتیجه {i + 1}", callback_data=f"webres_{i}")
+            )
+
+    await wait_msg.edit_text(
+        msg_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )

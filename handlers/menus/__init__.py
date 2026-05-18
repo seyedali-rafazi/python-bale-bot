@@ -74,3 +74,5 @@ from .github import (
     btn_gh_user_req,
     btn_gh_search_req,
 )
+
+from .web_scraper import btn_web_search_req

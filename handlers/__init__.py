@@ -58,6 +58,7 @@ from .menus import (
     btn_tt_search_req,
     btn_tt_trend_req,
     btn_tt_explore_req,
+    btn_web_search_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import (
@@ -89,6 +90,8 @@ from handlers.states.youtube import (
     youtube_quality_callback,
 )
 from handlers.states.state_github import github_callback_handler
+from handlers.states.state_web_search import web_search_callback
+
 from .menus.cloud import btn_cloud_storage_menu
 from handlers.states.state_cloud import (
     start_cloud_upload,
@@ -336,6 +339,18 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(handle_more_pins_callback, pattern="^more_pins$")
+    )
+
+    # هندلرهای جست جو وب
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH)}$"), btn_web_search_req
+        )
+    )
+
+    # اضافه کردن کال‌بک دکمه‌های نتایج جستجو
+    application.add_handler(
+        CallbackQueryHandler(web_search_callback, pattern=r"^webres_\d+$")
     )
 
     # هندلر های تیک تاک

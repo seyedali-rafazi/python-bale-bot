@@ -14,6 +14,7 @@ BTN_AI_IMAGE = "🎨 تولید عکس از متن"
 BTN_TELEGRAM = "✈️ تلگرام"
 BTN_TG_SINGLE = "🔍 دریافت یک پیام (با لینک)"
 BTN_TG_LATEST = "آخرین پیام‌های کانال (۵ پیام)"
+BTN_GOOGLE_SEARCH = "🔍 جستجوی وب"
 
 #  منوی یوتیوب
 BTN_YT_LAST5 = "🆕 ۵ ویدیوی آخر کانال"
