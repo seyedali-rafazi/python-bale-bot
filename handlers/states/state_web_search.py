@@ -8,7 +8,12 @@ from core.state_manager import get_state, set_state, clear_state
 from services.web_scraper import create_single_file
 import asyncio
 from services.web_scraper import search_web
-from core.database import get_user_info, get_web_search_downloads, increment_web_search_downloads
+from core.database import (
+    get_web_search_downloads,
+    increment_web_search_downloads,
+    is_vip,
+)
+from core.limits import get_limit
 
 
 async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -30,13 +35,12 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # بررسی حد روزانه دانلود
     user_id = update.effective_user.id
-    user_info = await get_user_info(user_id)
-    is_vip = user_info[1] if user_info else 0
-    
+    vip = await is_vip(user_id)
+
     # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
-    daily_limit = 20 if is_vip else 1
+    daily_limit = get_limit("web_search", vip)
     current_downloads = await get_web_search_downloads(user_id)
-    
+
     if current_downloads >= daily_limit:
         await query.message.reply_text(
             f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
@@ -58,7 +62,7 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if success:
         # افزایش تعداد دانلود پس از موفقیت
         new_count = await increment_web_search_downloads(user_id)
-        
+
         await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
         try:
             await context.bot.send_document(
@@ -105,7 +109,11 @@ async def handle_web_search_state(
             # دکمه‌ها را دو تا دو تا می‌چینیم
             if i % 2 == 0:
                 keyboard.append(
-                    [InlineKeyboardButton(f"نتیجه {i + 1}", callback_data=f"webres_{i}")]
+                    [
+                        InlineKeyboardButton(
+                            f"نتیجه {i + 1}", callback_data=f"webres_{i}"
+                        )
+                    ]
                 )
             else:
                 keyboard[-1].append(
@@ -132,13 +140,12 @@ async def handle_web_search_state(
 
         # بررسی حد روزانه دانلود
         user_id = update.effective_user.id
-        user_info = await get_user_info(user_id)
-        is_vip = user_info[1] if user_info else 0
-        
+        vip = await is_vip(user_id)
+
         # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
-        daily_limit = 20 if is_vip else 1
+        daily_limit = get_limit("web_search", vip)
         current_downloads = await get_web_search_downloads(user_id)
-        
+
         if current_downloads >= daily_limit:
             await update.message.reply_text(
                 f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
@@ -161,7 +168,7 @@ async def handle_web_search_state(
             if success:
                 # افزایش تعداد دانلود پس از موفقیت
                 new_count = await increment_web_search_downloads(user_id)
-                
+
                 await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
                 try:
                     with open(output_filename, "rb") as f:
