@@ -168,3 +168,12 @@ def get_cloud_buy_keyboard():
         ]
     )
     return keyboard
+
+
+def get_google_search_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_GOOGLE_SEARCH_SUBJECT)],
+        [KeyboardButton(BTN_GOOGLE_SEARCH_LINK)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

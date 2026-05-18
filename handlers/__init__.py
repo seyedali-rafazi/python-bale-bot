@@ -59,6 +59,8 @@ from .menus import (
     btn_tt_trend_req,
     btn_tt_explore_req,
     btn_web_search_req,
+    btn_google_search_subject_req,
+    btn_google_search_link_req,
 )
 from .states import process_state_input, process_photo_input
 from core.admin import (
@@ -345,6 +347,20 @@ def register_all_handlers(application):
     application.add_handler(
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH)}$"), btn_web_search_req
+        )
+    )
+
+    # هندلرهای دکمه‌های منوی جستجوی وب
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH_SUBJECT)}$"),
+            btn_google_search_subject_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH_LINK)}$"),
+            btn_google_search_link_req,
         )
     )
 

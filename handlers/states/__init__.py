@@ -72,7 +72,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif step.startswith("waiting_gh"):
         await handle_github_state(update, context, step, text, chat_id, state_data)
 
-    elif step == "waiting_web_search":
+    elif step.startswith("waiting_google_search"):
         await handle_web_search_state(update, context, text, chat_id)
         return
 
