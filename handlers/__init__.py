@@ -415,9 +415,7 @@ def register_all_handlers(application):
         MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)
     )
 
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_PROFILE)}$"), btn_profile_req)
-    )
+    application.add_handler(MessageHandler(filters.Text(BTN_PROFILE), btn_profile_req))
 
     # هندلر ذخیره ابری
     application.add_handler(
