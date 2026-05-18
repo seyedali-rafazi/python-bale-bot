@@ -17,7 +17,7 @@ BTN_TG_LATEST = "آخرین پیام‌های کانال (۵ پیام)"
 
 BTN_GOOGLE_SEARCH = "🔍 جستجوی وب"
 BTN_GOOGLE_SEARCH_SUBJECT = "موضوع جستجو"
-BTN_GOOGLE_SEARCH_LINK = "دانلود صفحه با لینک "
+BTN_GOOGLE_SEARCH_LINK = "🔗 دانلود صفحه با لینک"
 
 
 #  منوی یوتیوب
@@ -87,5 +87,3 @@ BTN_BUY_CLOUD_SIZE3 = "خرید  20GB حجم ابری 🌟"
 BTN_BUY_CLOUD_SIZE4 = "خرید 50GB حجم ابری 🌟"
 BTN_UPLOAD_TO_CLOUD = "📤 آپلود فایل"
 BTN_CLOUD_FILES = "📂 فایل‌های من"
-
-

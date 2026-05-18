@@ -24,13 +24,16 @@ def search_web(query, max_results=10):
 
 
 async def create_single_file(url, output_path):
-    """اجرای غیرهمزمان ابزار SingleFile CLI"""
+    """اجرای غیرهمزمان ابزار SingleFile CLI با هندل کردن پاپ‌آپ‌ها"""
     async with SINGLEFILE_SEMAPHORE:
-        # استفاده از exec به جای shell برای جلوگیری از باگ‌های امنیتی (Shell Injection)
-        # و افزودن آرگومان‌های مرورگر برای اجرای بدون مشکل روی سرور
+        # استفاده از آرگومان‌های مرورگر برای مسدود کردن دامنه‌های معروف کوکی و پاپ‌آپ
+        # همچنین مخفی کردن عناصر ثابت (fixed) که معمولاً پاپ‌آپ‌های کوکی هستند
         command = [
             "single-file",
             '--browser-args=["--no-sandbox", "--disable-setuid-sandbox"]',
+            "--remove-hidden-elements=true",
+            "--remove-fixed-elements=true",  # حذف عناصر ثابت (مثل پاپ‌آپ کوکی و هدرهای مزاحم)
+            "--block-scripts=false",
             url,
             output_path,
         ]
@@ -45,7 +48,6 @@ async def create_single_file(url, output_path):
             if process.returncode == 0 and os.path.exists(output_path):
                 return True
             else:
-                # چاپ خطای احتمالی برای دیباگ راحت‌تر
                 err_msg = stderr.decode() if stderr else "Unknown Error"
                 print(f"SingleFile failed. Error: {err_msg}")
 
