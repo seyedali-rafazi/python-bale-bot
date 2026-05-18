@@ -8,6 +8,7 @@ from core.state_manager import get_state, set_state, clear_state
 from services.web_scraper import create_single_file
 import asyncio
 from services.web_scraper import search_web
+from core.database import get_user_info, get_web_search_downloads, increment_web_search_downloads
 
 
 async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -27,6 +28,23 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # بررسی حد روزانه دانلود
+    user_id = update.effective_user.id
+    user_info = await get_user_info(user_id)
+    is_vip = user_info[1] if user_info else 0
+    
+    # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
+    daily_limit = 20 if is_vip else 1
+    current_downloads = await get_web_search_downloads(user_id)
+    
+    if current_downloads >= daily_limit:
+        await query.message.reply_text(
+            f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
+            f"📊 محدودیت روزانه: {daily_limit} بار\n"
+            f"🌟 برای افزایش حد، VIP شوید!"
+        )
+        return
+
     target_url = urls[index]
     wait_msg = await query.message.reply_text(
         "⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)..."
@@ -38,13 +56,16 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     success = await create_single_file(target_url, output_filename)
 
     if success:
+        # افزایش تعداد دانلود پس از موفقیت
+        new_count = await increment_web_search_downloads(user_id)
+        
         await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
         try:
             await context.bot.send_document(
                 chat_id=chat_id,
                 document=open(output_filename, "rb"),
                 filename=f"WebPage_{index + 1}.html",
-                caption=f"🔗 لینک اصلی: {target_url}",
+                caption=f"🔗 لینک اصلی: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
             )
         except Exception as e:
             print(f"Send Document Error: {e}")
@@ -104,7 +125,27 @@ async def handle_web_search_state(
 
         # بررسی اینکه آیا لینک معتبر است
         if not url.startswith(("http://", "https://")):
-            await update.message.reply_text("❌ لینک باید با http:// یا https:// شروع شود.")
+            await update.message.reply_text(
+                "❌ لینک باید با http:// یا https:// شروع شود.\n\nلطفاً یک لینک معتبر ارسال کنید:"
+            )
+            return
+
+        # بررسی حد روزانه دانلود
+        user_id = update.effective_user.id
+        user_info = await get_user_info(user_id)
+        is_vip = user_info[1] if user_info else 0
+        
+        # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
+        daily_limit = 20 if is_vip else 1
+        current_downloads = await get_web_search_downloads(user_id)
+        
+        if current_downloads >= daily_limit:
+            await update.message.reply_text(
+                f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
+                f"📊 محدودیت روزانه: {daily_limit} بار\n"
+                f"🌟 برای افزایش حد، VIP شوید!"
+            )
+            clear_state(chat_id)
             return
 
         wait_msg = await update.message.reply_text(
@@ -114,24 +155,33 @@ async def handle_web_search_state(
         os.makedirs("downloads", exist_ok=True)
         output_filename = f"downloads/page_{chat_id}_{int(time.time())}.html"
 
-        success = await create_single_file(url, output_filename)
+        try:
+            success = await create_single_file(url, output_filename)
 
-        if success:
-            await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
-            try:
-                with open(output_filename, "rb") as f:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=f,
-                        filename="WebPage.html",
-                        caption=f"🔗 لینک: {url}",
-                    )
-            except Exception as e:
-                print(f"Send Document Error: {e}")
-                await wait_msg.edit_text("❌ خطا در ارسال فایل.")
-        else:
-            await wait_msg.edit_text(
-                "❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد یا لینک اشتباه باشد)"
+            if success:
+                # افزایش تعداد دانلود پس از موفقیت
+                new_count = await increment_web_search_downloads(user_id)
+                
+                await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
+                try:
+                    with open(output_filename, "rb") as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename="WebPage.html",
+                            caption=f"🔗 لینک: {url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
+                        )
+                except Exception as e:
+                    print(f"Send Document Error: {e}")
+                    await wait_msg.edit_text("❌ خطا در ارسال فایل.")
+            else:
+                await wait_msg.edit_text(
+                    "❌ متاسفانه دریافت این صفحه با مشکل مواجه شد.\n\n(ممکن است سایت محافظت شده باشد یا لینک اشتباه باشد)"
+                )
+        except Exception as e:
+            print(f"Web Search Link Error: {e}")
+            await update.message.reply_text(
+                "❌ خطایی در پردازش درخواست رخ داد. لطفاً دوباره تلاش کنید."
             )
-
-        clear_state(chat_id)
+        finally:
+            clear_state(chat_id)

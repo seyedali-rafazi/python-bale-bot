@@ -13,6 +13,8 @@ from .users import (
     get_total_users,
     get_all_users,
     reset_user_limits,
+    get_web_search_downloads,
+    increment_web_search_downloads,
 )
 from .vip import (
     is_vip,
