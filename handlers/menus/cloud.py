@@ -57,10 +57,7 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
             cloud_text = "☁️ **منوی ذخیره‌سازی ابری**\n\nلطفاً یک گزینه را انتخاب کنید:"
         
         keyboard = [
-            [InlineKeyboardButton("📤 آپلود فایل", callback_data="cloud_upload")],
-            [InlineKeyboardButton("📂 فایل‌های من", callback_data="cloud_files")],
             [InlineKeyboardButton("🛒 خرید حجم اضافی", callback_data="cloud_buy_menu")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main_menu")],
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
