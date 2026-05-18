@@ -76,6 +76,7 @@ import os
 from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
+from .states.state_insta import handle_insta_callback
 from .payment import (
     btn_buy_vip,
     precheckout_callback,
@@ -306,6 +307,14 @@ def register_all_handlers(application):
         CallbackQueryHandler(
             handle_music_callback,
             pattern=r"^(album_|playlist_|artist_|toptracks_|dltrack_)",
+        )
+    )
+
+    # ثبت کال‌بک دکمه‌های شیشه‌ای مربوط به اینستاگرام
+    application.add_handler(
+        CallbackQueryHandler(
+            handle_insta_callback,
+            pattern=r"^(ig_dl_|ig_last_)",
         )
     )
     application.add_handler(

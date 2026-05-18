@@ -7,7 +7,14 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-from core.database import is_vip, get_music_downloads, increment_music_downloads
+from core.database import (
+    is_vip,
+    get_music_downloads,
+    increment_music_downloads,
+    get_available_cloud_mb,
+    reduce_cloud_storage,
+    add_cloud_file,
+)
 from services.music import (
     search_track,
     search_album,
@@ -19,13 +26,18 @@ from services.music import (
 )
 from services.youtube import download_youtube_audio
 
+try:
+    from services.parspack_s3 import upload_to_s3
+except ImportError:
+    upload_to_s3 = None
+
 # صف دانلود برای جلوگیری از فشار به سرور و محدودیت‌های یوتیوب
 MAX_MUSIC_CONCURRENT = 3
 music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
 
 
 async def background_download_task(
-    context, chat_id, track_id, title, performer, safe_filename
+    context, chat_id, track_id, title, performer, safe_filename, destination: str = "telegram"
 ):
     status_msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -50,6 +62,30 @@ async def background_download_task(
             file_path = await asyncio.to_thread(download_youtube_audio, track_id)
 
             if file_path and os.path.exists(file_path):
+                # =====================================
+                # چک فضای ابری برای آپلود به سرور
+                # =====================================
+                if destination == "server":
+                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                    if user_storage_mb is None or user_storage_mb <= 0:
+                        user_storage_mb = 0
+
+                    file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+
+                    if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"❌ فضای ابری شما کافی نیست!\n\n"
+                                f"حجم فایل صوتی: {file_size_mb} مگابایت\n"
+                                f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                            ),
+                        )
+                        return
+
+                # =====================================
+
                 try:
                     await context.bot.edit_message_text(
                         chat_id=chat_id,
@@ -59,29 +95,69 @@ async def background_download_task(
                 except BadRequest:
                     pass
 
-                # ارسال فایل به صورت مستقیم بدون with open (ارسال ناهمگام و بدون فریز)
-                await context.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=file_path,
-                    title=title,
-                    performer=performer,
-                    filename=f"{safe_filename}.mp3",
-                    read_timeout=120,
-                    write_timeout=120,
-                    connect_timeout=60,
-                )
+                # ========================
+                # آپلود به سرور ابری
+                # ========================
+                if destination == "server":
+                    progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
 
-                # ثبت آمار پس از موفقیت (اصلاح شد: اضافه شدن await)
-                await increment_music_downloads(chat_id)
-
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=status_msg.message_id,
-                        text="✅ آهنگ با موفقیت ارسال شد!",
+                    s3_url = await asyncio.to_thread(
+                        upload_to_s3,
+                        file_path,
+                        None,
+                        progress_dict,
                     )
-                except BadRequest:
-                    pass
+
+                    if s3_url:
+                        file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+                        file_name = os.path.basename(file_path)
+
+                        await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
+                        await reduce_cloud_storage(chat_id, file_size_mb)
+
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"✅ آهنگ با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
+                            parse_mode="Markdown",
+                        )
+
+                        await increment_music_downloads(chat_id)
+                        return
+
+                    else:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ خطا در آپلود ابری.",
+                        )
+                        return
+
+                # ========================
+                # آپلود به تلگرام
+                # ========================
+                else:
+                    # ارسال فایل به صورت مستقیم بدون with open (ارسال ناهمگام و بدون فریز)
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=file_path,
+                        title=title,
+                        performer=performer,
+                        filename=f"{safe_filename}.mp3",
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=60,
+                    )
+
+                    # ثبت آمار پس از موفقیت (اصلاح شد: اضافه شدن await)
+                    await increment_music_downloads(chat_id)
+
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=status_msg.message_id,
+                            text="✅ آهنگ با موفقیت ارسال شد!",
+                        )
+                    except BadRequest:
+                        pass
             else:
                 await context.bot.send_message(
                     chat_id, "❌ دانلود از سرور مبدا شکست خورد یا فایل یافت نشد."
@@ -305,9 +381,56 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             c for c in button_text if c.isalnum() or c in " -_"
         ).strip()
 
-        # 2. ایجاد تسک در پس‌زمینه (عملیات اصلی شامل صف و پیام‌ها در این تابع انجام می‌شود)
+        # ===================================
+        # نمایش گزینه‌های مقصد
+        # ===================================
+        keyboard = [
+            [
+                InlineKeyboardButton("📱 تلگرام", callback_data=f"dltrack_tel_{track_id}"),
+                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"dltrack_cloud_{track_id}"),
+            ]
+        ]
+
+        await query.message.reply_text(
+            "کجا دانلود کنم؟",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        # ذخیره اطلاعات برای استفاده بعدی
+        context.user_data[f"track_{track_id}"] = {
+            "title": title,
+            "performer": performer,
+            "safe_filename": safe_filename,
+        }
+
+    elif data.startswith("dltrack_tel_"):
+        track_id = data.split("_", 3)[2]
+        track_info = context.user_data.get(f"track_{track_id}", {})
+
         asyncio.create_task(
             background_download_task(
-                context, chat_id, track_id, title, performer, safe_filename
+                context,
+                chat_id,
+                track_id,
+                track_info.get("title", "Unknown"),
+                track_info.get("performer", "Unknown"),
+                track_info.get("safe_filename", "track"),
+                destination="telegram",
+            )
+        )
+
+    elif data.startswith("dltrack_cloud_"):
+        track_id = data.split("_", 3)[2]
+        track_info = context.user_data.get(f"track_{track_id}", {})
+
+        asyncio.create_task(
+            background_download_task(
+                context,
+                chat_id,
+                track_id,
+                track_info.get("title", "Unknown"),
+                track_info.get("performer", "Unknown"),
+                track_info.get("safe_filename", "track"),
+                destination="server",
             )
         )

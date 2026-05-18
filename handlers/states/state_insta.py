@@ -3,12 +3,22 @@
 import os
 import asyncio
 import shutil
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from services.instagram import (
     download_instagram,
     get_latest_post,
 )
+from core.database import (
+    get_available_cloud_mb,
+    reduce_cloud_storage,
+    add_cloud_file,
+)
+
+try:
+    from services.parspack_s3 import upload_to_s3
+except ImportError:
+    upload_to_s3 = None
 
 # ایجاد محدودکننده برای جلوگیری از فشار به سرور و بن شدن IP (مثلا حداکثر 5 دانلود همزمان)
 INSTA_SEMAPHORE = asyncio.Semaphore(5)
@@ -27,19 +37,128 @@ async def handle_insta_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        processing_msg = await update.message.reply_text(
-            "⏳ در حال دانلود از اینستاگرام... لطفا کمی صبر کنید"
+        # ===================================
+        # نمایش گزینه‌های مقصد
+        # ===================================
+        keyboard = [
+            [
+                InlineKeyboardButton("📱 تلگرام", callback_data=f"ig_dl_tel_{text}"),
+                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"ig_dl_cloud_{text}"),
+            ]
+        ]
+
+        await update.message.reply_text(
+            "کجا دانلود کنم؟",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-        async with INSTA_SEMAPHORE:  # ورود به صف دانلود
-            try:
-                file_path = await asyncio.wait_for(
-                    asyncio.to_thread(download_instagram, text), timeout=60.0
-                )
+    elif step == "waiting_ig_last_post":
+        # ===================================
+        # نمایش گزینه‌های مقصد برای آخرین پست
+        # ===================================
+        keyboard = [
+            [
+                InlineKeyboardButton("📱 تلگرام", callback_data=f"ig_last_tel_{text}"),
+                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"ig_last_cloud_{text}"),
+            ]
+        ]
 
-                if file_path and os.path.exists(file_path):
+        await update.message.reply_text(
+            "کجا دانلود کنم؟",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+
+# ======================================
+# تابع دانلود پس‌زمینه برای لینک
+# ======================================
+async def background_download_insta_link(
+    context, chat_id, link: str, destination: str = "telegram"
+):
+    processing_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="⏳ در حال دانلود از اینستاگرام... لطفا کمی صبر کنید",
+    )
+
+    async with INSTA_SEMAPHORE:
+        file_path = None
+        try:
+            file_path = await asyncio.wait_for(
+                asyncio.to_thread(download_instagram, link), timeout=60.0
+            )
+
+            if file_path and os.path.exists(file_path):
+                # =====================================
+                # چک فضای ابری برای آپلود به سرور
+                # =====================================
+                if destination == "server":
+                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                    if user_storage_mb is None or user_storage_mb <= 0:
+                        user_storage_mb = 0
+
+                    file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+
+                    if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"❌ فضای ابری شما کافی نیست!\n\n"
+                                f"حجم فایل: {file_size_mb} مگابایت\n"
+                                f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                            ),
+                        )
+                        return
+
+                # =====================================
+
+                try:
+                    await processing_msg.edit_text("📤 دانلود تکمیل شد! در حال آپلود...")
+                except:
+                    pass
+
+                # ========================
+                # آپلود به سرور ابری
+                # ========================
+                if destination == "server":
+                    progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
+
+                    s3_url = await asyncio.to_thread(
+                        upload_to_s3,
+                        file_path,
+                        None,
+                        progress_dict,
+                    )
+
+                    if s3_url:
+                        file_size_mb = round(
+                            os.path.getsize(file_path) / (1024 * 1024), 2
+                        )
+                        file_name = os.path.basename(file_path)
+
+                        await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
+                        await reduce_cloud_storage(chat_id, file_size_mb)
+
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
+                            parse_mode="Markdown",
+                        )
+                        try:
+                            await processing_msg.delete()
+                        except:
+                            pass
+                    else:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ خطا در آپلود ابری.",
+                        )
+
+                # ========================
+                # آپلود به تلگرام
+                # ========================
+                else:
                     try:
-                        # کتابخانه telegram به صورت خودکار مسیر رشته‌ای (String) را به صورت Async می‌خواند (نیازی به with open نیست)
                         if file_path.endswith(".mp4"):
                             await context.bot.send_video(
                                 chat_id=chat_id, video=file_path
@@ -49,36 +168,122 @@ async def handle_insta_state(
                                 chat_id=chat_id, document=file_path
                             )
                     finally:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                    await processing_msg.delete()
-                else:
-                    await processing_msg.edit_text(
-                        "❌ دانلود شکست خورد. ممکن است پیج پرایوت باشد."
+                        pass
+
+                    try:
+                        await processing_msg.delete()
+                    except:
+                        pass
+            else:
+                await processing_msg.edit_text(
+                    "❌ دانلود شکست خورد. ممکن است پیج پرایوت باشد."
+                )
+
+        except asyncio.TimeoutError:
+            await processing_msg.edit_text(
+                "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
+            )
+        except Exception as e:
+            print(f"Insta DL Error: {e}")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        finally:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+
+
+# ======================================
+# تابع دانلود پس‌زمینه برای آخرین پست
+# ======================================
+async def background_download_insta_last_post(
+    context, chat_id, username: str, destination: str = "telegram"
+):
+    processing_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text="⏳ در حال بررسی پیج و دانلود آخرین پست...",
+    )
+
+    async with INSTA_SEMAPHORE:
+        file_path = None
+        target_dir = None
+        try:
+            file_path, target_dir = await asyncio.wait_for(
+                get_latest_post(username), timeout=60.0
+            )
+
+            if file_path and os.path.exists(file_path):
+                # =====================================
+                # چک فضای ابری برای آپلود به سرور
+                # =====================================
+                if destination == "server":
+                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                    if user_storage_mb is None or user_storage_mb <= 0:
+                        user_storage_mb = 0
+
+                    file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+
+                    if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"❌ فضای ابری شما کافی نیست!\n\n"
+                                f"حجم فایل: {file_size_mb} مگابایت\n"
+                                f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                            ),
+                        )
+                        return
+
+                # =====================================
+
+                try:
+                    await processing_msg.edit_text("📤 دانلود تکمیل شد! در حال آپلود...")
+                except:
+                    pass
+
+                # ========================
+                # آپلود به سرور ابری
+                # ========================
+                if destination == "server":
+                    progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
+
+                    s3_url = await asyncio.to_thread(
+                        upload_to_s3,
+                        file_path,
+                        None,
+                        progress_dict,
                     )
 
-            except asyncio.TimeoutError:
-                await processing_msg.edit_text(
-                    "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
-                )
-            except Exception as e:
-                print(f"Insta DL Error: {e}")
-                await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
-        return
+                    if s3_url:
+                        file_size_mb = round(
+                            os.path.getsize(file_path) / (1024 * 1024), 2
+                        )
+                        file_name = os.path.basename(file_path)
 
-    elif step == "waiting_ig_last_post":
-        processing_msg = await update.message.reply_text(
-            "⏳ در حال بررسی پیج و دانلود آخرین پست..."
-        )
+                        await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
+                        await reduce_cloud_storage(chat_id, file_size_mb)
 
-        async with INSTA_SEMAPHORE:
-            try:
-                # حالا تابع دو خروجی می‌دهد: مسیر فایل مدیا، و مسیر پوشه موقت برای حذف
-                file_path, target_dir = await asyncio.wait_for(
-                    get_latest_post(text), timeout=60.0
-                )
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
+                            parse_mode="Markdown",
+                        )
+                        try:
+                            await processing_msg.delete()
+                        except:
+                            pass
+                    else:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ خطا در آپلود ابری.",
+                        )
 
-                if file_path and os.path.exists(file_path):
+                # ========================
+                # آپلود به تلگرام
+                # ========================
+                else:
                     try:
                         if file_path.endswith(".mp4"):
                             await context.bot.send_video(
@@ -89,20 +294,69 @@ async def handle_insta_state(
                                 chat_id=chat_id, photo=file_path
                             )
                     finally:
-                        # حذف کامل پوشه اختصاصی کاربر (شامل تمام فایل‌های json و txt جانبی)
-                        if target_dir and os.path.exists(target_dir):
-                            shutil.rmtree(target_dir, ignore_errors=True)
-                    await processing_msg.delete()
-                else:
-                    if target_dir and os.path.exists(target_dir):
-                        shutil.rmtree(target_dir, ignore_errors=True)
-                    await processing_msg.edit_text(
-                        "❌ پست پیدا نشد. آیا مطمئنید پیج پابلیک است؟"
-                    )
+                        pass
 
-            except asyncio.TimeoutError:
-                await processing_msg.edit_text("⏳ زمان درخواست به پایان رسید.")
-            except Exception as e:
-                print(f"Insta Last Post Error: {e}")
-                await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
-        return
+                    try:
+                        await processing_msg.delete()
+                    except:
+                        pass
+            else:
+                await processing_msg.edit_text(
+                    "❌ پست پیدا نشد. آیا مطمئنید پیج پابلیک است؟"
+                )
+
+        except asyncio.TimeoutError:
+            await processing_msg.edit_text("⏳ زمان درخواست به پایان رسید.")
+        except Exception as e:
+            print(f"Insta Last Post Error: {e}")
+            await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        finally:
+            if target_dir and os.path.exists(target_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+
+
+# ======================================
+# هندلر کال‌بک برای دانلود اینستاگرام
+# ======================================
+async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+
+    data = query.data
+    chat_id = str(update.effective_chat.id)
+
+    if data.startswith("ig_dl_tel_"):
+        link = data.split("ig_dl_tel_", 1)[1]
+        asyncio.create_task(
+            background_download_insta_link(context, chat_id, link, destination="telegram")
+        )
+
+    elif data.startswith("ig_dl_cloud_"):
+        link = data.split("ig_dl_cloud_", 1)[1]
+        asyncio.create_task(
+            background_download_insta_link(context, chat_id, link, destination="server")
+        )
+
+    elif data.startswith("ig_last_tel_"):
+        username = data.split("ig_last_tel_", 1)[1]
+        asyncio.create_task(
+            background_download_insta_last_post(
+                context, chat_id, username, destination="telegram"
+            )
+        )
+
+    elif data.startswith("ig_last_cloud_"):
+        username = data.split("ig_last_cloud_", 1)[1]
+        asyncio.create_task(
+            background_download_insta_last_post(
+                context, chat_id, username, destination="server"
+            )
+        )
