@@ -20,7 +20,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
-CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME")
+CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME" , "@UnlimitChatGPTbot")
 
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
@@ -105,7 +105,6 @@ async def _ensure_ai_client() -> TelegramClient:
 
 
 async def ask_chatbot(text: str) -> str:
-
     # فقط این قسمت queue میشه
     async with _ai_chat_lock:
         try:
@@ -135,13 +134,9 @@ async def ask_chatbot(text: str) -> str:
                 timeout=15,
             )
 
-            # انتظار پاسخ
-            last_text = ""
-
-            stable_count = 0
-
+            # انتظار پاسخ (بدون نیاز به stable_count برای ربات جدید)
             for _ in range(45):
-                await asyncio.sleep(2)
+                await asyncio.sleep(1.5)  # زمان خواب را هم کمی کمتر کردیم
 
                 messages = await client.get_messages(
                     CHATGPT_BOT_USERNAME,
@@ -150,8 +145,6 @@ async def ask_chatbot(text: str) -> str:
 
                 if not messages:
                     continue
-
-                candidate = None
 
                 for msg in messages:
                     if msg.id <= before_id:
@@ -171,23 +164,8 @@ async def ask_chatbot(text: str) -> str:
                     if len(current_text) < 5:
                         continue
 
-                    candidate = current_text
-
-                    break
-
-                if not candidate:
-                    continue
-
-                # بررسی stable شدن پاسخ
-                if candidate == last_text:
-                    stable_count += 1
-                else:
-                    last_text = candidate
-                    stable_count = 0
-
-                # پاسخ کامل شد
-                if stable_count >= 1:
-                    return candidate
+                    # به محض پیدا کردن پاسخ از ربات جدید، آن را برمی‌گرداند
+                    return current_text
 
             return "❌ AI پاسخ کامل نداد."
 
@@ -199,12 +177,10 @@ async def ask_chatbot(text: str) -> str:
 
         except RPCError:
             logger.exception("Telethon RPC Error")
-
             return "❌ خطا در ارتباط با تلگرام."
 
         except Exception:
             logger.exception("ask_chatbot failed")
-
             return "❌ خطا در ارتباط با AI."
 
 

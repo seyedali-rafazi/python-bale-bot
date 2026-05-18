@@ -37,7 +37,13 @@ music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
 
 
 async def background_download_task(
-    context, chat_id, track_id, title, performer, safe_filename, destination: str = "telegram"
+    context,
+    chat_id,
+    track_id,
+    title,
+    performer,
+    safe_filename,
+    destination: str = "telegram",
 ):
     status_msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -109,7 +115,9 @@ async def background_download_task(
                     )
 
                     if s3_url:
-                        file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+                        file_size_mb = round(
+                            os.path.getsize(file_path) / (1024 * 1024), 2
+                        )
                         file_name = os.path.basename(file_path)
 
                         await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
@@ -132,7 +140,7 @@ async def background_download_task(
                         return
 
                 # ========================
-                # آپلود به تلگرام
+                # آپلود به بله
                 # ========================
                 else:
                     # ارسال فایل به صورت مستقیم بدون with open (ارسال ناهمگام و بدون فریز)
@@ -342,7 +350,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     # ===================================
-    # بررسی کال‌بک‌های دانلود به تلگرام و ابری (قبل از dltrack_ عام)
+    # بررسی کال‌بک‌های دانلود به بله و ابری (قبل از dltrack_ عام)
     # ===================================
     elif data.startswith("dltrack_tel_"):
         track_id = data.split("_", 3)[2]
@@ -424,13 +432,17 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # ===================================
         keyboard = [
             [
-                InlineKeyboardButton("📱 تلگرام", callback_data=f"dltrack_tel_{track_id}"),
-                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"dltrack_cloud_{track_id}"),
+                InlineKeyboardButton(
+                    "📱 بله", callback_data=f"dltrack_tel_{track_id}"
+                ),
+                InlineKeyboardButton(
+                    "☁️ فضای ابری", callback_data=f"dltrack_cloud_{track_id}"
+                ),
             ]
         ]
 
         await query.message.reply_text(
-            "کجا دانلود کنم؟",
+            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 

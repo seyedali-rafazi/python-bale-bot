@@ -42,13 +42,15 @@ async def handle_insta_state(
         # ===================================
         keyboard = [
             [
-                InlineKeyboardButton("📱 تلگرام", callback_data=f"ig_dl_tel_{text}"),
-                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"ig_dl_cloud_{text}"),
+                InlineKeyboardButton("📱 بله", callback_data=f"ig_dl_tel_{text}"),
+                InlineKeyboardButton(
+                    "☁️ فضای ابری", callback_data=f"ig_dl_cloud_{text}"
+                ),
             ]
         ]
 
         await update.message.reply_text(
-            "کجا دانلود کنم؟",
+            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
@@ -58,13 +60,15 @@ async def handle_insta_state(
         # ===================================
         keyboard = [
             [
-                InlineKeyboardButton("📱 تلگرام", callback_data=f"ig_last_tel_{text}"),
-                InlineKeyboardButton("☁️ فضای ابری", callback_data=f"ig_last_cloud_{text}"),
+                InlineKeyboardButton("📱 بله", callback_data=f"ig_last_tel_{text}"),
+                InlineKeyboardButton(
+                    "☁️ فضای ابری", callback_data=f"ig_last_cloud_{text}"
+                ),
             ]
         ]
 
         await update.message.reply_text(
-            "کجا دانلود کنم؟",
+            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
@@ -113,7 +117,9 @@ async def background_download_insta_link(
                 # =====================================
 
                 try:
-                    await processing_msg.edit_text("📤 دانلود تکمیل شد! در حال آپلود...")
+                    await processing_msg.edit_text(
+                        "📤 دانلود تکمیل شد! در حال آپلود..."
+                    )
                 except:
                     pass
 
@@ -155,7 +161,7 @@ async def background_download_insta_link(
                         )
 
                 # ========================
-                # آپلود به تلگرام
+                # آپلود به بله
                 # ========================
                 else:
                     try:
@@ -239,7 +245,9 @@ async def background_download_insta_last_post(
                 # =====================================
 
                 try:
-                    await processing_msg.edit_text("📤 دانلود تکمیل شد! در حال آپلود...")
+                    await processing_msg.edit_text(
+                        "📤 دانلود تکمیل شد! در حال آپلود..."
+                    )
                 except:
                     pass
 
@@ -281,7 +289,7 @@ async def background_download_insta_last_post(
                         )
 
                 # ========================
-                # آپلود به تلگرام
+                # آپلود به بله
                 # ========================
                 else:
                     try:
@@ -336,7 +344,9 @@ async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if data.startswith("ig_dl_tel_"):
         link = data.split("ig_dl_tel_", 1)[1]
         asyncio.create_task(
-            background_download_insta_link(context, chat_id, link, destination="telegram")
+            background_download_insta_link(
+                context, chat_id, link, destination="telegram"
+            )
         )
 
     elif data.startswith("ig_dl_cloud_"):
