@@ -5,15 +5,23 @@ import os
 import time
 from urllib.parse import quote
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from dotenv import load_dotenv
+
 
 # محدودکننده برای جلوگیری از هنگ کردن سرور هنگام رندر همزمان صفحات سنگین
 SINGLEFILE_SEMAPHORE = asyncio.Semaphore(5)
+load_dotenv()
+
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
+
+# دریافت پروکسی از متغیر محیطی (مانند کد اینستاگرام شما)
+PROXY_URL = os.getenv("PROXY")
+PLAYWRIGHT_PROXY = {"server": PROXY_URL} if PROXY_URL else None
 
 
 def search_web(query: str, max_results: int = 10):
@@ -23,8 +31,10 @@ def search_web(query: str, max_results: int = 10):
 
     try:
         with sync_playwright() as p:
+            # اعمال پروکسی در اینجا
             browser = p.chromium.launch(
                 headless=True,
+                proxy=PLAYWRIGHT_PROXY,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
@@ -47,15 +57,14 @@ def search_web(query: str, max_results: int = 10):
                 }
             )
 
-            print(f"Searching web via Playwright: {search_url}")
+            print(f"Searching web via Playwright: {search_url} | Proxy: {PROXY_URL}")
             page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
             # اسکرول کوتاه برای لود شدن کامل نتایج
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(1000)
 
-            # استخراج نتایج جستجوی گوگل (تگ‌های a داخل div با کلاس g)
-            # ساختار گوگل معمولاً div.g است که داخل آن h3 برای عنوان و a برای لینک قرار دارد
+            # استخراج نتایج جستجوی گوگل
             search_results = page.locator("div.g").all()
 
             for result in search_results:
@@ -84,7 +93,7 @@ def search_web(query: str, max_results: int = 10):
     except Exception as e:
         print(f"Web Search Playwright error: {e}")
 
-    # اگر گوگل به خاطر ریکوئست‌ها بلاک کرد و نتیجه‌ای برنگشت، به عنوان فال‌بک می‌توانید از بینگ استفاده کنید
+    # اگر گوگل به خاطر ریکوئست‌ها بلاک کرد و نتیجه‌ای برنگشت
     if not results:
         print("Google returned no results, trying DuckDuckGo HTML...")
         results = _fallback_search(query, max_results)
@@ -99,8 +108,11 @@ def _fallback_search(query: str, max_results: int = 10):
 
     try:
         with sync_playwright() as p:
+            # اعمال پروکسی در فال‌بک
             browser = p.chromium.launch(
-                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+                headless=True,
+                proxy=PLAYWRIGHT_PROXY,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
             )
             page = browser.new_page(user_agent=USER_AGENT)
             page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
@@ -114,9 +126,7 @@ def _fallback_search(query: str, max_results: int = 10):
                     if title_el.count() > 0:
                         title = title_el.text_content().strip()
                         url = title_el.get_attribute("href")
-                        # داک‌داک‌گو لینک‌ها را از طریق ریدایرکت خودش می‌فرستد، اما href واقعی را هم قرار می‌دهد
                         if url and url.startswith("//duckduckgo.com"):
-                            # استخراج لینک اصلی در صورت نیاز، یا استفاده مستقیم از لینک ریدایرکت
                             url = "https:" + url
                         results.append({"title": title, "url": url})
                 except:
@@ -131,8 +141,6 @@ def _fallback_search(query: str, max_results: int = 10):
 async def create_single_file(url, output_path):
     """اجرای غیرهمزمان ابزار SingleFile CLI"""
     async with SINGLEFILE_SEMAPHORE:
-        # استفاده از exec به جای shell برای جلوگیری از باگ‌های امنیتی (Shell Injection)
-        # و افزودن آرگومان‌های مرورگر برای اجرای بدون مشکل روی سرور
         command = [
             "single-file",
             '--browser-args=["--no-sandbox", "--disable-setuid-sandbox"]',
@@ -145,12 +153,10 @@ async def create_single_file(url, output_path):
         )
 
         try:
-            # اعمال تایم‌اوت 60 ثانیه‌ای
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60.0)
             if process.returncode == 0 and os.path.exists(output_path):
                 return True
             else:
-                # چاپ خطای احتمالی برای دیباگ راحت‌تر
                 err_msg = stderr.decode() if stderr else "Unknown Error"
                 print(f"SingleFile failed. Error: {err_msg}")
 

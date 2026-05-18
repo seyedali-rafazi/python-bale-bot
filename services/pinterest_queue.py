@@ -1,50 +1,67 @@
 # services/pinterest_queue.py
 
-from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync  # برای مخفی کردن اثر انگشت ربات
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+from typing import List
+
+from services.pinterest import search_pinterest_images
+
+# تعداد سرچ همزمان Pinterest
+PINTEREST_SEARCH_WORKERS = 4
+
+# تعداد worker واقعی
+_process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS)
+
+# queue اصلی سرچ‌ها
+search_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
 
 
-def search_web(query: str, max_results: int = 10):
-    results = []
-    # استفاده از بینگ به دلیل پایداری بیشتر در اتوماسیون
-    search_url = f"https://www.bing.com/search?q={quote(query)}"
+class PinterestJob:
+    def __init__(
+        self,
+        query: str,
+        max_results: int,
+        future: asyncio.Future,
+    ):
+        self.query = query
+        self.max_results = max_results
+        self.future = future
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+async def pinterest_worker(worker_id: int):
+    loop = asyncio.get_running_loop()
+
+    while True:
+        job: PinterestJob = await search_queue.get()
+
+        try:
+            print(f"[Pinterest Worker {worker_id}] searching: {job.query}")
+
+            data = await loop.run_in_executor(
+                _process_pool,
+                search_pinterest_images,
+                job.query,
+                job.max_results,
             )
-            page = context.new_page()
 
-            # اعمال حالت Stealth برای جلوگیری از شناسایی
-            stealth_sync(page)
+            if not job.future.done():
+                job.future.set_result(data)
 
-            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            print(f"Pinterest worker error: {e}")
 
-            # در بینگ، کلاس b_algo شامل نتایج جستجو است
-            # صبر می‌کنیم تا نتایج لود شوند
-            page.wait_for_selector(".b_algo", timeout=5000)
+            if not job.future.done():
+                job.future.set_exception(e)
 
-            search_results = page.locator(".b_algo").all()
+        finally:
+            search_queue.task_done()
 
-            for result in search_results:
-                if len(results) >= max_results:
-                    break
 
-                title_el = result.locator("h2 a").first
-                if title_el.count() > 0:
-                    title = title_el.text_content().strip()
-                    url = title_el.get_attribute("href")
-                    if url:
-                        results.append({"title": title, "url": url})
+async def start_pinterest_workers():
+    for i in range(PINTEREST_SEARCH_WORKERS):
+        asyncio.create_task(pinterest_worker(i + 1))
 
-            browser.close()
-
-    except Exception as e:
-        print(f"Search failed: {e}")
-
-    return results
+    print(f"✅ Started {PINTEREST_SEARCH_WORKERS} Pinterest workers")
 
 
 async def queued_pinterest_search(
