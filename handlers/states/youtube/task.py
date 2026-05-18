@@ -125,12 +125,12 @@ async def background_yt_download(
             # 2. چک کردن موجودی فضای ابری کاربر
             if destination == "server":
                 user_storage_mb = await get_available_cloud_mb(chat_id)
-                if user_storage_mb is None:
+                if user_storage_mb is None or user_storage_mb <= 0:
                     user_storage_mb = 0
 
                 estimated_size_mb = round(estimated_size / (1024 * 1024), 2)
 
-                if estimated_size_mb > user_storage_mb:
+                if user_storage_mb <= 0 or estimated_size_mb > user_storage_mb:
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=(
@@ -302,6 +302,35 @@ async def background_yt_download(
                             # =========================
 
                             if destination == "server":
+                                # =================================
+                                # چک فضای ابری قبل از آپلود ویدیو
+                                # =================================
+                                user_storage_mb = await get_available_cloud_mb(chat_id)
+                                if user_storage_mb is None or user_storage_mb <= 0:
+                                    user_storage_mb = 0
+
+                                # محاسبه کل حجم فایل‌های تقسیم‌شده
+                                total_video_size_mb = 0
+                                for file_path in result:
+                                    total_video_size_mb += round(
+                                        os.path.getsize(file_path) / (1024 * 1024), 2
+                                    )
+
+                                if user_storage_mb <= 0 or total_video_size_mb > user_storage_mb:
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text=(
+                                            f"❌ فضای ابری شما کافی نیست!\n\n"
+                                            f"حجم کل ویدیو: {total_video_size_mb} مگابایت\n"
+                                            f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                            f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                                        ),
+                                    )
+                                    await decrement_yt_downloads(chat_id)
+                                    return
+
+                                # =================================
+
                                 await context.bot.send_message(
                                     chat_id=chat_id,
                                     text="☁️ آپلود در فضای ابری ...",
@@ -449,6 +478,32 @@ async def background_yt_download(
                                 )
 
                                 if destination == "server":
+                                    # =====================================
+                                    # چک فضای ابری قبل از آپلود بکاپ
+                                    # =====================================
+                                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                                    if user_storage_mb is None or user_storage_mb <= 0:
+                                        user_storage_mb = 0
+
+                                    backup_size_mb = round(
+                                        backup_size / (1024 * 1024), 2
+                                    )
+
+                                    if user_storage_mb <= 0 or backup_size_mb > user_storage_mb:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=(
+                                                f"❌ فضای ابری شما کافی نیست!\n\n"
+                                                f"حجم فایل بکاپ: {backup_size_mb} مگابایت\n"
+                                                f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                                f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                                            ),
+                                        )
+                                        await decrement_yt_downloads(chat_id)
+                                        return
+
+                                    # =====================================
+
                                     progress_dict["is_finished"] = False
 
                                     updater_task = asyncio.create_task(
@@ -584,6 +639,32 @@ async def background_yt_download(
                             # =====================
 
                             if destination == "server":
+                                # =================================
+                                # چک فضای ابری قبل از آپلود صوت
+                                # =================================
+                                user_storage_mb = await get_available_cloud_mb(chat_id)
+                                if user_storage_mb is None or user_storage_mb <= 0:
+                                    user_storage_mb = 0
+
+                                audio_size_mb = round(
+                                    os.path.getsize(file_path) / (1024 * 1024), 2
+                                )
+
+                                if user_storage_mb <= 0 or audio_size_mb > user_storage_mb:
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text=(
+                                            f"❌ فضای ابری شما کافی نیست!\n\n"
+                                            f"حجم فایل صوتی: {audio_size_mb} مگابایت\n"
+                                            f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
+                                            f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
+                                        ),
+                                    )
+                                    await decrement_yt_downloads(chat_id)
+                                    return
+
+                                # =================================
+
                                 await context.bot.send_message(
                                     chat_id=chat_id,
                                     text="☁️ آپلود در سرور ابری...",
