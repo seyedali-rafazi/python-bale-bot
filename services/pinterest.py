@@ -5,7 +5,7 @@ import html
 from typing import List, Optional, Dict
 from urllib.parse import quote, urlparse
 
-# تغییر مهم: استفاده از نسخه sync به جای async
+# Sync API ONLY - must not be used in asyncio loop!
 from playwright.sync_api import (
     sync_playwright,
     TimeoutError as PlaywrightTimeoutError,

@@ -1,20 +1,53 @@
 # services/pinterest_queue.py
 
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import List
 
 from services.pinterest import search_pinterest_images
 
 # تعداد سرچ همزمان Pinterest (کاهش یافته برای کاهش مصرف RAM)
-# هر worker با یک process اجرا می‌شود و اکنون یک browser shared دارد
 PINTEREST_SEARCH_WORKERS = 1
 
-# تعداد worker واقعی
-_process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS)
+# Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid asyncio context issues
+# ThreadPoolExecutor runs in threads, not processes, but avoids Playwright asyncio conflicts
+_process_pool = ThreadPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS, thread_name_prefix="pinterest-worker")
 
-# queue اصلی سرچ‌ها (queue size را نیز کاهش دادیم)
+# queue اصلی سرچ‌ها
 search_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+
+def _isolated_search(query: str, max_results: int) -> List[str]:
+    """
+    Run Pinterest search in complete isolation from asyncio.
+    This wrapper ensures Playwright sync API runs cleanly without asyncio conflicts.
+    
+    Called from ThreadPoolExecutor to isolate from main asyncio loop.
+    """
+    try:
+        # Import asyncio here (not at module level) to avoid conflicts
+        import asyncio
+        import sys
+        
+        # Try to detect if we're somehow in an asyncio context
+        try:
+            loop = asyncio.get_running_loop()
+            # If we get here, there's a loop running (shouldn't happen in thread)
+            print(f"⚠️ WARNING: Asyncio loop detected in search thread: {loop}")
+        except RuntimeError as e:
+            # Expected: No loop running in this thread
+            pass
+        
+        # Now perform the search safely
+        result = search_pinterest_images(query, max_results)
+        return result
+    
+    except Exception as e:
+        print(f"❌ Error in isolated search for '{query}': {e}")
+        import traceback
+        traceback.print_exc()
+        # Return empty list instead of raising to prevent handler crash
+        return []
 
 
 class PinterestJob:
@@ -38,9 +71,11 @@ async def pinterest_worker(worker_id: int):
         try:
             print(f"[Pinterest Worker {worker_id}] searching: {job.query}")
 
+            # Use _isolated_search wrapper instead of direct call
+            # This ensures Playwright sync API runs cleanly in thread context
             data = await loop.run_in_executor(
                 _process_pool,
-                search_pinterest_images,
+                _isolated_search,
                 job.query,
                 job.max_results,
             )
