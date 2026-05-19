@@ -177,10 +177,33 @@ async def process_pinterest_search(
 ):
 
     try:
-        image_urls = await queued_pinterest_search(
-            text,
-            max_results=40,
+        # Add 60-second timeout for search (Pinterest often slow)
+        image_urls = await asyncio.wait_for(
+            queued_pinterest_search(
+                text,
+                max_results=40,
+            ),
+            timeout=60.0
         )
+
+    except asyncio.TimeoutError:
+        print(f"Pinterest search TIMEOUT for query: {text}")
+
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=loading_message_id,
+            )
+        except Exception:
+            pass
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⏱️ جستجو بیش از حد طول کشید. لطفا دوباره تلاش کنید",
+        )
+
+        set_state(chat_id, "")
+        return
 
     except Exception as e:
         print(f"Pinterest search error: {e}")

@@ -70,54 +70,116 @@ class PinterestService:
 
     def _load_search_page(self, query: str) -> Optional[str]:
         search_url = f"https://www.pinterest.com/search/pins/?q={quote(query)}"
-
-        try:
-            # Use browser manager to reuse browser instances (reduces RAM usage)
-            browser_manager = get_browser_manager()
-            context = browser_manager.new_context(self.user_agent)
-
+        max_retries = 2
+        
+        for attempt in range(max_retries):
             try:
-                page = context.new_page()
-
-                page.set_extra_http_headers(
-                    {
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://www.pinterest.com/",
-                    }
-                )
-
-                print(f"Pinterest Playwright opening: {search_url}")
-
-                page.goto(
-                    search_url,
-                    wait_until="domcontentloaded",
-                    timeout=45000,
-                )
+                # Use browser manager to reuse browser instances (reduces RAM usage)
+                browser_manager = get_browser_manager()
+                context = browser_manager.new_context(self.user_agent)
+                page = None
 
                 try:
-                    page.wait_for_timeout(3000)
+                    page = context.new_page()
 
-                    for _ in range(4):
-                        page.mouse.wheel(0, 2500)
-                        page.wait_for_timeout(1500)
+                    page.set_extra_http_headers(
+                        {
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Referer": "https://www.pinterest.com/",
+                        }
+                    )
 
-                except Exception:
-                    pass
+                    print(f"Pinterest Playwright opening: {search_url} (attempt {attempt + 1}/{max_retries})")
 
-                content = page.content()
+                    # Reduced timeout: 30s max for page load
+                    page.goto(
+                        search_url,
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
 
-                return content
+                    try:
+                        # Wait for images to load
+                        page.wait_for_timeout(2000)
 
-            finally:
-                # Always close the context to free resources
-                context.close()
+                        # Scroll to load more images (with timeout per scroll)
+                        for scroll_attempt in range(4):
+                            try:
+                                page.mouse.wheel(0, 2500)
+                                page.wait_for_timeout(1000)
+                            except Exception as scroll_err:
+                                print(f"Scroll attempt {scroll_attempt} failed: {scroll_err}")
+                                break
 
-        except PlaywrightTimeoutError:
-            print(f"Pinterest Playwright timeout for query={query}")
-            return None
-        except Exception as e:
-            print(f"Pinterest Playwright error for query={query}: {e}")
-            return None
+                    except Exception as wait_err:
+                        print(f"Wait/scroll error (non-critical): {wait_err}")
+                        # Continue anyway - we might still have some content
+
+                    content = page.content()
+                    
+                    # Cleanup
+                    try:
+                        page.close()
+                    except:
+                        pass
+                    
+                    try:
+                        context.close()
+                    except:
+                        pass
+
+                    return content
+
+                except PlaywrightTimeoutError as timeout_err:
+                    print(f"Pinterest timeout for query={query} (attempt {attempt + 1}): {timeout_err}")
+                    
+                    # Cleanup on timeout
+                    if page:
+                        try:
+                            page.close()
+                        except:
+                            pass
+                    try:
+                        context.close()
+                    except:
+                        pass
+                    
+                    # Retry on timeout
+                    if attempt < max_retries - 1:
+                        print(f"Retrying Pinterest search for: {query}")
+                        continue
+                    else:
+                        return None
+                
+                except Exception as err:
+                    print(f"Pinterest error for query={query} (attempt {attempt + 1}): {err}")
+                    
+                    # Cleanup on error
+                    if page:
+                        try:
+                            page.close()
+                        except:
+                            pass
+                    try:
+                        context.close()
+                    except:
+                        pass
+                    
+                    # Retry on error
+                    if attempt < max_retries - 1:
+                        print(f"Retrying Pinterest search for: {query}")
+                        continue
+                    else:
+                        return None
+
+            except Exception as outer_err:
+                print(f"Pinterest outer error for query={query}: {outer_err}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    return None
+        
+        return None
 
     def _extract_pinimg_urls(self, text: str) -> List[str]:
         patterns = [
