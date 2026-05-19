@@ -147,7 +147,7 @@ async def background_download_insta_link(
 
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
+                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n⏳ لینک دانلود تا 3 ساعت معتبر است.\n\n🔗 [لینک دانلود]({s3_url})",
                             parse_mode="Markdown",
                         )
                         try:
@@ -275,7 +275,7 @@ async def background_download_insta_last_post(
 
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
+                            text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n⏳ لینک دانلود تا 3 ساعت معتبر است.\n\n🔗 [لینک دانلود]({s3_url})",
                             parse_mode="Markdown",
                         )
                         try:

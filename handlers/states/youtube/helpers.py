@@ -2,11 +2,12 @@ import asyncio
 import re
 from core.database import is_vip, get_yt_downloads, save_cached_video
 from .config import STORAGE_CHANNEL_ID
+from core.limits import get_limit
 
 
 async def check_user_limit(chat_id: str) -> bool:
     vip_status = await is_vip(chat_id)
-    limit = 18 if vip_status else 1
+    limit = get_limit("youtube_download", vip_status)
     usage = await get_yt_downloads(chat_id)
     return usage < limit
 

@@ -386,7 +386,7 @@ async def background_yt_download(
 
                                     await context.bot.send_message(
                                         chat_id=chat_id,
-                                        text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد.\n\n📉 حجم کسر شده: {total_size_mb} مگابایت\n\n{links_text}",
+                                        text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد.\n\n📉 حجم کسر شده: {total_size_mb} مگابایت\n⏳ تاریخ انقضای لینک‌ها: 3 ساعت\n\n{links_text}",
                                         parse_mode="Markdown",
                                     )
 

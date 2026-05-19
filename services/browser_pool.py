@@ -8,9 +8,10 @@ import asyncio
 from typing import Optional
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+
 class BrowserPool:
     """Manages a pool of reusable browser instances with proper resource management."""
-    
+
     def __init__(self, max_browsers: int = 2, max_pages_per_browser: int = 3):
         """
         Args:
@@ -20,22 +21,20 @@ class BrowserPool:
         self.max_browsers = max_browsers
         self.max_pages_per_browser = max_pages_per_browser
         self.browsers: list[Browser] = []
-        self.page_semaphore = asyncio.Semaphore(
-            max_browsers * max_pages_per_browser
-        )
+        self.page_semaphore = asyncio.Semaphore(max_browsers * max_pages_per_browser)
         self._playwright = None
         self._lock = asyncio.Lock()
         self._current_browser_idx = 0
-    
+
     async def _ensure_initialized(self):
         """Initialize Playwright if needed."""
         if self._playwright is None:
             self._playwright = sync_playwright().__enter__()
-    
+
     async def _create_browser(self) -> Browser:
         """Create a new browser instance with memory-optimized settings."""
         await self._ensure_initialized()
-        
+
         browser = self._playwright.chromium.launch(
             headless=True,
             args=[
@@ -50,7 +49,7 @@ class BrowserPool:
             ],
         )
         return browser
-    
+
     async def get_browser(self) -> Browser:
         """Get an available browser instance, creating one if needed."""
         async with self._lock:
@@ -58,18 +57,20 @@ class BrowserPool:
             if len(self.browsers) < self.max_browsers:
                 browser = await self._create_browser()
                 self.browsers.append(browser)
-                print(f"✅ Created browser instance ({len(self.browsers)}/{self.max_browsers})")
+                print(
+                    f"✅ Created browser instance ({len(self.browsers)}/{self.max_browsers})"
+                )
                 return browser
             else:
                 # Cycle through existing browsers
                 browser = self.browsers[self._current_browser_idx % len(self.browsers)]
                 self._current_browser_idx += 1
                 return browser
-    
+
     async def create_context(self, user_agent: str) -> BrowserContext:
         """Create a new context (tab) in an available browser."""
         browser = await self.get_browser()
-        
+
         context = browser.new_context(
             user_agent=user_agent,
             locale="en-US",
@@ -77,7 +78,7 @@ class BrowserPool:
             device_scale_factor=1,
         )
         return context
-    
+
     async def close_all(self):
         """Close all browser instances."""
         async with self._lock:
