@@ -11,6 +11,8 @@ from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
+from services.playwright_browser_manager import get_browser_manager
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -70,23 +72,11 @@ class PinterestService:
         search_url = f"https://www.pinterest.com/search/pins/?q={quote(query)}"
 
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                    ],
-                )
+            # Use browser manager to reuse browser instances (reduces RAM usage)
+            browser_manager = get_browser_manager()
+            context = browser_manager.new_context(self.user_agent)
 
-                context = browser.new_context(
-                    user_agent=self.user_agent,
-                    locale="en-US",
-                    viewport={"width": 1400, "height": 2200},
-                    device_scale_factor=1,
-                )
-
+            try:
                 page = context.new_page()
 
                 page.set_extra_http_headers(
@@ -116,10 +106,11 @@ class PinterestService:
 
                 content = page.content()
 
-                context.close()
-                browser.close()
-
                 return content
+
+            finally:
+                # Always close the context to free resources
+                context.close()
 
         except PlaywrightTimeoutError:
             print(f"Pinterest Playwright timeout for query={query}")

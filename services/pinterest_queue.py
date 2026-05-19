@@ -6,14 +6,15 @@ from typing import List
 
 from services.pinterest import search_pinterest_images
 
-# تعداد سرچ همزمان Pinterest
-PINTEREST_SEARCH_WORKERS = 4
+# تعداد سرچ همزمان Pinterest (کاهش یافته برای کاهش مصرف RAM)
+# هر worker با یک process اجرا می‌شود و اکنون یک browser shared دارد
+PINTEREST_SEARCH_WORKERS = 1
 
 # تعداد worker واقعی
 _process_pool = ProcessPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS)
 
-# queue اصلی سرچ‌ها
-search_queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
+# queue اصلی سرچ‌ها (queue size را نیز کاهش دادیم)
+search_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
 
 
 class PinterestJob:
@@ -55,6 +56,8 @@ async def pinterest_worker(worker_id: int):
 
         finally:
             search_queue.task_done()
+            # Add small delay between searches to prevent overwhelming system
+            await asyncio.sleep(0.5)
 
 
 async def start_pinterest_workers():
