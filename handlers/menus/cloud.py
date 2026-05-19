@@ -30,17 +30,10 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
 
         if cloud_stats:
             available_mb = cloud_stats["total_quota"] - cloud_stats["used_quota"]
-            # Round to nearest 0.5 GB for cleaner display
-            available_gb = round(available_mb / 1024 * 2) / 2
-            total_gb = round(cloud_stats["total_quota"] / 1024 * 2) / 2
-            used_gb = round(cloud_stats["used_quota"] / 1024 * 2) / 2
+            total_mb = cloud_stats["total_quota"]
+            used_mb = cloud_stats["used_quota"]
 
-            # Create usage bar
-            usage_percent = (
-                (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100)
-                if cloud_stats["total_quota"] > 0
-                else 0
-            )
+            usage_percent = (used_mb / total_mb * 100) if total_mb > 0 else 0
             filled = int((usage_percent / 100) * 10)
             bar = "█" * filled + "░" * (10 - filled)
 
@@ -49,9 +42,9 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
 
 📊 **آمار ذخیره‌سازی:**
 📌 فایل‌های آپلود شده: **{cloud_stats["file_count"]}** فایل
-💾 حجم استفاده شده: **{used_gb:.1f} GB**
-📈 حجم کل: **{total_gb:.1f} GB**
-⚡ فضای در دسترس: **{available_gb:.1f} GB**
+💾 حجم استفاده شده: **{used_mb} مگابایت**
+📈 حجم کل: **{total_mb} مگابایت**
+⚡ فضای در دسترس: **{available_mb} مگابایت**
 
 میزان استفاده: [{bar}] {usage_percent:.1f}%
 
@@ -65,13 +58,31 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
         ]
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            cloud_text, reply_markup=reply_markup, parse_mode="Markdown"
-        )
+
+        if update.callback_query:
+            query = update.callback_query
+            await query.answer()
+            await query.edit_message_text(
+                cloud_text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown",
+            )
+        elif update.message:
+            await update.message.reply_text(
+                cloud_text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown",
+            )
 
     except Exception as e:
         print(f"Error in cloud storage menu: {e}")
-        await update.message.reply_text("❌ خطایی در بارگذاری منوی ابری رخ داد.")
+
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text(
+                "❌ خطایی در بارگذاری منوی ابری رخ داد."
+            )
+        elif update.message:
+            await update.message.reply_text("❌ خطایی در بارگذاری منوی ابری رخ داد.")
 
 
 async def btn_buy_cloud_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
