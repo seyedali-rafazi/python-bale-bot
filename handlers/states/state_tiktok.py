@@ -21,7 +21,7 @@ from core.limits import get_limit
 from services.zip_utils import build_zip_and_split
 
 
-STORAGE_CHANNEL_ID = "@digitiktoksection"
+STORAGE_CHANNEL_ID = "@digittt"
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 
