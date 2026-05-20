@@ -20,6 +20,14 @@ import asyncio
 import aiosqlite
 from core.database import DB_NAME
 from core.database import get_setting, set_setting
+from core.database.yt_blacklist import (
+    add_channel_blacklist,
+    remove_channel_blacklist,
+    list_channel_blacklist,
+    add_blocked_word,
+    remove_blocked_word,
+    list_blocked_words,
+)
 from core.database.youtube import (
     count_cache_needing_metadata,
     backfill_youtube_cache_metadata,
@@ -406,3 +414,92 @@ async def cmd_give_5gb_vips(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ خطایی رخ داد:\n`{str(e)}`")
+
+
+async def cmd_channel_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "📋 **بلک‌لیست کانال یوتیوب**\n\n"
+            "`/channelblacklist نامکانال` — افزودن\n"
+            "`/channelblacklist remove نامکانال` — حذف\n"
+            "`/channelblacklist list` — لیست"
+        )
+        return
+
+    action = args[0].lower()
+    if action == "list":
+        rows = await list_channel_blacklist()
+        if not rows:
+            await update.message.reply_text("📭 بلک‌لیست کانال خالی است.")
+            return
+        lines = ["🚫 **کانال‌های بلک‌لیست:**\n"]
+        for r in rows:
+            lines.append(f"• `{r['display_name']}` (`{r['channel_key']}`)")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if action in ("remove", "del", "delete"):
+        if len(args) < 2:
+            await update.message.reply_text("❌ نام کانال را بنویسید.")
+            return
+        ok = await remove_channel_blacklist(" ".join(args[1:]))
+        await update.message.reply_text(
+            "✅ از بلک‌لیست حذف شد." if ok else "❌ در بلک‌لیست نبود."
+        )
+        return
+
+    channel = " ".join(args)
+    if await add_channel_blacklist(channel):
+        await update.message.reply_text(f"✅ کانال `{channel}` به بلک‌لیست اضافه شد.")
+    else:
+        await update.message.reply_text("❌ نام کانال نامعتبر است.")
+
+
+async def cmd_blockword(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "📋 **کلمات ممنوع جستجو**\n\n"
+            "`/blockword کلمه` — افزودن\n"
+            "`/blockword remove کلمه` — حذف\n"
+            "`/blockword list` — لیست"
+        )
+        return
+
+    action = args[0].lower()
+    if action == "list":
+        rows = await list_blocked_words()
+        if not rows:
+            await update.message.reply_text("📭 لیست خالی است.")
+            return
+        words = [f"• `{r['word']}`" for r in rows[:80]]
+        extra = f"\n\n... و {len(rows) - 80} مورد دیگر" if len(rows) > 80 else ""
+        await update.message.reply_text(
+            "🚫 **کلمات ممنوع:**\n" + "\n".join(words) + extra
+        )
+        return
+
+    if action in ("remove", "del", "delete"):
+        if len(args) < 2:
+            await update.message.reply_text("❌ کلمه را بنویسید.")
+            return
+        ok = await remove_blocked_word(" ".join(args[1:]))
+        await update.message.reply_text(
+            "✅ حذف شد." if ok else "❌ در لیست نبود."
+        )
+        return
+
+    word = " ".join(args)
+    if await add_blocked_word(word):
+        await update.message.reply_text(f"✅ کلمه به لیست ممنوع اضافه شد.")
+    else:
+        await update.message.reply_text("❌ کلمه نامعتبر است (حداقل ۲ حرف).")

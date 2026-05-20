@@ -188,6 +188,26 @@ async def init_db():
 
     await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")
 
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS yt_channel_blacklist (
+            channel_key TEXT PRIMARY KEY,
+            display_name TEXT,
+            added_at TEXT
+        )
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS yt_blocked_words (
+            word TEXT PRIMARY KEY,
+            added_at TEXT
+        )
+    """)
+
+    from core.yt_moderation import get_default_blocked_words_seed
+    from .yt_blacklist import seed_default_blocked_words
+
+    await seed_default_blocked_words(get_default_blocked_words_seed())
+
     await conn.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('youtube_enabled', '1')"
     )

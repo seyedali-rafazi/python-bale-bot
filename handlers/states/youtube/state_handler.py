@@ -11,7 +11,13 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_YT_VIDEO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
-from services.youtube import search_yt_videos
+from services.youtube import search_yt_videos, get_video_info
+from core.yt_moderation import (
+    MSG_BLOCKED_CHANNEL,
+    MSG_BLOCKED_SEARCH,
+    is_search_query_blocked,
+    check_channel_allowed,
+)
 from .helpers import check_user_limit
 
 
@@ -25,6 +31,9 @@ async def handle_youtube_state(
 ):
     if step == "waiting_yt_last5_channel":
         channel = text.replace("@", "")
+        if not await check_channel_allowed(channel):
+            await update.message.reply_text(MSG_BLOCKED_CHANNEL)
+            return
         url = f"https://www.youtube.com/@{channel}/videos"
         await update.message.reply_text("⏳ در حال دریافت لیست ویدیوها...")
         results = await asyncio.to_thread(search_yt_videos, url, 5)
@@ -52,6 +61,9 @@ async def handle_youtube_state(
         return
 
     elif step == "waiting_yt_global_search":
+        if await is_search_query_blocked(text):
+            await update.message.reply_text(MSG_BLOCKED_SEARCH)
+            return
         await update.message.reply_text("⏳ در حال جستجو...")
         results = await asyncio.to_thread(search_yt_videos, text, 10)
 
@@ -81,6 +93,9 @@ async def handle_youtube_state(
         return
 
     elif step == "waiting_yt_ch_search_name":
+        if not await check_channel_allowed(text):
+            await update.message.reply_text(MSG_BLOCKED_CHANNEL)
+            return
         await asyncio.to_thread(
             set_state, chat_id, "waiting_yt_ch_search_query", channel=text
         )
@@ -92,6 +107,10 @@ async def handle_youtube_state(
     elif step == "waiting_yt_ch_search_query":
         channel = state_data.get("channel", "").replace("@", "")
         query = text
+
+        if await is_search_query_blocked(query):
+            await update.message.reply_text(MSG_BLOCKED_SEARCH)
+            return
 
         await update.message.reply_text("⏳ در حال جستجو در کانال...")
         search_query = f"{channel} {query}"
@@ -160,6 +179,11 @@ async def handle_youtube_state(
     elif step == "waiting_yt_link":
         if "youtube.com" not in text and "youtu.be" not in text:
             await update.message.reply_text("❌ لینک نامعتبر است.")
+            return
+
+        info = await asyncio.to_thread(get_video_info, text)
+        if not await check_video_info_allowed(info):
+            await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
 
         dl_format = state_data.get("format")

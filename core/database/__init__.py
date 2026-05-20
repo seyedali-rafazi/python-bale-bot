@@ -39,6 +39,14 @@ from .youtube import (
     purge_all_youtube_cache,
     drop_legacy_user_youtube_archive_table,
 )
+from .yt_blacklist import (
+    add_channel_blacklist,
+    remove_channel_blacklist,
+    list_channel_blacklist,
+    add_blocked_word,
+    remove_blocked_word,
+    list_blocked_words,
+)
 from .pinterest import get_pinterest_downloads, increment_pinterest_downloads
 from .tiktok import (
     get_tt_downloads,

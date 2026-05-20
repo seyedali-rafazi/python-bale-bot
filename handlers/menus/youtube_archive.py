@@ -37,6 +37,13 @@ from core.database import (
     ARCHIVE_LIMIT_VIP,
 )
 from core.database.vip import is_vip
+from core.yt_moderation import (
+    MSG_BLOCKED_CHANNEL,
+    MSG_BLOCKED_SEARCH,
+    check_channel_allowed,
+    is_search_query_blocked,
+)
+from core.database.yt_blacklist import is_channel_blacklisted
 from handlers.ensure_membership import ensure_membership
 
 
@@ -247,6 +254,9 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.answer("کانال یافت نشد.")
             return
         channel_name = channels[index]["channel_name"]
+        if not await check_channel_allowed(channel_name):
+            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+            return
         context.user_data["ytarc_channel"] = channel_name
         await _show_channel_videos(update, context, channel_name, page=0)
         return
@@ -265,6 +275,13 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         entry = await get_archive_entry(archive_id)
         if not entry:
             await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
+            return
+
+        if await is_channel_blacklisted(entry.get("channel_name") or ""):
+            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+            return
+        if await is_search_query_blocked(entry.get("title") or ""):
+            await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
             return
 
         allowed, used, limit = await can_user_fetch_from_archive(user_id)

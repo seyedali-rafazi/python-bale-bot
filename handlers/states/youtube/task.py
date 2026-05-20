@@ -35,6 +35,10 @@ from .config import (
     MAX_NORMAL_DOWNLOADS,
     MAX_VIP_DOWNLOADS,
 )
+from core.yt_moderation import (
+    MSG_BLOCKED_CHANNEL,
+    check_video_info_allowed,
+)
 from .helpers import (
     extract_yt_id,
     send_cached_files,
@@ -72,6 +76,14 @@ async def background_yt_download(
         cached_files = await get_cached_video(cache_key)
 
         if cached_files:
+            info_cached = await asyncio.to_thread(get_video_info, url)
+            if not await check_video_info_allowed(info_cached):
+                await context.bot.send_message(
+                    chat_id=chat_id, text=MSG_BLOCKED_CHANNEL
+                )
+                await decrement_yt_downloads(chat_id)
+                return
+
             await send_cached_files(
                 context,
                 chat_id,
@@ -80,8 +92,6 @@ async def background_yt_download(
             )
 
             await increment_yt_video_view(cache_key)
-
-            info_cached = await asyncio.to_thread(get_video_info, url)
             await save_to_global_cache(
                 cache_key,
                 video_id,
@@ -97,6 +107,11 @@ async def background_yt_download(
     # =========================================
 
     info = await asyncio.to_thread(get_video_info, url)
+
+    if not await check_video_info_allowed(info):
+        await context.bot.send_message(chat_id=chat_id, text=MSG_BLOCKED_CHANNEL)
+        await decrement_yt_downloads(chat_id)
+        return
 
     # =========================================
     # چک سایز قبل دانلود

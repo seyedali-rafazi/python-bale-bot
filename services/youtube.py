@@ -108,7 +108,12 @@ def get_video_info(url: str):
                 "title": data.get("title", "بدون عنوان"),
                 "thumbnail": data.get("thumbnail"),
                 "duration": data.get("duration", 0),
-                "uploader": data.get("uploader", "ناشناس"),
+                "uploader": data.get("uploader") or data.get("channel") or "ناشناس",
+                "channel": data.get("channel"),
+                "channel_id": data.get("channel_id"),
+                "uploader_id": data.get("channel_id") or data.get("uploader_id"),
+                "channel_url": data.get("channel_url") or data.get("uploader_url"),
+                "uploader_url": data.get("uploader_url"),
             }
 
     except Exception as e:

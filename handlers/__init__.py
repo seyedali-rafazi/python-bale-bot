@@ -79,6 +79,8 @@ from core.admin import (
     cmd_give_5gb_vips,
     cmd_fix_yt_cache,
     cmd_clean_yt_cache,
+    cmd_channel_blacklist,
+    cmd_blockword,
 )
 import os
 from dotenv import load_dotenv
@@ -136,6 +138,10 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("give5gbvips", cmd_give_5gb_vips))
     application.add_handler(CommandHandler("fixytcache", cmd_fix_yt_cache))
     application.add_handler(CommandHandler("cleanytcache", cmd_clean_yt_cache))
+    application.add_handler(
+        CommandHandler("channelblacklist", cmd_channel_blacklist)
+    )
+    application.add_handler(CommandHandler("blockword", cmd_blockword))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
