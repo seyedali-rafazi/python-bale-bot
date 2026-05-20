@@ -43,11 +43,9 @@ class BrowserPool:
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-gpu",  # Reduce memory usage
-                "--disable-web-resources",
+                "--disable-gpu",
                 "--disable-extensions",
-                "--single-process",  # Use single process to reduce overhead
-                "--mute-audio",  # Disable audio
+                "--mute-audio",
             ],
         )
         return browser
@@ -107,7 +105,7 @@ async def get_browser_pool() -> BrowserPool:
     """Get or create the global browser pool."""
     global _browser_pool
     if _browser_pool is None:
-        _browser_pool = BrowserPool(max_browsers=2, max_pages_per_browser=3)
+        _browser_pool = BrowserPool(max_browsers=1, max_pages_per_browser=2)
     return _browser_pool
 
 

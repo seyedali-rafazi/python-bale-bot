@@ -14,7 +14,7 @@ Override with env: HEAVY_CHROMIUM_MAX_CONCURRENT (default 2).
 import asyncio
 import os
 
-_DEFAULT_MAX = 2
+_DEFAULT_MAX = 1
 _max = max(1, int(os.getenv("HEAVY_CHROMIUM_MAX_CONCURRENT", str(_DEFAULT_MAX))))
 
 heavy_chromium_semaphore = asyncio.Semaphore(_max)

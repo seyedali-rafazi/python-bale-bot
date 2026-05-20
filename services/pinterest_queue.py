@@ -44,7 +44,7 @@ async def pinterest_worker(worker_id: int):
 
         finally:
             search_queue.task_done()
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
 
 
 async def start_pinterest_workers():

@@ -25,6 +25,7 @@ from services.http_client import (
 from services.pinterest_queue import (
     start_pinterest_workers,
 )
+from services.playwright_browser_manager import get_browser_manager
 
 from services.ai import (
     init_ai_client,
@@ -116,6 +117,14 @@ async def on_startup(app):
     logger.info("✅ AI Client initialized")
 
 
+async def on_shutdown(app):
+    try:
+        await get_browser_manager().cleanup()
+        logger.info("✅ Playwright browser cleaned up on shutdown")
+    except Exception:
+        logger.exception("Playwright cleanup on shutdown failed")
+
+
 # =========================================================
 # MAIN
 # =========================================================
@@ -130,6 +139,7 @@ def main():
         .base_file_url("https://tapi.bale.ai/file/bot")
         .concurrent_updates(True)
         .post_init(on_startup)
+        .post_shutdown(on_shutdown)
         .build()
     )
 

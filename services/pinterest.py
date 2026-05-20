@@ -9,8 +9,10 @@ from urllib.parse import quote, urlparse
 # استفاده از نسخه ناهمگام (Async) پلای‌رایت
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-# استفاده از استخر مرورگر ناهمگام جدید به جای منیجر همگام قدیمی
-from services.browser_pool import get_browser_pool
+from services.playwright_browser_manager import get_browser_manager
+
+# حجم HTML پینترست بعد از اسکرول می‌تواند چند مگابایت باشد؛ regex روی کل صفحه CPU/RAM می‌سوزاند
+_MAX_HTML_FOR_PARSE = 1_500_000
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -29,11 +31,9 @@ class PinterestService:
 
         # Recovery: HTML می‌آید ولی پین‌های قابل استخراج نیست (صفحه چالش/بلاک)
         if html_text and "i.pinimg.com" not in html_text:
-            # در سیستم جدید، در صورت بلاک شدن بهتر است مرورگرها را ببندیم تا ری‌استارت شوند
-            pool = await get_browser_pool()
-            await pool.close_all()
+            await get_browser_manager().force_restart()
             await asyncio.sleep(2.0)
-            html_text = await self._load_search_page(query)
+            html_text = await self._load_search_page(query, allow_restart=False)
 
         if not html_text:
             return []
@@ -78,119 +78,86 @@ class PinterestService:
         return results
 
     # این متد به دلیل تعامل با Playwright باید async باشد
-    async def _load_search_page(self, query: str) -> Optional[str]:
+    async def _load_search_page(
+        self, query: str, *, allow_restart: bool = True
+    ) -> Optional[str]:
         search_url = f"https://www.pinterest.com/search/pins/?q={quote(query)}"
-        max_retries = 3
+        max_retries = 2
+        manager = get_browser_manager()
 
         for attempt in range(max_retries):
+            context = None
+            page = None
             try:
-                pool = await get_browser_pool()
-                # استفاده از context و page با await
-                context = await pool.create_context(self.user_agent)
-                page = None
+                context = await manager.new_context(self.user_agent)
+                page = await context.new_page()
+
+                await page.set_extra_http_headers(
+                    {
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://www.pinterest.com/",
+                    }
+                )
+
+                print(
+                    f"Pinterest Playwright opening: {search_url} "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+
+                await page.goto(
+                    search_url,
+                    wait_until="domcontentloaded",
+                    timeout=35000,
+                )
 
                 try:
-                    page = await context.new_page()
+                    await page.wait_for_timeout(1500)
+                    for scroll_attempt in range(2):
+                        await page.mouse.wheel(0, 2000)
+                        await page.wait_for_timeout(800)
+                except Exception as wait_err:
+                    print(f"Wait/scroll error (non-critical): {wait_err}")
 
-                    await page.set_extra_http_headers(
-                        {
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Referer": "https://www.pinterest.com/",
-                        }
-                    )
+                content = await page.content()
+                if len(content) > _MAX_HTML_FOR_PARSE:
+                    content = content[:_MAX_HTML_FOR_PARSE]
+                return content
 
-                    print(
-                        f"Pinterest Playwright opening: {search_url} (attempt {attempt + 1}/{max_retries})"
-                    )
+            except PlaywrightTimeoutError as timeout_err:
+                print(
+                    f"Pinterest timeout for query={query} "
+                    f"(attempt {attempt + 1}): {timeout_err}"
+                )
+                if attempt < max_retries - 1:
+                    if allow_restart:
+                        await manager.force_restart()
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                return None
 
-                    await page.goto(
-                        search_url,
-                        wait_until="domcontentloaded",
-                        timeout=45000,
-                    )
+            except Exception as err:
+                print(
+                    f"Pinterest error for query={query} "
+                    f"(attempt {attempt + 1}): {err}"
+                )
+                if attempt < max_retries - 1:
+                    if allow_restart:
+                        await manager.force_restart()
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                return None
 
-                    try:
-                        await page.wait_for_timeout(2000)
-
-                        for scroll_attempt in range(4):
-                            try:
-                                await page.mouse.wheel(0, 2500)
-                                await page.wait_for_timeout(1000)
-                            except Exception as scroll_err:
-                                print(
-                                    f"Scroll attempt {scroll_attempt} failed: {scroll_err}"
-                                )
-                                break
-
-                    except Exception as wait_err:
-                        print(f"Wait/scroll error (non-critical): {wait_err}")
-
-                    content = await page.content()
-
+            finally:
+                if page:
                     try:
                         await page.close()
                     except Exception:
                         pass
-
+                if context:
                     try:
                         await context.close()
                     except Exception:
                         pass
-
-                    return content
-
-                except PlaywrightTimeoutError as timeout_err:
-                    print(
-                        f"Pinterest timeout for query={query} (attempt {attempt + 1}): {timeout_err}"
-                    )
-
-                    if page:
-                        try:
-                            await page.close()
-                        except Exception:
-                            pass
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
-
-                    if attempt < max_retries - 1:
-                        await pool.close_all()
-                        await asyncio.sleep(1.5 * (attempt + 1))
-                        print(f"Retrying Pinterest search for: {query}")
-                        continue
-                    return None
-
-                except Exception as err:
-                    print(
-                        f"Pinterest error for query={query} (attempt {attempt + 1}): {err}"
-                    )
-
-                    if page:
-                        try:
-                            await page.close()
-                        except Exception:
-                            pass
-                    try:
-                        await context.close()
-                    except Exception:
-                        pass
-
-                    if attempt < max_retries - 1:
-                        await pool.close_all()
-                        await asyncio.sleep(1.5 * (attempt + 1))
-                        print(f"Retrying Pinterest search for: {query}")
-                        continue
-                    return None
-
-            except Exception as outer_err:
-                print(f"Pinterest outer error for query={query}: {outer_err}")
-                if attempt < max_retries - 1:
-                    pool = await get_browser_pool()
-                    await pool.close_all()
-                    await asyncio.sleep(1.5 * (attempt + 1))
-                    continue
-                return None
 
         return None
 

@@ -15,11 +15,11 @@ class PlaywrightBrowserManager:
         self._browser: Optional[Browser] = None
         self._playwright: Optional[Playwright] = None
         self._last_context_time = time.time()
-        self._context_timeout = 300
-        self._init_lock = asyncio.Lock()  # تغییر به Lock ناهمگام
+        self._context_timeout = 120
+        self._init_lock = asyncio.Lock()
 
         self._usage_count = 0
-        self._max_usages_before_restart = 100
+        self._max_usages_before_restart = 20
 
     def _is_browser_alive(self) -> bool:
         try:

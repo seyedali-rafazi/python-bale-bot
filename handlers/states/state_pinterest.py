@@ -35,7 +35,7 @@ from services.pinterest_queue import (
 # =========================
 
 # هم‌زمانی بالا باعث 429/بلاک از i.pinimg.com و خالی شدن نتایج می‌شود
-DOWNLOAD_CONCURRENCY = 16
+DOWNLOAD_CONCURRENCY = 6
 
 SEND_BATCH_SIZE = 10
 
