@@ -199,6 +199,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = str(query.from_user.id)
 
     if data == "ytarc_refresh":
+        await query.answer()
         await _send_archive_overview(update, context)
         return
 
@@ -313,7 +314,7 @@ async def _show_channel_videos(
     ]
     keyboard = []
     for row in videos:
-        title = row["title"]
+        title = row["title"] or row.get("yt_video_id") or "ویدیو"
         if len(title) > 50:
             short = title[:47] + "…"
         else:

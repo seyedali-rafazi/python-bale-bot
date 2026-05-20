@@ -47,8 +47,8 @@ async def save_to_global_cache(
     await save_cached_video(
         cache_key,
         file_ids,
-        title=title or f"ویدیو {video_id}",
-        channel_name=channel_name or "ناشناس",
+        title=title,
+        channel_name=channel_name,
         yt_video_id=video_id,
         format_type=parse_format_from_cache_key(cache_key),
         quality=parse_quality_from_cache_key(cache_key),

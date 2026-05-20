@@ -104,7 +104,7 @@ async def init_db():
         )
     if "channel_name" not in yt_cache_columns:
         await conn.execute(
-            "ALTER TABLE youtube_cache ADD COLUMN channel_name TEXT DEFAULT 'ناشناس'"
+            "ALTER TABLE youtube_cache ADD COLUMN channel_name TEXT"
         )
     if "yt_video_id" not in yt_cache_columns:
         await conn.execute(
@@ -186,30 +186,7 @@ async def init_db():
         )
     """)
 
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS user_youtube_archive (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            video_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            channel_name TEXT NOT NULL,
-            file_ids TEXT NOT NULL,
-            cache_key TEXT NOT NULL,
-            format_type TEXT DEFAULT 'video_zip',
-            quality TEXT DEFAULT '480',
-            cached_at TEXT NOT NULL,
-            UNIQUE(user_id, cache_key),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
-        )
-    """)
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_uya_user_cached "
-        "ON user_youtube_archive(user_id, cached_at DESC)"
-    )
-    await conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_uya_user_channel "
-        "ON user_youtube_archive(user_id, channel_name)"
-    )
+    await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")
 
     await conn.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('youtube_enabled', '1')"

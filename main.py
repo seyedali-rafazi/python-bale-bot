@@ -2,6 +2,7 @@
 
 # main.py
 
+import asyncio
 import logging
 import os
 import time
@@ -98,6 +99,16 @@ async def on_startup(app):
     await start_pinterest_workers()
 
     await init_ai_client()
+
+    from core.database.youtube import (
+        drop_legacy_user_youtube_archive_table,
+        purge_incomplete_youtube_cache,
+    )
+
+    await drop_legacy_user_youtube_archive_table()
+    removed = await purge_incomplete_youtube_cache()
+    if removed > 0:
+        logger.info("YT cache: removed %s incomplete/ناشناس rows", removed)
 
     logger.info("✅ HTTP Session initialized")
     logger.info("✅ Database initialized")

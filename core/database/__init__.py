@@ -33,6 +33,11 @@ from .youtube import (
     increment_yt_video_view,
     get_top_cached_videos,
     count_global_cache,
+    count_cache_needing_metadata,
+    backfill_youtube_cache_metadata,
+    purge_incomplete_youtube_cache,
+    purge_all_youtube_cache,
+    drop_legacy_user_youtube_archive_table,
 )
 from .pinterest import get_pinterest_downloads, increment_pinterest_downloads
 from .tiktok import (

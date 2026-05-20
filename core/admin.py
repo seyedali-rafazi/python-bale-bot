@@ -20,6 +20,14 @@ import asyncio
 import aiosqlite
 from core.database import DB_NAME
 from core.database import get_setting, set_setting
+from core.database.youtube import (
+    count_cache_needing_metadata,
+    backfill_youtube_cache_metadata,
+    count_incomplete_cache_rows,
+    purge_incomplete_youtube_cache,
+    purge_all_youtube_cache,
+    drop_legacy_user_youtube_archive_table,
+)
 from datetime import datetime
 
 
@@ -312,6 +320,74 @@ async def cmd_addvip_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ با موفقیت $ {days} $ روز به اشتراک $ {updated_users} $ کاربر ویژه (پرو) اضافه شد."
     )
+
+
+async def cmd_clean_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    mode = (context.args[0] if context.args else "unknown").lower()
+
+    if mode == "all":
+        total = await purge_all_youtube_cache()
+        await drop_legacy_user_youtube_archive_table()
+        await update.message.reply_text(
+            f"✅ کل کش یوتیوب پاک شد.\n"
+            f"• حذف شده از `youtube_cache`: **{total}**\n"
+            f"• جدول قدیمی `user_youtube_archive` هم حذف شد.\n\n"
+            f"از این به بعد فقط ویدیوهای جدید با نام کانال واقعی ذخیره می‌شوند."
+        )
+        return
+
+    await drop_legacy_user_youtube_archive_table()
+    pending = await count_incomplete_cache_rows()
+    removed = await purge_incomplete_youtube_cache()
+    left = await count_incomplete_cache_rows()
+    await update.message.reply_text(
+        f"✅ پاکسازی ردیف‌های ناشناس / ناقص:\n"
+        f"• حذف شده: **{removed}** (از **{pending}** مورد ناقص)\n"
+        f"• باقی‌مانده ناقص: **{left}**\n\n"
+        f"برای پاک کردن **همه** کش: `/cleanytcache all`"
+    )
+
+
+async def cmd_fix_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    limit = 500
+    if context.args:
+        try:
+            limit = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ limit باید عدد باشد. مثال: `/fixytcache 1000`")
+            return
+
+    pending = await count_cache_needing_metadata()
+    await update.message.reply_text(
+        f"⏳ بروزرسانی نام کانال و عنوان ویدیوها...\n"
+        f"در صف: **{pending}** — حداکثر **{limit}** مورد در این اجرا."
+    )
+
+    try:
+        result = await backfill_youtube_cache_metadata(
+            batch_size=40,
+            max_total=limit,
+            delay_sec=0.35,
+        )
+        still = await count_cache_needing_metadata()
+        await update.message.reply_text(
+            f"✅ پایان بروزرسانی کش یوتیوب:\n"
+            f"• موفق: {result['fixed']}\n"
+            f"• ناموفق: {result['failed']}\n"
+            f"• پردازش‌شده: {result['processed']}\n"
+            f"• باقی‌مانده در صف: {still}\n\n"
+            f"اگر هنوز موردی مانده، دوباره `/fixytcache {limit}` بزنید."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا: {e}")
 
 
 async def cmd_give_5gb_vips(update: Update, context: ContextTypes.DEFAULT_TYPE):

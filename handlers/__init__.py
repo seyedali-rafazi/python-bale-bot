@@ -77,6 +77,8 @@ from core.admin import (
     cmd_resetuser,
     cmd_addvip_all,
     cmd_give_5gb_vips,
+    cmd_fix_yt_cache,
+    cmd_clean_yt_cache,
 )
 import os
 from dotenv import load_dotenv
@@ -132,6 +134,8 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("resetuser", cmd_resetuser))
     application.add_handler(CommandHandler("addvipall", cmd_addvip_all))
     application.add_handler(CommandHandler("give5gbvips", cmd_give_5gb_vips))
+    application.add_handler(CommandHandler("fixytcache", cmd_fix_yt_cache))
+    application.add_handler(CommandHandler("cleanytcache", cmd_clean_yt_cache))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))
