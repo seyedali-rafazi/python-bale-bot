@@ -6,19 +6,15 @@ import asyncio
 import yt_dlp
 import uuid
 from dotenv import load_dotenv
-from services.warp_manager import rotate_warp_registration
 
 load_dotenv()
 DOWNLOAD_DIR = "ig_downloads"
+COOKIES_FILE = "insta_cookies.txt"
 
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
 _INSTALOADER_INSTANCE = None
-
-
-def get_proxy():
-    return os.getenv("PROXY")
 
 
 def reset_instaloader_instance():
@@ -41,12 +37,6 @@ def get_instaloader_instance():
     )
     username = os.getenv("IG_USERNAME", "danny75479")
 
-    proxy = get_proxy()
-    if proxy:
-        proxies = {"http": proxy, "https": proxy}
-        L.context._session.proxies = proxies
-        print("✅ پروکسی برای instaloader تنظیم شد.")
-
     try:
         L.load_session_from_file(username, filename=f"session_{username}")
         print("✅ لاگین instaloader انجام شد.")
@@ -66,32 +56,7 @@ def extract_username(text):
     return text
 
 
-def should_rotate_proxy(error_text: str) -> bool:
-    error_text = (error_text or "").lower()
-
-    keywords = [
-        "proxy",
-        "connection",
-        "timeout",
-        "timed out",
-        "429",
-        "too many requests",
-        "rate limit",
-        "forbidden",
-        "bad gateway",
-        "checkpoint",
-        "login required",
-        "temporary block",
-        "connection refused",
-        "remote end closed connection",
-        "network is unreachable",
-        "failed to establish a new connection",
-    ]
-
-    return any(k in error_text for k in keywords)
-
-
-def get_latest_post_sync(page_input, retry_count=2):
+def get_latest_post_sync(page_input):
     username = extract_username(page_input)
     req_id = uuid.uuid4().hex
     target_dir = os.path.join(DOWNLOAD_DIR, f"req_{req_id}")
@@ -117,17 +82,7 @@ def get_latest_post_sync(page_input, retry_count=2):
         return None, target_dir
 
     except Exception as e:
-        err = str(e)
-        print(f"Error downloading post: {err}")
-
-        if retry_count > 0 and should_rotate_proxy(err):
-            print("⚠️ پروکسی/WARP مشکل دارد. در حال ساخت registration جدید...")
-            ok = rotate_warp_registration()
-            if ok:
-                reset_instaloader_instance()
-                print("✅ WARP جدید ساخته شد. تلاش مجدد...")
-                return get_latest_post_sync(page_input, retry_count=retry_count - 1)
-
+        print(f"Error downloading post: {e}")
         return None, target_dir
 
 
@@ -135,17 +90,18 @@ async def get_latest_post(page_input):
     return await asyncio.to_thread(get_latest_post_sync, page_input)
 
 
-def download_instagram(url, retry_count=2):
+def download_instagram(url):
     req_id = uuid.uuid4().hex
+
+    # تنظیمات جدید اضافه شده
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_DIR}/{req_id}_%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
+        "cookiefile": COOKIES_FILE,
+        "sleep_interval": 5,
+        "max_sleep_interval": 15,
     }
-
-    proxy = get_proxy()
-    if proxy:
-        ydl_opts["proxy"] = proxy
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -153,14 +109,5 @@ def download_instagram(url, retry_count=2):
             return ydl.prepare_filename(info)
 
     except Exception as e:
-        err = str(e)
-        print(f"Error downloading with yt-dlp: {err}")
-
-        if retry_count > 0 and should_rotate_proxy(err):
-            print("⚠️ پروکسی/WARP مشکل دارد. در حال rotate...")
-            ok = rotate_warp_registration()
-            if ok:
-                print("✅ WARP جدید ساخته شد. تلاش مجدد yt-dlp...")
-                return download_instagram(url, retry_count=retry_count - 1)
-
+        print(f"Error downloading with yt-dlp: {e}")
         return None
