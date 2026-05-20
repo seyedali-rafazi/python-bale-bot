@@ -10,6 +10,7 @@ FREE_LIMITS = {
     "smart_abstract": 2,
     "citation": 2,
     "web_search": 1,
+    "yt_archive": 2,
 }
 
 VIP_LIMITS = {
@@ -22,6 +23,7 @@ VIP_LIMITS = {
     "smart_abstract": 20,
     "citation": 20,
     "web_search": 30,
+    "yt_archive": 20,
 }
 
 

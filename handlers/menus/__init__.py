@@ -9,6 +9,13 @@ from .youtube import (
     btn_yt_link_mp3_req,
     btn_yt_top_videos_req,
 )
+from .youtube_archive import (
+    btn_yt_my_cache_req,
+    btn_yt_cache_search_title_req,
+    btn_yt_cache_search_channel_req,
+    yt_archive_callback,
+    handle_yt_archive_search_state,
+)
 
 from .ai import (
     btn_ai_menu,

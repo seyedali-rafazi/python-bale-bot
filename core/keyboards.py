@@ -21,7 +21,7 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_GOOGLE_SEARCH),
         ],
         [KeyboardButton(BTN_DL_TIKTOK)],
-        [KeyboardButton(BTN_DL_YOUTUBE)],
+        [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_YT_MY_CACHE)],
         [
             KeyboardButton(BTN_DL_INSTA),
             KeyboardButton(BTN_PINTEREST),
@@ -74,7 +74,17 @@ def get_youtube_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_LAST5), KeyboardButton(BTN_YT_CH_SEARCH)],
         [KeyboardButton(BTN_YT_GLOBAL)],
+        [KeyboardButton(BTN_YT_MY_CACHE)],
         [KeyboardButton(BTN_YT_LINK_VID), KeyboardButton(BTN_YT_LINK_MP3)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_yt_archive_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_YT_CACHE_SEARCH_TITLE)],
+        [KeyboardButton(BTN_YT_CACHE_SEARCH_CHANNEL)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

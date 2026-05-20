@@ -19,6 +19,42 @@ def extract_yt_id(url: str):
     return match.group(1) if match else url
 
 
+def parse_format_from_cache_key(cache_key: str) -> str:
+    if "_audio_" in cache_key or cache_key.endswith("_audio"):
+        return "audio_zip"
+    if "_video_zip" in cache_key or "_zip" in cache_key:
+        return "video_zip"
+    if "_video_" in cache_key:
+        return "video"
+    return "video_zip"
+
+
+def parse_quality_from_cache_key(cache_key: str) -> str:
+    parts = cache_key.split("_")
+    for p in reversed(parts):
+        if p.isdigit() and len(p) <= 4:
+            return p
+    return "480"
+
+
+async def save_to_global_cache(
+    cache_key: str,
+    video_id: str,
+    file_ids: list,
+    title: str | None = None,
+    channel_name: str | None = None,
+):
+    await save_cached_video(
+        cache_key,
+        file_ids,
+        title=title or f"ویدیو {video_id}",
+        channel_name=channel_name or "ناشناس",
+        yt_video_id=video_id,
+        format_type=parse_format_from_cache_key(cache_key),
+        quality=parse_quality_from_cache_key(cache_key),
+    )
+
+
 def format_duration(seconds: float) -> str:
     try:
         total_seconds = int(seconds)
@@ -108,6 +144,9 @@ async def process_and_send_document_parts(
     cache_key: str,
     archive_basename: str = "archive",
     split_method: str = "single",
+    video_id: str | None = None,
+    title: str | None = None,
+    channel_name: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -147,7 +186,15 @@ async def process_and_send_document_parts(
         await asyncio.sleep(1)
 
     if len(uploaded_file_ids) == total_parts:
-        await save_cached_video(cache_key, uploaded_file_ids)
+        await save_cached_video(
+            cache_key,
+            uploaded_file_ids,
+            title=title,
+            channel_name=channel_name,
+            yt_video_id=video_id,
+            format_type=parse_format_from_cache_key(cache_key),
+            quality=parse_quality_from_cache_key(cache_key),
+        )
         if total_parts > 1:
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -189,7 +236,13 @@ async def upload_audio_to_storage_once(context, file_path: str, caption: str):
 
 
 async def process_and_send_video_parts(
-    context, chat_id: str, result_files: list, video_id: str, cache_key: str
+    context,
+    chat_id: str,
+    result_files: list,
+    video_id: str,
+    cache_key: str,
+    title: str | None = None,
+    channel_name: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -222,12 +275,26 @@ async def process_and_send_video_parts(
         await asyncio.sleep(1)
 
     if len(uploaded_file_ids) == total_parts:
-        await save_cached_video(cache_key, uploaded_file_ids)
+        await save_cached_video(
+            cache_key,
+            uploaded_file_ids,
+            title=title,
+            channel_name=channel_name,
+            yt_video_id=video_id,
+            format_type=parse_format_from_cache_key(cache_key),
+            quality=parse_quality_from_cache_key(cache_key),
+        )
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
 
 
 async def process_and_send_backup_video_parts(
-    context, chat_id: str, result_files: list, video_id: str, cache_key: str
+    context,
+    chat_id: str,
+    result_files: list,
+    video_id: str,
+    cache_key: str,
+    title: str | None = None,
+    channel_name: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -255,7 +322,15 @@ async def process_and_send_backup_video_parts(
         await asyncio.sleep(1)
 
     if len(uploaded_file_ids) == total_parts:
-        await save_cached_video(cache_key, uploaded_file_ids)
+        await save_cached_video(
+            cache_key,
+            uploaded_file_ids,
+            title=title,
+            channel_name=channel_name,
+            yt_video_id=video_id,
+            format_type=parse_format_from_cache_key(cache_key),
+            quality=parse_quality_from_cache_key(cache_key),
+        )
         await context.bot.send_message(
             chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ."
         )

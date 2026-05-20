@@ -27,6 +27,9 @@ BTN_YT_GLOBAL = "🌍 جستجوی جهانی یوتیوب"
 BTN_YT_LINK_VID = "🔗 دانلود ویدیو با لینک"
 BTN_YT_LINK_MP3 = "🎵 لینک یوتیوب به MP3"
 BTN_YT_TOP_VIDEOS = "🔥 ویدیوهای پر بازدید"
+BTN_YT_MY_CACHE = "📚 کش مشترک یوتیوب"
+BTN_YT_CACHE_SEARCH_TITLE = "🔍 جستجو در عنوان ویدیو"
+BTN_YT_CACHE_SEARCH_CHANNEL = "🔍 جستجو در کانال"
 
 #  منوی اینستاگرام
 BTN_IG_LINK_DL = "🔗 دانلود با لینک (پست/ریلز)"

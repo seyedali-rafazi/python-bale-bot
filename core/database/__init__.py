@@ -32,6 +32,7 @@ from .youtube import (
     save_cached_video,
     increment_yt_video_view,
     get_top_cached_videos,
+    count_global_cache,
 )
 from .pinterest import get_pinterest_downloads, increment_pinterest_downloads
 from .tiktok import (
@@ -56,3 +57,21 @@ from .cloud import (
     give_5gb_to_existing_vips,
 )
 from .web_scrapping import increment_web_search_downloads, get_web_search_downloads
+from .user_yt_archive import (
+    get_user_archive_limit,
+    count_user_archive,
+    get_user_channels_page,
+    count_user_channels,
+    get_channel_videos_page,
+    count_channel_videos,
+    get_archive_entry,
+    search_archive_by_title,
+    search_archive_by_channel,
+    can_user_fetch_from_archive,
+    increment_archive_fetch,
+    get_archive_fetches_today,
+    ARCHIVE_LIMIT_FREE,
+    ARCHIVE_LIMIT_VIP,
+    CHANNELS_PAGE_SIZE,
+    VIDEOS_PAGE_SIZE,
+)

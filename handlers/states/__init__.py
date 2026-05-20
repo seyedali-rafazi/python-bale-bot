@@ -15,6 +15,7 @@ from .state_pinterest import handle_pinterest_state
 from .state_tiktok import handle_tiktok_state
 from .state_github import handle_github_state
 from .state_web_search import handle_web_search_state
+from handlers.menus.youtube_archive import handle_yt_archive_search_state
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,6 +36,12 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # 🌟 مسیریابی بر اساس نام step
+
+    if step.startswith("waiting_yt_archive_"):
+        await handle_yt_archive_search_state(
+            update, context, step, text, chat_id
+        )
+        return
 
     if step.startswith("waiting_yt"):
         await handle_youtube_state(update, context, step, text, chat_id, state_data)

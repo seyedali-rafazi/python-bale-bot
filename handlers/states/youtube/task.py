@@ -46,6 +46,7 @@ from .helpers import (
     process_and_send_document_parts,
     upload_audio_to_storage_once,
     send_audio_once,
+    save_to_global_cache,
 )
 
 
@@ -79,6 +80,15 @@ async def background_yt_download(
             )
 
             await increment_yt_video_view(cache_key)
+
+            info_cached = await asyncio.to_thread(get_video_info, url)
+            await save_to_global_cache(
+                cache_key,
+                video_id,
+                cached_files,
+                title=info_cached.get("title") if info_cached else None,
+                channel_name=info_cached.get("uploader") if info_cached else None,
+            )
 
             return
 
@@ -439,6 +449,9 @@ async def background_yt_download(
                                     cache_key=cache_key,
                                     archive_basename=archive_basename,
                                     split_method=split_method,
+                                    video_id=video_id,
+                                    title=info.get("title") if info else None,
+                                    channel_name=info.get("uploader") if info else None,
                                 )
 
                         else:
@@ -597,6 +610,8 @@ async def background_yt_download(
                                         result,
                                         video_id,
                                         cache_key,
+                                        title=info.get("title") if info else None,
+                                        channel_name=info.get("uploader") if info else None,
                                     )
 
                             else:
@@ -794,6 +809,9 @@ async def background_yt_download(
                                     cache_key=cache_key,
                                     archive_basename=archive_basename,
                                     split_method=split_method,
+                                    video_id=video_id,
+                                    title=info.get("title") if info else None,
+                                    channel_name=info.get("uploader") if info else None,
                                 )
 
                         else:

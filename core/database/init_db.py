@@ -98,6 +98,39 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE youtube_cache ADD COLUMN view_count INTEGER DEFAULT 0"
         )
+    if "title" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN title TEXT DEFAULT 'بدون عنوان'"
+        )
+    if "channel_name" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN channel_name TEXT DEFAULT 'ناشناس'"
+        )
+    if "yt_video_id" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN yt_video_id TEXT"
+        )
+    if "format_type" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN format_type TEXT DEFAULT 'video_zip'"
+        )
+    if "quality" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN quality TEXT DEFAULT '480'"
+        )
+    if "cached_at" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN cached_at TEXT"
+        )
+
+    if "arc_fetch_count" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN arc_fetch_count INTEGER DEFAULT 0"
+        )
+    if "arc_fetch_date" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN arc_fetch_date TEXT"
+        )
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS tiktok_explore (
@@ -152,6 +185,31 @@ async def init_db():
             PRIMARY KEY (user_id, action, date)
         )
     """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_youtube_archive (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            channel_name TEXT NOT NULL,
+            file_ids TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
+            format_type TEXT DEFAULT 'video_zip',
+            quality TEXT DEFAULT '480',
+            cached_at TEXT NOT NULL,
+            UNIQUE(user_id, cache_key),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_uya_user_cached "
+        "ON user_youtube_archive(user_id, cached_at DESC)"
+    )
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_uya_user_channel "
+        "ON user_youtube_archive(user_id, channel_name)"
+    )
 
     await conn.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('youtube_enabled', '1')"
