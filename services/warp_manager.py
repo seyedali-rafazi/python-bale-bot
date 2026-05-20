@@ -27,15 +27,27 @@ def wait_for_warp(timeout=20):
 
 def rotate_warp_registration():
     with _lock:
-        steps = [
-            ["warp-cli", "disconnect"],
-            ["warp-cli", "registration", "delete"],
+        # مرحله اول: Disconnect (حتی اگر خطا داد رد می‌شویم)
+        code, out, err = run_cmd(["warp-cli", "disconnect"])
+        print(f"[WARP] CMD: warp-cli disconnect")
+        print(f"[WARP] code={code}, out={out}, err={err}")
+
+        # مرحله دوم: Delete (از خطای نبودن اکانت چشم‌پوشی می‌کنیم)
+        code, out, err = run_cmd(["warp-cli", "registration", "delete"])
+        print(f"[WARP] CMD: warp-cli registration delete")
+        print(f"[WARP] code={code}, out={out}, err={err}")
+        # اگر خطایی غیر از "Missing registration" بود خارج شو
+        if code != 0 and "Missing registration" not in err:
+            return False
+
+        # مراحل بعدی: این مراحل باید با موفقیت اجرا شوند
+        remaining_steps = [
             ["warp-cli", "registration", "new"],
             ["warp-cli", "mode", "proxy"],
             ["warp-cli", "connect"],
         ]
 
-        for step in steps:
+        for step in remaining_steps:
             code, out, err = run_cmd(step)
             print(f"[WARP] CMD: {' '.join(step)}")
             print(f"[WARP] code={code}, out={out}, err={err}")
