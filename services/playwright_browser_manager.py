@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright, Browser, BrowserContext
 import atexit
 import time
 import threading
+import json
 
 
 class PlaywrightBrowserManager:
@@ -28,6 +29,31 @@ class PlaywrightBrowserManager:
 
         atexit.register(self.cleanup)
 
+    # #region agent log (debug-80597c)
+    _DBG_LOG_PATH = "debug-80597c.log"
+    _DBG_SESSION_ID = "80597c"
+    _dbg_lock = threading.Lock()
+
+    def _dbg_log(self, hypothesisId: str, location: str, message: str, data: dict, runId: str = "pre-fix"):
+        payload = {
+            "sessionId": self._DBG_SESSION_ID,
+            "runId": runId,
+            "hypothesisId": hypothesisId,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        try:
+            line = json.dumps(payload, ensure_ascii=False)
+            with self._dbg_lock:
+                with open(self._DBG_LOG_PATH, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
+
+    # #endregion agent log (debug-80597c)
+
     def _is_browser_alive(self) -> bool:
         try:
             if self._browser and self._browser.is_connected():
@@ -38,6 +64,12 @@ class PlaywrightBrowserManager:
 
     def _restart_browser(self):
         print("🔄 Restarting Playwright Browser...")
+        self._dbg_log(
+            hypothesisId="B",
+            location="services/playwright_browser_manager.py:_restart_browser",
+            message="Restarting browser",
+            data={"usageCount": self._usage_count},
+        )
         self.cleanup()
         self._browser = None
         self._playwright = None
@@ -48,6 +80,12 @@ class PlaywrightBrowserManager:
                 # بررسی زنده بودن مرورگر
                 if not self._is_browser_alive():
                     print("⚠️ Browser crashed, restarting...")
+                    self._dbg_log(
+                        hypothesisId="B",
+                        location="services/playwright_browser_manager.py:_initialize",
+                        message="Browser not alive; restarting",
+                        data={"usageCount": self._usage_count},
+                    )
                     self._restart_browser()
                     return
 
@@ -56,6 +94,15 @@ class PlaywrightBrowserManager:
                     print(
                         f"♻️ Browser reached {self._usage_count} uses. Force restarting to free RAM..."
                     )
+                    self._dbg_log(
+                        hypothesisId="B",
+                        location="services/playwright_browser_manager.py:_initialize",
+                        message="Max usages reached; restarting",
+                        data={
+                            "usageCount": self._usage_count,
+                            "maxBeforeRestart": self._max_usages_before_restart,
+                        },
+                    )
                     self._restart_browser()
                     return
 
@@ -63,6 +110,12 @@ class PlaywrightBrowserManager:
                 time_since_use = time.time() - self._last_context_time
                 if time_since_use > self._context_timeout:
                     print(f"⚠️ Browser idle for {time_since_use:.0f}s, restarting...")
+                    self._dbg_log(
+                        hypothesisId="B",
+                        location="services/playwright_browser_manager.py:_initialize",
+                        message="Idle timeout; restarting",
+                        data={"idleSeconds": int(time_since_use), "contextTimeout": self._context_timeout},
+                    )
                     self._restart_browser()
                     return
 
@@ -92,8 +145,20 @@ class PlaywrightBrowserManager:
                     self._usage_count = 0  # صفر کردن شمارنده بعد از ساخت مرورگر جدید
                     self._last_context_time = time.time()
                     print("✅ Browser initialized")
+                    self._dbg_log(
+                        hypothesisId="B",
+                        location="services/playwright_browser_manager.py:_initialize",
+                        message="Browser initialized",
+                        data={"headless": True},
+                    )
                 except Exception as e:
                     print(f"❌ Browser launch failed: {e}")
+                    self._dbg_log(
+                        hypothesisId="B",
+                        location="services/playwright_browser_manager.py:_initialize",
+                        message="Browser launch failed",
+                        data={"errType": e.__class__.__name__},
+                    )
                     self._browser = None
                     self._playwright = None
                     raise
@@ -112,6 +177,12 @@ class PlaywrightBrowserManager:
         for attempt in range(max_retries):
             try:
                 browser = self.get_browser()
+                self._dbg_log(
+                    hypothesisId="B",
+                    location="services/playwright_browser_manager.py:new_context",
+                    message="Creating context",
+                    data={"attempt": attempt + 1, "usageCount": self._usage_count, "thread": threading.current_thread().name},
+                )
                 context = browser.new_context(
                     user_agent=user_agent,
                     locale="en-US",
@@ -127,6 +198,12 @@ class PlaywrightBrowserManager:
             except Exception as e:
                 print(
                     f"❌ Context creation failed (Attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                self._dbg_log(
+                    hypothesisId="B",
+                    location="services/playwright_browser_manager.py:new_context",
+                    message="Context creation failed",
+                    data={"attempt": attempt + 1, "errType": e.__class__.__name__},
                 )
                 self._restart_browser()
                 if attempt == max_retries - 1:

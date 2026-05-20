@@ -1,5 +1,6 @@
 import asyncio
 import re
+import os
 from core.database import is_vip, get_yt_downloads, save_cached_video
 from .config import STORAGE_CHANNEL_ID
 from core.limits import get_limit
@@ -70,6 +71,76 @@ async def send_audio_once(context, chat_id: str, file_id: str):
     except Exception as e:
         print(f"⚠️ Error sending audio file_id to user {chat_id}: {e}")
         return False
+
+
+async def send_document_once(context, chat_id: str, file_id: str):
+    try:
+        await context.bot.send_document(chat_id=chat_id, document=file_id)
+        return True
+    except Exception as e:
+        print(f"⚠️ Error sending document file_id to user {chat_id}: {e}")
+        return False
+
+
+async def upload_document_to_storage_once(context, file_path: str, caption: str):
+    with open(file_path, "rb") as doc:
+        channel_msg = await context.bot.send_document(
+            chat_id=STORAGE_CHANNEL_ID,
+            document=doc,
+            caption=caption,
+            read_timeout=120,
+            write_timeout=120,
+            connect_timeout=30,
+            pool_timeout=30,
+        )
+    return channel_msg.document.file_id
+
+
+async def process_and_send_document_parts(
+    context, chat_id: str, result_files: list, label: str, cache_key: str
+):
+    uploaded_file_ids = []
+    total_parts = len(result_files)
+    part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
+    await context.bot.send_message(
+        chat_id=chat_id, text=f"📤 در حال آپلود فایل ZIP{part_msg}..."
+    )
+
+    for idx, file_path in enumerate(result_files, 1):
+        if total_parts > 1:
+            await context.bot.send_message(
+                chat_id=chat_id, text=f"📤 آپلود پارت {idx} از {total_parts}..."
+            )
+
+        file_size = None
+        try:
+            file_size = os.path.getsize(file_path)
+        except Exception:
+            pass
+
+        caption = f"{label} | ZIP Part {idx}/{total_parts}"
+        try:
+            current_file_id = await upload_document_to_storage_once(
+                context=context,
+                file_path=file_path,
+                caption=caption,
+            )
+            send_success = await send_document_once(context, chat_id, current_file_id)
+            if not send_success:
+                raise Exception("خطا در فوروارد/ارسال به کاربر")
+            uploaded_file_ids.append(current_file_id)
+        except Exception as e:
+            print(f"❌ Error uploading/sending zip part {idx}: {e}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ متاسفانه در آپلود یا ارسال پارت ZIP {idx} مشکلی پیش آمد. عملیات لغو شد.",
+            )
+            raise e
+        await asyncio.sleep(1)
+
+    if len(uploaded_file_ids) == total_parts:
+        await save_cached_video(cache_key, uploaded_file_ids)
+        await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ZIP.")
 
 
 async def upload_video_to_storage_once(context, file_path: str, caption: str):
@@ -189,6 +260,8 @@ async def send_cached_files(
             )
         if format_type == "video":
             await send_video_once(context, chat_id, file_id)
+        elif format_type == "video_zip":
+            await send_document_once(context, chat_id, file_id)
         else:
             await send_audio_once(context, chat_id, file_id)
         await asyncio.sleep(1)

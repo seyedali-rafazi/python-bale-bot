@@ -9,7 +9,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_YT_VIDEO, BTN_BACK
+from core.constants import BTN_YT_VIDEO, BTN_YT_VIDEO_ZIP, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
 from services.youtube import search_yt_videos
 from .helpers import check_user_limit
@@ -215,7 +215,12 @@ async def handle_youtube_state(
             )
             return
 
-        format_type = "video" if text == BTN_YT_VIDEO else "audio"
+        if text == BTN_YT_VIDEO:
+            format_type = "video"
+        elif text == BTN_YT_VIDEO_ZIP:
+            format_type = "video_zip"
+        else:
+            format_type = "audio"
 
         await asyncio.to_thread(
             set_state, chat_id, "waiting_yt_destination", yt_url=url, format=format_type

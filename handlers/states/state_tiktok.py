@@ -18,6 +18,7 @@ from core.database import (
     add_tiktok_explore_video,
 )
 from core.limits import get_limit
+from services.zip_utils import build_zip_and_split
 
 
 STORAGE_CHANNEL_ID = "@digitiktoksection"
@@ -85,11 +86,46 @@ async def background_tt_download(
                 file_id = channel_msg.video.file_id
                 await add_tiktok_explore_video(file_id)  # اضافه شدن await
 
-        await context.bot.send_video(
-            chat_id=chat_id,
-            video=file_id,
-            caption=f"✅ {title}\n🤖 دانلود شده توسط ربات",
-        )
+            # Build ZIP for user delivery (20MB parts)
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
+            )
+
+            zip_basename = "tiktok_video"
+            zip_path, zip_parts = await asyncio.to_thread(
+                build_zip_and_split,
+                file_path,
+                os.path.dirname(file_path) or ".",
+                zip_basename,
+                20 * 1024 * 1024,
+            )
+
+        # Send ZIP parts to user
+        total_parts = len(zip_parts)
+        if total_parts > 1:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"📦 فایل ZIP آماده شد (شامل {total_parts} پارت). در حال ارسال...",
+            )
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="📦 فایل ZIP آماده شد. در حال ارسال...")
+
+        for idx, part_path in enumerate(zip_parts, 1):
+            if total_parts > 1:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📤 ارسال پارت {idx} از {total_parts}...",
+                )
+            with open(part_path, "rb") as doc:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=doc,
+                    caption=f"✅ {title}\n📦 ZIP Part {idx}/{total_parts}",
+                    read_timeout=300,
+                    write_timeout=300,
+                )
 
         # افزایش محدودیت کاربر فقط در اینجا (پس از ارسال موفق) انجام می‌شود
         await increment_tt_downloads(user_id)  # اضافه شدن await
@@ -104,6 +140,20 @@ async def background_tt_download(
             chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
         )
     finally:
+        # cleanup zip artifacts
+        try:
+            if "zip_parts" in locals():
+                for p in zip_parts:
+                    if p and os.path.exists(p) and p != file_path:
+                        os.remove(p)
+            if "zip_path" in locals() and zip_path and os.path.exists(zip_path):
+                # zip_path might be included in zip_parts; safe to ignore errors
+                try:
+                    os.remove(zip_path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         if "file_path" in locals() and file_path and os.path.exists(file_path):
             os.remove(file_path)
 
