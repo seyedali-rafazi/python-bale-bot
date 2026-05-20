@@ -15,7 +15,7 @@ from .state_pinterest import handle_pinterest_state
 from .state_tiktok import handle_tiktok_state
 from .state_github import handle_github_state
 from .state_web_search import handle_web_search_state
-from handlers.menus.youtube_archive import handle_yt_archive_search_state
+from .state_yt_archive import handle_yt_archive_search_state
 
 
 async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

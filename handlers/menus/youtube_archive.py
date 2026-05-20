@@ -28,8 +28,6 @@ from core.database import (
     get_channel_videos_page,
     count_channel_videos,
     get_archive_entry,
-    search_archive_by_title,
-    search_archive_by_channel,
     can_user_fetch_from_archive,
     increment_archive_fetch,
     increment_yt_video_view,
@@ -40,7 +38,6 @@ from core.database import (
 )
 from core.database.vip import is_vip
 from handlers.ensure_membership import ensure_membership
-from handlers.states.youtube.helpers import send_cached_files
 
 
 def _channel_callback_data(page: int, index: int) -> str:
@@ -196,47 +193,6 @@ async def btn_yt_cache_search_channel_req(
     )
 
 
-async def handle_yt_archive_search_state(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    step: str,
-    text: str,
-    chat_id: str,
-):
-    if step == "waiting_yt_archive_search_title":
-        results = await search_archive_by_title(text)
-        empty_msg = "نتیجه‌ای برای این عنوان در کش مشترک پیدا نشد."
-    else:
-        results = await search_archive_by_channel(text)
-        empty_msg = "نتیجه‌ای برای این کانال در کش مشترک پیدا نشد."
-
-    if not results:
-        await update.message.reply_text(empty_msg)
-        return
-
-    keyboard = []
-    lines = ["🔍 نتایج جستجو (جدیدترین اول):\n"]
-    for row in results[:12]:
-        title = row["title"]
-        if len(title) > 45:
-            title = title[:42] + "…"
-        ch = row["channel_name"]
-        lines.append(f"• {title}\n  📺 {ch}")
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    f"▶️ {title[:30]}",
-                    callback_data=f"ytarc_vid_{row['id']}",
-                )
-            ]
-        )
-
-    await update.message.reply_text(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
 async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -319,6 +275,8 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         await query.answer("در حال ارسال...")
+        from handlers.states.youtube.helpers import send_cached_files
+
         file_ids = json.loads(entry["file_ids"])
         fmt = entry["format_type"] or "video_zip"
         await send_cached_files(context, user_id, file_ids, fmt)

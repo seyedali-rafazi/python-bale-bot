@@ -14,7 +14,6 @@ from .youtube_archive import (
     btn_yt_cache_search_title_req,
     btn_yt_cache_search_channel_req,
     yt_archive_callback,
-    handle_yt_archive_search_state,
 )
 
 from .ai import (
