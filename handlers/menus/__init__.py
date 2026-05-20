@@ -27,6 +27,9 @@ from .telegram_menu import (
 from .instagram import (
     btn_ig_req,
     btn_ig_link_dl_req,
+    btn_ig_search_req,
+    btn_ig_trend_req,
+    btn_ig_explore_req,
     btn_ig_last_post_req,
 )
 

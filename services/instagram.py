@@ -7,6 +7,8 @@ import yt_dlp
 import uuid
 from dotenv import load_dotenv
 
+TREND_HASHTAGS = ("reels", "viral", "trending", "explorepage")
+
 load_dotenv()
 DOWNLOAD_DIR = "ig_downloads"
 COOKIES_FILE = "insta_cookies.txt"
@@ -88,6 +90,94 @@ def get_latest_post_sync(page_input):
 
 async def get_latest_post(page_input):
     return await asyncio.to_thread(get_latest_post_sync, page_input)
+
+
+def _post_to_result(post) -> dict | None:
+    shortcode = getattr(post, "shortcode", None)
+    if not shortcode:
+        return None
+
+    if post.is_video:
+        url = f"https://www.instagram.com/reel/{shortcode}/"
+    else:
+        url = f"https://www.instagram.com/p/{shortcode}/"
+
+    title = (post.caption or "بدون کپشن").strip()
+    if not title:
+        title = "بدون کپشن"
+    if len(title) > 50:
+        title = title[:50] + "..."
+
+    return {"title": title, "url": url}
+
+
+def search_instagram_posts_sync(query: str, max_results: int = 10):
+    hashtag_name = query.lstrip("#").strip()
+    if not hashtag_name:
+        return []
+
+    results = []
+    try:
+        L = get_instaloader_instance()
+        hashtag = instaloader.Hashtag.from_name(L.context, hashtag_name)
+        for post in hashtag.get_posts():
+            item = _post_to_result(post)
+            if item:
+                results.append(item)
+            if len(results) >= max_results:
+                break
+    except Exception as e:
+        print(f"[Instagram] Search error: {e}")
+
+    return results
+
+
+async def search_instagram_posts(query: str, max_results: int = 10):
+    return await asyncio.to_thread(search_instagram_posts_sync, query, max_results)
+
+
+def get_instagram_trends_sync(count: int = 10):
+    results = []
+    seen_urls = set()
+
+    try:
+        L = get_instaloader_instance()
+        for post in L.get_explore_posts():
+            item = _post_to_result(post)
+            if not item or item["url"] in seen_urls:
+                continue
+            seen_urls.add(item["url"])
+            results.append(item)
+            if len(results) >= count:
+                return results
+    except Exception as e:
+        print(f"[Instagram] Explore trends error: {e}")
+
+    try:
+        L = get_instaloader_instance()
+        for tag in TREND_HASHTAGS:
+            if len(results) >= count:
+                break
+            try:
+                hashtag = instaloader.Hashtag.from_name(L.context, tag)
+                for post in hashtag.get_posts():
+                    item = _post_to_result(post)
+                    if not item or item["url"] in seen_urls:
+                        continue
+                    seen_urls.add(item["url"])
+                    results.append(item)
+                    if len(results) >= count:
+                        break
+            except Exception as tag_err:
+                print(f"[Instagram] Trend hashtag {tag} error: {tag_err}")
+    except Exception as e:
+        print(f"[Instagram] Trends fallback error: {e}")
+
+    return results
+
+
+async def get_instagram_trends(count: int = 10):
+    return await asyncio.to_thread(get_instagram_trends_sync, count)
 
 
 def download_instagram(url):

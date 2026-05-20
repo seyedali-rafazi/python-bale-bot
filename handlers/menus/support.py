@@ -14,6 +14,8 @@ from core.database import (
     get_pinterest_downloads,
     get_tt_downloads,
     get_tt_explores,
+    get_ig_downloads,
+    get_ig_explores,
     get_gh_downloads,
     get_cloud_usage_stats,
     get_web_search_downloads,
@@ -75,6 +77,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pinterest_count = await get_pinterest_downloads(user_id)
     tt_dl_count = await get_tt_downloads(user_id)
     tt_exp_count = await get_tt_explores(user_id)
+    ig_dl_count = await get_ig_downloads(user_id)
+    ig_exp_count = await get_ig_explores(user_id)
     gh_count = await get_gh_downloads(user_id)
     web_count = await get_web_search_downloads(user_id)
 
@@ -84,6 +88,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pinterest_limit = get_limit("pinterest_search", is_vip)
     tt_dl_limit = get_limit("tiktok_download", is_vip)
     tt_exp_limit = get_limit("tiktok_explore", is_vip)
+    ig_dl_limit = get_limit("instagram_download", is_vip)
+    ig_exp_limit = get_limit("instagram_explore", is_vip)
     gh_limit = get_limit("github_download", is_vip)
     web_limit = get_limit("web_search", is_vip)
 
@@ -127,6 +133,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
+• اینستاگرام | دانلود: $ {ig_dl_count} / {ig_dl_limit} $
+• اینستاگرام | اکسپلور: $ {ig_exp_count} / {ig_exp_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
 • جستجوی وب | دانلود: $ {web_count} / {web_limit} $
 
