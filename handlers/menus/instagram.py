@@ -54,6 +54,14 @@ async def btn_ig_trend_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
     from handlers.states.state_insta import process_instagram_trends
+    from services.instagram import cookies_configured
+
+    if not cookies_configured():
+        await update.message.reply_text(
+            "❌ فایل کوکی اینستاگرام (`insta_cookies.txt`) یافت نشد.\n"
+            "برای ترند، کوکی مرورگر لاگین‌شده را در ریشه پروژه قرار دهید."
+        )
+        return
 
     await process_instagram_trends(update, context)
 

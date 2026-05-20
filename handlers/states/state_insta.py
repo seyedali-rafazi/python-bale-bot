@@ -18,6 +18,7 @@ from services.instagram import (
     get_latest_post,
     search_instagram_posts,
     get_instagram_trends,
+    cookies_configured,
 )
 from core.database import (
     get_available_cloud_mb,
@@ -140,11 +141,21 @@ async def handle_insta_state(
         )
 
     elif step == "waiting_ig_search":
+        if not cookies_configured():
+            await update.message.reply_text(
+                "❌ فایل کوکی اینستاگرام (`insta_cookies.txt`) یافت نشد.\n"
+                "برای جستجو، کوکی مرورگر لاگین‌شده را در ریشه پروژه قرار دهید."
+            )
+            return
+
         await update.message.reply_text("⏳ در حال جستجو...")
 
         results = await search_instagram_posts(text, max_results=10)
         if not results:
-            await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
+            await update.message.reply_text(
+                "❌ نتیجه‌ای یافت نشد.\n"
+                "کوکی‌ها را به‌روز کنید یا از VPN/پروکسی (IG_PROXY) استفاده کنید."
+            )
             return
 
         res_text = f"🔍 نتایج جستجو برای `{text}`:\n\n"

@@ -38,15 +38,96 @@ def get_instaloader_instance():
         compress_json=False,
     )
     username = os.getenv("IG_USERNAME", "danny75479")
+    session_file = f"session_{username}"
 
     try:
-        L.load_session_from_file(username, filename=f"session_{username}")
-        print("✅ لاگین instaloader انجام شد.")
+        L.load_session_from_file(username, filename=session_file)
     except Exception as e:
-        print(f"❌ خطای لاگین Instaloader: {e}")
+        print(f"❌ خطای بارگذاری session Instaloader: {e}")
+
+    if not L.context.is_logged_in:
+        password = os.getenv("IG_PASSWORD")
+        if username and password:
+            try:
+                L.login(username, password)
+                L.save_session_to_file(session_file)
+                print("✅ لاگین instaloader با رمز عبور انجام شد.")
+            except Exception as e:
+                print(f"❌ خطای لاگین Instaloader: {e}")
+        else:
+            print(
+                "⚠️ Instaloader لاگین نیست. IG_PASSWORD را در .env تنظیم کنید "
+                "یا session را با instaloader --login به‌روز کنید."
+            )
+    else:
+        print("✅ لاگین instaloader انجام شد.")
 
     _INSTALOADER_INSTANCE = L
     return L
+
+
+def _ydl_list_opts(max_results: int | None = None) -> dict:
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": "in_playlist",
+        "ignoreerrors": True,
+    }
+    if os.path.isfile(COOKIES_FILE):
+        opts["cookiefile"] = COOKIES_FILE
+    if max_results:
+        opts["playlistend"] = max_results
+    proxy = os.getenv("IG_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        opts["proxy"] = proxy
+    return opts
+
+
+def _entries_to_results(entries, max_results: int) -> list:
+    results = []
+    for entry in entries or []:
+        if not entry:
+            continue
+        url = entry.get("url") or entry.get("webpage_url")
+        if not url or "instagram.com" not in url:
+            continue
+
+        title = (
+            entry.get("title")
+            or entry.get("description")
+            or entry.get("alt_title")
+            or "بدون کپشن"
+        )
+        title = str(title).strip() or "بدون کپشن"
+        if len(title) > 50:
+            title = title[:50] + "..."
+
+        results.append({"title": title, "url": url})
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _fetch_tag_posts_via_ytdlp(tag: str, max_results: int) -> list:
+    tag = tag.lstrip("#").strip()
+    if not tag:
+        return []
+
+    if not os.path.isfile(COOKIES_FILE):
+        print(
+            f"[Instagram] فایل کوکی {COOKIES_FILE} یافت نشد. "
+            "جستجو/ترند به کوکی نیاز دارند."
+        )
+        return []
+
+    url = f"https://www.instagram.com/explore/tags/{tag}/"
+    try:
+        with yt_dlp.YoutubeDL(_ydl_list_opts(max_results)) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return _entries_to_results(info.get("entries"), max_results)
+    except Exception as e:
+        print(f"[Instagram] yt-dlp tag '{tag}' error: {e}")
+        return []
 
 
 def extract_username(text):
@@ -112,13 +193,20 @@ def _post_to_result(post) -> dict | None:
 
 
 def search_instagram_posts_sync(query: str, max_results: int = 10):
+    results = _fetch_tag_posts_via_ytdlp(query, max_results)
+    if results:
+        return results
+
+    # Fallback only when Instaloader session is fully logged in
     hashtag_name = query.lstrip("#").strip()
     if not hashtag_name:
         return []
 
-    results = []
     try:
         L = get_instaloader_instance()
+        if not L.context.is_logged_in:
+            return []
+
         hashtag = instaloader.Hashtag.from_name(L.context, hashtag_name)
         for post in hashtag.get_posts():
             item = _post_to_result(post)
@@ -127,9 +215,13 @@ def search_instagram_posts_sync(query: str, max_results: int = 10):
             if len(results) >= max_results:
                 break
     except Exception as e:
-        print(f"[Instagram] Search error: {e}")
+        print(f"[Instagram] Search fallback (instaloader) error: {e}")
 
     return results
+
+
+def cookies_configured() -> bool:
+    return os.path.isfile(COOKIES_FILE)
 
 
 async def search_instagram_posts(query: str, max_results: int = 10):
@@ -140,8 +232,25 @@ def get_instagram_trends_sync(count: int = 10):
     results = []
     seen_urls = set()
 
+    for tag in TREND_HASHTAGS:
+        if len(results) >= count:
+            break
+        for item in _fetch_tag_posts_via_ytdlp(tag, count):
+            if item["url"] in seen_urls:
+                continue
+            seen_urls.add(item["url"])
+            results.append(item)
+            if len(results) >= count:
+                return results
+
+    if results or not os.path.isfile(COOKIES_FILE):
+        return results
+
     try:
         L = get_instaloader_instance()
+        if not L.context.is_logged_in:
+            return results
+
         for post in L.get_explore_posts():
             item = _post_to_result(post)
             if not item or item["url"] in seen_urls:
@@ -149,29 +258,9 @@ def get_instagram_trends_sync(count: int = 10):
             seen_urls.add(item["url"])
             results.append(item)
             if len(results) >= count:
-                return results
-    except Exception as e:
-        print(f"[Instagram] Explore trends error: {e}")
-
-    try:
-        L = get_instaloader_instance()
-        for tag in TREND_HASHTAGS:
-            if len(results) >= count:
                 break
-            try:
-                hashtag = instaloader.Hashtag.from_name(L.context, tag)
-                for post in hashtag.get_posts():
-                    item = _post_to_result(post)
-                    if not item or item["url"] in seen_urls:
-                        continue
-                    seen_urls.add(item["url"])
-                    results.append(item)
-                    if len(results) >= count:
-                        break
-            except Exception as tag_err:
-                print(f"[Instagram] Trend hashtag {tag} error: {tag_err}")
     except Exception as e:
-        print(f"[Instagram] Trends fallback error: {e}")
+        print(f"[Instagram] Explore trends fallback error: {e}")
 
     return results
 
@@ -183,15 +272,18 @@ async def get_instagram_trends(count: int = 10):
 def download_instagram(url):
     req_id = uuid.uuid4().hex
 
-    # تنظیمات جدید اضافه شده
     ydl_opts = {
         "outtmpl": f"{DOWNLOAD_DIR}/{req_id}_%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
-        "cookiefile": COOKIES_FILE,
         "sleep_interval": 5,
         "max_sleep_interval": 15,
     }
+    if os.path.isfile(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
+    proxy = os.getenv("IG_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    if proxy:
+        ydl_opts["proxy"] = proxy
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
