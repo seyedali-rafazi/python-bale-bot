@@ -1,9 +1,10 @@
 # services/pinterest_queue.py
 
 import asyncio
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
+from services.chromium_workload import heavy_chromium_semaphore
 from services.pinterest import search_pinterest_images
 
 # تعداد سرچ همزمان Pinterest (کاهش یافته برای کاهش مصرف RAM)
@@ -71,14 +72,15 @@ async def pinterest_worker(worker_id: int):
         try:
             print(f"[Pinterest Worker {worker_id}] searching: {job.query}")
 
-            # Use _isolated_search wrapper instead of direct call
-            # This ensures Playwright sync API runs cleanly in thread context
-            data = await loop.run_in_executor(
-                _process_pool,
-                _isolated_search,
-                job.query,
-                job.max_results,
-            )
+            async with heavy_chromium_semaphore:
+                # Use _isolated_search wrapper instead of direct call
+                # This ensures Playwright sync API runs cleanly in thread context
+                data = await loop.run_in_executor(
+                    _process_pool,
+                    _isolated_search,
+                    job.query,
+                    job.max_results,
+                )
 
             if not job.future.done():
                 job.future.set_result(data)
