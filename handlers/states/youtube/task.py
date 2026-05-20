@@ -303,17 +303,23 @@ async def background_yt_download(
                                     text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                 )
                                 zip_basename = f"youtube_{video_id}_{quality}p"
-                                zip_path, zip_parts = await asyncio.to_thread(
-                                    build_zip_and_split,
-                                    raw_file,
-                                    os.path.dirname(raw_file) or ".",
-                                    zip_basename,
-                                    20 * 1024 * 1024,
+                                zip_parts, archive_basename, split_method = (
+                                    await asyncio.to_thread(
+                                        build_zip_and_split,
+                                        raw_file,
+                                        os.path.dirname(raw_file) or ".",
+                                        zip_basename,
+                                        20 * 1024 * 1024,
+                                    )
                                 )
-                                zip_artifacts.append(zip_path)
-                                for p in zip_parts:
-                                    if p != zip_path:
-                                        zip_artifacts.append(p)
+                                zip_artifacts.extend(zip_parts)
+                                if split_method == "concat":
+                                    full_zip = os.path.join(
+                                        os.path.dirname(raw_file) or ".",
+                                        f"{archive_basename}.zip",
+                                    )
+                                    if os.path.isfile(full_zip):
+                                        zip_artifacts.append(full_zip)
                                 result = zip_parts
                             else:
                                 result = [raw_file]
@@ -431,6 +437,8 @@ async def background_yt_download(
                                     result,
                                     label=f"Video ID: {video_id}",
                                     cache_key=cache_key,
+                                    archive_basename=archive_basename,
+                                    split_method=split_method,
                                 )
 
                         else:
@@ -760,17 +768,23 @@ async def background_yt_download(
                                     text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                 )
                                 zip_basename = f"youtube_audio_{video_id}"
-                                zip_path, zip_parts = await asyncio.to_thread(
-                                    build_zip_and_split,
-                                    file_path,
-                                    os.path.dirname(file_path) or ".",
-                                    zip_basename,
-                                    20 * 1024 * 1024,
+                                zip_parts, archive_basename, split_method = (
+                                    await asyncio.to_thread(
+                                        build_zip_and_split,
+                                        file_path,
+                                        os.path.dirname(file_path) or ".",
+                                        zip_basename,
+                                        20 * 1024 * 1024,
+                                    )
                                 )
-                                zip_artifacts.append(zip_path)
-                                for p in zip_parts:
-                                    if p != zip_path:
-                                        zip_artifacts.append(p)
+                                zip_artifacts.extend(zip_parts)
+                                if split_method == "concat":
+                                    full_zip = os.path.join(
+                                        os.path.dirname(file_path) or ".",
+                                        f"{archive_basename}.zip",
+                                    )
+                                    if os.path.isfile(full_zip):
+                                        zip_artifacts.append(full_zip)
 
                                 await process_and_send_document_parts(
                                     context,
@@ -778,6 +792,8 @@ async def background_yt_download(
                                     zip_parts,
                                     label=f"Audio ID: {video_id}",
                                     cache_key=cache_key,
+                                    archive_basename=archive_basename,
+                                    split_method=split_method,
                                 )
 
                         else:
