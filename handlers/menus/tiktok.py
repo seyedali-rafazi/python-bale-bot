@@ -91,11 +91,15 @@ async def btn_tt_explore_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
             break
 
         try:
-            await context.bot.send_video(chat_id=chat_id, video=vid)
+            # Newer entries may be document file_ids (ZIP parts). Try document first, then video.
+            try:
+                await context.bot.send_document(chat_id=chat_id, document=vid)
+            except Exception:
+                await context.bot.send_video(chat_id=chat_id, video=vid)
             sent_count += 1
 
         except Exception as e:
-            print(f"Error sending video {vid}: {e}")
+            print(f"Error sending explore media {vid}: {e}")
             await delete_invalid_video_from_db(vid)  # اضافه شدن await
 
     if sent_count > 0:

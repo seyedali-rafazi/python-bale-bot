@@ -258,10 +258,10 @@ async def send_cached_files(
             await context.bot.send_message(
                 chat_id=chat_id, text=f"📤 ارسال پارت {idx} از {total_parts}..."
             )
-        if format_type == "video":
-            await send_video_once(context, chat_id, file_id)
-        elif format_type == "video_zip":
+        if format_type.endswith("_zip"):
             await send_document_once(context, chat_id, file_id)
+        elif format_type == "video":
+            await send_video_once(context, chat_id, file_id)
         else:
             await send_audio_once(context, chat_id, file_id)
         await asyncio.sleep(1)

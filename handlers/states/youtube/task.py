@@ -58,7 +58,10 @@ async def background_yt_download(
     quality: str = "480",
 ):
     video_id = extract_yt_id(url)
-    cache_key = f"{video_id}_{format_type}_{destination}_{quality}"
+    effective_format = (
+        f"{format_type}_zip" if destination == "telegram" else format_type
+    )
+    cache_key = f"{video_id}_{effective_format}_{destination}_{quality}"
 
     # =========================================
     # کش
@@ -72,7 +75,7 @@ async def background_yt_download(
                 context,
                 chat_id,
                 cached_files,
-                format_type,
+                effective_format,
             )
 
             await increment_yt_video_view(cache_key)
@@ -245,7 +248,7 @@ async def background_yt_download(
                 # VIDEO
                 # =========================================
 
-                if format_type in ("video", "video_zip"):
+                if format_type == "video":
                     downloaded_files = []
                     zip_artifacts = []
 
@@ -294,12 +297,11 @@ async def background_yt_download(
                                 text="⏳ در حال آماده‌سازی ویدیو...",
                             )
 
-                            if format_type == "video_zip" and destination == "telegram":
+                            if destination == "telegram":
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="📦 در حال ساخت فایل ZIP و تقسیم به پارت‌های 20MB...",
+                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                 )
-                                # Create zip and split to 20MB parts for upload
                                 zip_basename = f"youtube_{video_id}_{quality}p"
                                 zip_path, zip_parts = await asyncio.to_thread(
                                     build_zip_and_split,
@@ -314,11 +316,7 @@ async def background_yt_download(
                                         zip_artifacts.append(p)
                                 result = zip_parts
                             else:
-                                result = (
-                                    await split_video_if_needed(raw_file)
-                                    if destination == "telegram"
-                                    else [raw_file]
-                                )
+                                result = [raw_file]
 
                             downloaded_files.extend(result)
 
@@ -426,22 +424,14 @@ async def background_yt_download(
                             # =========================
 
                             else:
-                                if format_type == "video_zip":
-                                    await process_and_send_document_parts(
-                                        context,
-                                        chat_id,
-                                        result,
-                                        label=f"Video ID: {video_id}",
-                                        cache_key=cache_key,
-                                    )
-                                else:
-                                    await process_and_send_video_parts(
-                                        context,
-                                        chat_id,
-                                        result,
-                                        video_id,
-                                        cache_key,
-                                    )
+                                # Telegram destination always sends ZIP as documents
+                                await process_and_send_document_parts(
+                                    context,
+                                    chat_id,
+                                    result,
+                                    label=f"Video ID: {video_id}",
+                                    cache_key=cache_key,
+                                )
 
                         else:
                             raise Exception("Download failed")
@@ -619,9 +609,6 @@ async def background_yt_download(
 
                     finally:
                         for file_path in downloaded_files:
-                            # For video_zip: keep zip parts until after send finishes
-                            if format_type == "video_zip":
-                                continue
                             if os.path.exists(file_path):
                                 try:
                                     await asyncio.to_thread(os.remove, file_path)
@@ -640,6 +627,7 @@ async def background_yt_download(
 
                 elif format_type == "audio":
                     file_path = None
+                    zip_artifacts = []
 
                     try:
                         max_size = (
@@ -766,39 +754,31 @@ async def background_yt_download(
                             # =====================
 
                             else:
+                                # Telegram destination: ZIP audio + split to 20MB documents
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="📤 آپلود فایل صوتی...",
+                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                 )
+                                zip_basename = f"youtube_audio_{video_id}"
+                                zip_path, zip_parts = await asyncio.to_thread(
+                                    build_zip_and_split,
+                                    file_path,
+                                    os.path.dirname(file_path) or ".",
+                                    zip_basename,
+                                    20 * 1024 * 1024,
+                                )
+                                zip_artifacts.append(zip_path)
+                                for p in zip_parts:
+                                    if p != zip_path:
+                                        zip_artifacts.append(p)
 
-                                try:
-                                    file_id = await upload_audio_to_storage_once(
-                                        context,
-                                        file_path,
-                                        f"Audio ID: {video_id}",
-                                    )
-
-                                    await send_audio_once(
-                                        context,
-                                        chat_id,
-                                        file_id,
-                                    )
-
-                                    await save_cached_video(
-                                        cache_key,
-                                        [file_id],
-                                    )
-
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text="✅ ارسال با موفقیت انجام شد!",
-                                    )
-
-                                except Exception:
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text="❌ خطا در ارسال صوت.",
-                                    )
+                                await process_and_send_document_parts(
+                                    context,
+                                    chat_id,
+                                    zip_parts,
+                                    label=f"Audio ID: {video_id}",
+                                    cache_key=cache_key,
+                                )
 
                         else:
                             await context.bot.send_message(
@@ -825,6 +805,12 @@ async def background_yt_download(
                                 )
                             except:
                                 pass
+                        for z in zip_artifacts:
+                            if z and isinstance(z, str) and os.path.exists(z):
+                                try:
+                                    await asyncio.to_thread(os.remove, z)
+                                except Exception:
+                                    pass
 
             except Exception as e:
                 progress_dict["is_finished"] = True

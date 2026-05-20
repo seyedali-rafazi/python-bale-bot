@@ -37,7 +37,6 @@ def get_main_menu_keyboard():
 def get_yt_format_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_VIDEO)],
-        [KeyboardButton(BTN_YT_VIDEO_ZIP)],
         [KeyboardButton(BTN_YT_AUDIO)],
         [KeyboardButton(BTN_BACK)],
     ]

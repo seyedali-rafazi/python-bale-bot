@@ -2,17 +2,12 @@
 
 import re
 import html
-import json
 import time
-import threading
 from typing import List, Optional, Dict
 from urllib.parse import quote, urlparse
 
 # Sync API ONLY - must not be used in asyncio loop!
-from playwright.sync_api import (
-    sync_playwright,
-    TimeoutError as PlaywrightTimeoutError,
-)
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from services.playwright_browser_manager import get_browser_manager
 
@@ -23,72 +18,23 @@ USER_AGENT = (
 )
 
 
-# #region agent log (debug-595f78)
-_DBG_LOG_PATH = "debug-595f78.log"
-_DBG_SESSION_ID = "595f78"
-_dbg_lock = threading.Lock()
-
-
-def _dbg_log(hypothesisId: str, location: str, message: str, data: dict, runId: str = "pre-fix"):
-    # Never log secrets (cookies, auth tokens, full queries, etc.)
-    payload = {
-        "sessionId": _DBG_SESSION_ID,
-        "runId": runId,
-        "hypothesisId": hypothesisId,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        line = json.dumps(payload, ensure_ascii=False)
-        with _dbg_lock:
-            with open(_DBG_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-    except Exception:
-        pass
-
-
-# #endregion agent log (debug-595f78)
-
-
 class PinterestService:
     def __init__(self):
         self.user_agent = USER_AGENT
 
     def search_images(self, query: str, max_results: int = 30) -> List[str]:
-        _dbg_log(
-            hypothesisId="A",
-            location="services/pinterest.py:search_images:entry",
-            message="Pinterest search start",
-            data={"queryLen": len(query or ""), "maxResults": int(max_results)},
-        )
         html_text = self._load_search_page(query)
+        # Recovery: HTML می‌آید ولی پین‌های قابل استخراج نیست (صفحه چالش/بلاک)
+        if html_text and "i.pinimg.com" not in html_text:
+            mgr = get_browser_manager()
+            mgr.force_restart()
+            time.sleep(2.0)
+            html_text = self._load_search_page(query)
+
         if not html_text:
-            _dbg_log(
-                hypothesisId="A",
-                location="services/pinterest.py:search_images:empty_html",
-                message="Pinterest search got empty HTML",
-                data={"queryLen": len(query or "")},
-            )
             return []
 
         raw_urls = self._extract_pinimg_urls(html_text)
-        # Detect common bot-block pages without logging HTML content
-        lower = html_text.lower()
-        has_captcha = ("captcha" in lower) or ("challenge" in lower) or ("robot" in lower)
-        has_login = ("log in" in lower) or ("login" in lower) or ("sign up" in lower) or ("signup" in lower)
-        _dbg_log(
-            hypothesisId="A",
-            location="services/pinterest.py:search_images:parse",
-            message="Pinterest HTML parsed",
-            data={
-                "rawUrlCount": len(raw_urls),
-                "hasCaptchaWords": bool(has_captcha),
-                "hasLoginWords": bool(has_login),
-                "htmlLen": len(html_text),
-            },
-        )
         best_by_image: Dict[str, str] = {}
 
         for raw_url in raw_urls:
@@ -129,19 +75,11 @@ class PinterestService:
 
     def _load_search_page(self, query: str) -> Optional[str]:
         search_url = f"https://www.pinterest.com/search/pins/?q={quote(query)}"
-        max_retries = 2
-        start_ms = int(time.time() * 1000)
-        
+        max_retries = 3
+
         for attempt in range(max_retries):
             try:
-                # Use browser manager to reuse browser instances (reduces RAM usage)
                 browser_manager = get_browser_manager()
-                _dbg_log(
-                    hypothesisId="B",
-                    location="services/pinterest.py:_load_search_page:before_new_context",
-                    message="Creating new browser context",
-                    data={"attempt": attempt + 1, "maxRetries": max_retries},
-                )
                 context = browser_manager.new_context(self.user_agent)
                 page = None
 
@@ -155,38 +93,19 @@ class PinterestService:
                         }
                     )
 
-                    print(f"Pinterest Playwright opening: {search_url} (attempt {attempt + 1}/{max_retries})")
+                    print(
+                        f"Pinterest Playwright opening: {search_url} (attempt {attempt + 1}/{max_retries})"
+                    )
 
-                    # Reduced timeout: 30s max for page load
-                    resp = page.goto(
+                    page.goto(
                         search_url,
                         wait_until="domcontentloaded",
-                        timeout=30000,
-                    )
-                    try:
-                        status = resp.status if resp else None
-                    except Exception:
-                        status = None
-
-                    # Log final url + status to detect redirects to login/challenge
-                    _dbg_log(
-                        hypothesisId="A",
-                        location="services/pinterest.py:_load_search_page:after_goto",
-                        message="Goto finished",
-                        data={
-                            "attempt": attempt + 1,
-                            "status": status,
-                            "finalUrlHost": (urlparse(page.url).netloc if page and page.url else None),
-                            "finalUrlPath": (urlparse(page.url).path if page and page.url else None),
-                            "elapsedMs": int(time.time() * 1000) - start_ms,
-                        },
+                        timeout=45000,
                     )
 
                     try:
-                        # Wait for images to load
                         page.wait_for_timeout(2000)
 
-                        # Scroll to load more images (with timeout per scroll)
                         for scroll_attempt in range(4):
                             try:
                                 page.mouse.wheel(0, 2500)
@@ -197,104 +116,71 @@ class PinterestService:
 
                     except Exception as wait_err:
                         print(f"Wait/scroll error (non-critical): {wait_err}")
-                        # Continue anyway - we might still have some content
 
                     content = page.content()
-                    _dbg_log(
-                        hypothesisId="A",
-                        location="services/pinterest.py:_load_search_page:got_content",
-                        message="Page content captured",
-                        data={
-                            "attempt": attempt + 1,
-                            "contentLen": len(content) if content else 0,
-                            "elapsedMs": int(time.time() * 1000) - start_ms,
-                        },
-                    )
-                    
-                    # Cleanup
+
                     try:
                         page.close()
-                    except:
+                    except Exception:
                         pass
-                    
+
                     try:
                         context.close()
-                    except:
+                    except Exception:
                         pass
 
                     return content
 
                 except PlaywrightTimeoutError as timeout_err:
-                    print(f"Pinterest timeout for query={query} (attempt {attempt + 1}): {timeout_err}")
-                    _dbg_log(
-                        hypothesisId="C",
-                        location="services/pinterest.py:_load_search_page:timeout",
-                        message="Playwright timeout",
-                        data={"attempt": attempt + 1, "elapsedMs": int(time.time() * 1000) - start_ms},
+                    print(
+                        f"Pinterest timeout for query={query} (attempt {attempt + 1}): {timeout_err}"
                     )
-                    
-                    # Cleanup on timeout
+
                     if page:
                         try:
                             page.close()
-                        except:
+                        except Exception:
                             pass
                     try:
                         context.close()
-                    except:
+                    except Exception:
                         pass
-                    
-                    # Retry on timeout
+
                     if attempt < max_retries - 1:
+                        get_browser_manager().force_restart()
+                        time.sleep(1.5 * (attempt + 1))
                         print(f"Retrying Pinterest search for: {query}")
                         continue
-                    else:
-                        return None
-                
+                    return None
+
                 except Exception as err:
                     print(f"Pinterest error for query={query} (attempt {attempt + 1}): {err}")
-                    _dbg_log(
-                        hypothesisId="D",
-                        location="services/pinterest.py:_load_search_page:error",
-                        message="Playwright error",
-                        data={
-                            "attempt": attempt + 1,
-                            "errType": err.__class__.__name__,
-                            "elapsedMs": int(time.time() * 1000) - start_ms,
-                        },
-                    )
-                    
-                    # Cleanup on error
+
                     if page:
                         try:
                             page.close()
-                        except:
+                        except Exception:
                             pass
                     try:
                         context.close()
-                    except:
+                    except Exception:
                         pass
-                    
-                    # Retry on error
+
                     if attempt < max_retries - 1:
+                        get_browser_manager().force_restart()
+                        time.sleep(1.5 * (attempt + 1))
                         print(f"Retrying Pinterest search for: {query}")
                         continue
-                    else:
-                        return None
+                    return None
 
             except Exception as outer_err:
                 print(f"Pinterest outer error for query={query}: {outer_err}")
-                _dbg_log(
-                    hypothesisId="B",
-                    location="services/pinterest.py:_load_search_page:outer_error",
-                    message="Outer error creating context/browser",
-                    data={"attempt": attempt + 1, "errType": outer_err.__class__.__name__},
-                )
                 if attempt < max_retries - 1:
+                    get_browser_manager().force_restart()
+                    time.sleep(1.5 * (attempt + 1))
                     continue
-                else:
-                    return None
-        
+                return None
+
         return None
 
     def _extract_pinimg_urls(self, text: str) -> List[str]:
@@ -403,7 +289,6 @@ class PinterestService:
         return 5
 
 
-# این تابع اکنون معمولی (sync) است
 def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
     service = PinterestService()
     return service.search_images(query=query, max_results=max_results)

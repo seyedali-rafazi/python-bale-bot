@@ -34,7 +34,8 @@ from services.pinterest_queue import (
 # تنظیمات Performance
 # =========================
 
-DOWNLOAD_CONCURRENCY = 100
+# هم‌زمانی بالا باعث 429/بلاک از i.pinimg.com و خالی شدن نتایج می‌شود
+DOWNLOAD_CONCURRENCY = 16
 
 SEND_BATCH_SIZE = 10
 
@@ -63,35 +64,46 @@ async def get_image_bytes(
 ) -> Optional[BytesIO]:
 
     async with download_semaphore:
-        try:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=20),
-                allow_redirects=True,
-                ssl=False,
-            ) as res:
-                if res.status != 200:
-                    return None
+        for attempt in range(3):
+            try:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=25),
+                    allow_redirects=True,
+                    ssl=False,
+                ) as res:
+                    if res.status in (429, 503) and attempt < 2:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    if res.status != 200:
+                        if attempt < 2:
+                            await asyncio.sleep(0.3 * (attempt + 1))
+                            continue
+                        return None
 
-                content_type = res.headers.get("Content-Type", "").lower()
+                    content_type = res.headers.get("Content-Type", "").lower()
 
-                if "image" not in content_type:
-                    return None
+                    if "image" not in content_type:
+                        return None
 
-                bio = BytesIO()
+                    bio = BytesIO()
 
-                async for chunk in res.content.iter_chunked(65536):
-                    bio.write(chunk)
+                    async for chunk in res.content.iter_chunked(65536):
+                        bio.write(chunk)
 
-                bio.seek(0)
-                bio.name = "pinterest.jpg"
+                    bio.seek(0)
+                    bio.name = "pinterest.jpg"
 
-                return bio
+                    return bio
 
-        except Exception as e:
-            print(f"download image error: {e}")
-            return None
+            except Exception as e:
+                print(f"download image error (try {attempt + 1}): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(0.4 * (attempt + 1))
+                    continue
+                return None
+        return None
 
 
 async def fetch_image_bytes(

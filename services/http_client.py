@@ -12,8 +12,9 @@ async def init_http_session() -> aiohttp.ClientSession:
         timeout = aiohttp.ClientTimeout(total=30)
         connector = aiohttp.TCPConnector(
             limit=100,
-            limit_per_host=20,
+            limit_per_host=24,
             ttl_dns_cache=300,
+            enable_cleanup_closed=True,
         )
         _http_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     return _http_session

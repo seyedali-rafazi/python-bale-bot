@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+import re
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
@@ -23,6 +24,15 @@ from services.zip_utils import build_zip_and_split
 
 STORAGE_CHANNEL_ID = "@digittt"
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
+
+
+def _strip_hashtags(text: str) -> str:
+    if not text:
+        return ""
+    # Remove hashtags like #us, #something, including Persian/Unicode word chars
+    cleaned = re.sub(r"(?:^|\s)#[^\s#]+", " ", text, flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
@@ -75,17 +85,6 @@ async def background_tt_download(
                 text="📤 ویدیو دانلود شد! در حال آپلود در سرور...",
             )
 
-            with open(file_path, "rb") as vid:
-                channel_msg = await context.bot.send_video(
-                    chat_id=STORAGE_CHANNEL_ID,
-                    video=vid,
-                    caption=f"🎥 اکسپلور داخلی تیک‌تاک\n🔗 لینک اصلی: {url}",
-                    read_timeout=300,
-                    write_timeout=300,
-                )
-                file_id = channel_msg.video.file_id
-                await add_tiktok_explore_video(file_id)  # اضافه شدن await
-
             # Build ZIP for user delivery (20MB parts)
             await context.bot.edit_message_text(
                 chat_id=chat_id,
@@ -93,6 +92,7 @@ async def background_tt_download(
                 text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
             )
 
+            safe_title = _strip_hashtags(title) or "tiktok_video"
             zip_basename = "tiktok_video"
             zip_path, zip_parts = await asyncio.to_thread(
                 build_zip_and_split,
@@ -101,6 +101,29 @@ async def background_tt_download(
                 zip_basename,
                 20 * 1024 * 1024,
             )
+
+            # Upload ZIP parts to storage channel too (no tags)
+            channel_file_ids = []
+            total_parts = len(zip_parts)
+            for idx, part_path in enumerate(zip_parts, 1):
+                caption = (
+                    f"📦 TikTok ZIP\n{safe_title}\nPart {idx}/{total_parts}"
+                    if safe_title
+                    else f"📦 TikTok ZIP\nPart {idx}/{total_parts}"
+                )
+                with open(part_path, "rb") as doc:
+                    channel_msg = await context.bot.send_document(
+                        chat_id=STORAGE_CHANNEL_ID,
+                        document=doc,
+                        caption=caption,
+                        read_timeout=300,
+                        write_timeout=300,
+                    )
+                    channel_file_ids.append(channel_msg.document.file_id)
+
+            # Store first part id for explore DB (backward compatibility)
+            if channel_file_ids:
+                await add_tiktok_explore_video(channel_file_ids[0])
 
         # Send ZIP parts to user
         total_parts = len(zip_parts)
@@ -122,7 +145,7 @@ async def background_tt_download(
                 await context.bot.send_document(
                     chat_id=chat_id,
                     document=doc,
-                    caption=f"✅ {title}\n📦 ZIP Part {idx}/{total_parts}",
+                    caption=f"✅ {safe_title or 'TikTok'}\n📦 ZIP Part {idx}/{total_parts}",
                     read_timeout=300,
                     write_timeout=300,
                 )

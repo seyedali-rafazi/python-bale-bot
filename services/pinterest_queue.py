@@ -91,8 +91,8 @@ async def pinterest_worker(worker_id: int):
 
         finally:
             search_queue.task_done()
-            # Add small delay between searches to prevent overwhelming system
-            await asyncio.sleep(0.5)
+            # فاصله بین جستجوها — کاهش بلاک Pinterest/Playwright زیر بار بالا
+            await asyncio.sleep(1.5)
 
 
 async def start_pinterest_workers():
@@ -110,12 +110,17 @@ async def queued_pinterest_search(
 
     future = loop.create_future()
 
-    await search_queue.put(
-        PinterestJob(
-            query=query,
-            max_results=max_results,
-            future=future,
-        )
+    job = PinterestJob(
+        query=query,
+        max_results=max_results,
+        future=future,
     )
+    # اگر صف پر باشد، put بی‌نهایت بلاک می‌کند و کاربر timeout می‌خورد
+    try:
+        await asyncio.wait_for(search_queue.put(job), timeout=45.0)
+    except asyncio.TimeoutError:
+        if not future.done():
+            future.set_result([])
+        return []
 
     return await future
