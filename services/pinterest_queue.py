@@ -1,54 +1,13 @@
 # services/pinterest_queue.py
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 from services.chromium_workload import heavy_chromium_semaphore
-from services.pinterest import search_pinterest_images
+from services.pinterest import search_pinterest_images  
 
-# تعداد سرچ همزمان Pinterest (کاهش یافته برای کاهش مصرف RAM)
 PINTEREST_SEARCH_WORKERS = 1
-
-# Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid asyncio context issues
-# ThreadPoolExecutor runs in threads, not processes, but avoids Playwright asyncio conflicts
-_process_pool = ThreadPoolExecutor(max_workers=PINTEREST_SEARCH_WORKERS, thread_name_prefix="pinterest-worker")
-
-# queue اصلی سرچ‌ها
 search_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-
-
-def _isolated_search(query: str, max_results: int) -> List[str]:
-    """
-    Run Pinterest search in complete isolation from asyncio.
-    This wrapper ensures Playwright sync API runs cleanly without asyncio conflicts.
-    
-    Called from ThreadPoolExecutor to isolate from main asyncio loop.
-    """
-    try:
-        # Import asyncio here (not at module level) to avoid conflicts
-        import asyncio
-        import sys
-        
-        # Try to detect if we're somehow in an asyncio context
-        try:
-            loop = asyncio.get_running_loop()
-            # If we get here, there's a loop running (shouldn't happen in thread)
-            print(f"⚠️ WARNING: Asyncio loop detected in search thread: {loop}")
-        except RuntimeError as e:
-            # Expected: No loop running in this thread
-            pass
-        
-        # Now perform the search safely
-        result = search_pinterest_images(query, max_results)
-        return result
-    
-    except Exception as e:
-        print(f"❌ Error in isolated search for '{query}': {e}")
-        import traceback
-        traceback.print_exc()
-        # Return empty list instead of raising to prevent handler crash
-        return []
 
 
 class PinterestJob:
@@ -64,8 +23,6 @@ class PinterestJob:
 
 
 async def pinterest_worker(worker_id: int):
-    loop = asyncio.get_running_loop()
-
     while True:
         job: PinterestJob = await search_queue.get()
 
@@ -73,14 +30,8 @@ async def pinterest_worker(worker_id: int):
             print(f"[Pinterest Worker {worker_id}] searching: {job.query}")
 
             async with heavy_chromium_semaphore:
-                # Use _isolated_search wrapper instead of direct call
-                # This ensures Playwright sync API runs cleanly in thread context
-                data = await loop.run_in_executor(
-                    _process_pool,
-                    _isolated_search,
-                    job.query,
-                    job.max_results,
-                )
+                # اجرای مستقیم تابع به صورت ناهمگام
+                data = await search_pinterest_images(job.query, job.max_results)
 
             if not job.future.done():
                 job.future.set_result(data)
@@ -93,7 +44,6 @@ async def pinterest_worker(worker_id: int):
 
         finally:
             search_queue.task_done()
-            # فاصله بین جستجوها — کاهش بلاک Pinterest/Playwright زیر بار بالا
             await asyncio.sleep(1.5)
 
 
@@ -109,7 +59,6 @@ async def queued_pinterest_search(
     max_results: int = 30,
 ) -> List[str]:
     loop = asyncio.get_running_loop()
-
     future = loop.create_future()
 
     job = PinterestJob(
@@ -117,7 +66,7 @@ async def queued_pinterest_search(
         max_results=max_results,
         future=future,
     )
-    # اگر صف پر باشد، put بی‌نهایت بلاک می‌کند و کاربر timeout می‌خورد
+
     try:
         await asyncio.wait_for(search_queue.put(job), timeout=45.0)
     except asyncio.TimeoutError:

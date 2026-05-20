@@ -6,7 +6,7 @@ Reuses browser instances and limits concurrent page creation.
 
 import asyncio
 from typing import Optional
-from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
 class BrowserPool:
@@ -29,13 +29,15 @@ class BrowserPool:
     async def _ensure_initialized(self):
         """Initialize Playwright if needed."""
         if self._playwright is None:
-            self._playwright = sync_playwright().__enter__()
+            # استفاده از نسخه ناهمگام (async)
+            self._playwright = await async_playwright().start()
 
     async def _create_browser(self) -> Browser:
         """Create a new browser instance with memory-optimized settings."""
         await self._ensure_initialized()
 
-        browser = self._playwright.chromium.launch(
+        # فراخوانی با await
+        browser = await self._playwright.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
@@ -71,7 +73,8 @@ class BrowserPool:
         """Create a new context (tab) in an available browser."""
         browser = await self.get_browser()
 
-        context = browser.new_context(
+        # فراخوانی با await
+        context = await browser.new_context(
             user_agent=user_agent,
             locale="en-US",
             viewport={"width": 1400, "height": 2200},
@@ -84,12 +87,14 @@ class BrowserPool:
         async with self._lock:
             for browser in self.browsers:
                 try:
-                    browser.close()
+                    # فراخوانی با await
+                    await browser.close()
                 except Exception as e:
                     print(f"Error closing browser: {e}")
             self.browsers.clear()
             if self._playwright:
-                self._playwright.__exit__(None, None, None)
+                # بستن صحیح playwright
+                await self._playwright.stop()
                 self._playwright = None
             print("✅ All browsers closed")
 

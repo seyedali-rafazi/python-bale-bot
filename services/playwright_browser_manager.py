@@ -1,32 +1,25 @@
 # services/playwright_browser_manager.py
 """
-Singleton browser manager for Playwright (Sync API).
-Reuses a single browser instance across multiple searches within the same process.
-Works with ProcessPoolExecutor with proper error handling and timeouts.
-
-CRITICAL: Must be used in a separate process/thread, NOT in asyncio loop!
+Singleton browser manager for Playwright (Async API).
+Reuses a single browser instance across multiple searches.
 """
 
-from typing import Optional
-from playwright.sync_api import sync_playwright, Browser, BrowserContext
-import atexit
+import asyncio
 import time
-import threading
+from typing import Optional
+from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
 
 
 class PlaywrightBrowserManager:
     def __init__(self):
-        self._browser: Browser | None = None
-        self._playwright = None
+        self._browser: Optional[Browser] = None
+        self._playwright: Optional[Playwright] = None
         self._last_context_time = time.time()
         self._context_timeout = 300
-        self._init_lock = threading.Lock()
+        self._init_lock = asyncio.Lock()  # تغییر به Lock ناهمگام
 
-        # متغیرهای مربوط به ری‌استارت اجباری برای جلوگیری از نشت حافظه (Memory Leak)
         self._usage_count = 0
-        self._max_usages_before_restart = 100  # بعد از ۱۰۰ بار استفاده ریستارت شود
-
-        atexit.register(self.cleanup)
+        self._max_usages_before_restart = 100
 
     def _is_browser_alive(self) -> bool:
         try:
@@ -36,48 +29,42 @@ class PlaywrightBrowserManager:
         except:
             return False
 
-    def _restart_browser(self):
+    async def _restart_browser(self):
         print("🔄 Restarting Playwright Browser...")
-        self.cleanup()
+        await self.cleanup()
         self._browser = None
         self._playwright = None
 
-    def force_restart(self):
-        """سخت‌گیری پس از خطا / بلاک: ری‌استارت کامل مرورگر (thread-safe با init_lock)."""
-        with self._init_lock:
+    async def force_restart(self):
+        async with self._init_lock:
             self._usage_count = 0
-            self._restart_browser()
+            await self._restart_browser()
 
-    def _initialize(self):
-        with self._init_lock:
+    async def _initialize(self):
+        async with self._init_lock:
             if self._browser is not None:
-                # بررسی زنده بودن مرورگر
                 if not self._is_browser_alive():
                     print("⚠️ Browser crashed, restarting...")
-                    self._restart_browser()
-                    return
+                    await self._restart_browser()
 
-                # بررسی تعداد دفعات استفاده برای جلوگیری از پر شدن رم
-                if self._usage_count >= self._max_usages_before_restart:
+                elif self._usage_count >= self._max_usages_before_restart:
                     print(
                         f"♻️ Browser reached {self._usage_count} uses. Force restarting to free RAM..."
                     )
-                    self._restart_browser()
-                    return
+                    await self._restart_browser()
 
-                # بررسی تایم‌اوت در صورت بیکاری مرورگر
-                time_since_use = time.time() - self._last_context_time
-                if time_since_use > self._context_timeout:
-                    print(f"⚠️ Browser idle for {time_since_use:.0f}s, restarting...")
-                    self._restart_browser()
-                    return
-
-                return
+                else:
+                    time_since_use = time.time() - self._last_context_time
+                    if time_since_use > self._context_timeout:
+                        print(
+                            f"⚠️ Browser idle for {time_since_use:.0f}s, restarting..."
+                        )
+                        await self._restart_browser()
 
             if self._browser is None:
                 try:
-                    self._playwright = sync_playwright().__enter__()
-                    self._browser = self._playwright.chromium.launch(
+                    self._playwright = await async_playwright().start()
+                    self._browser = await self._playwright.chromium.launch(
                         headless=True,
                         args=[
                             "--disable-blink-features=AutomationControlled",
@@ -94,30 +81,32 @@ class PlaywrightBrowserManager:
                         ],
                         timeout=30000,
                     )
-                    self._usage_count = 0  # صفر کردن شمارنده بعد از ساخت مرورگر جدید
+                    self._usage_count = 0
                     self._last_context_time = time.time()
                     print("✅ Browser initialized")
                 except Exception as e:
                     print(f"❌ Browser launch failed: {e}")
                     self._browser = None
+                    if self._playwright:
+                        await self._playwright.stop()
                     self._playwright = None
                     raise
 
-    def get_browser(self) -> Browser:
-        self._initialize()
+    async def get_browser(self) -> Browser:
+        await self._initialize()
         if self._browser is None:
-            self._initialize()  # تلاش مجدد در صورت خطا
+            await self._initialize()
             if self._browser is None:
                 raise Exception("Failed to initialize browser")
         return self._browser
 
-    def new_context(self, user_agent: str) -> BrowserContext:
+    async def new_context(self, user_agent: str) -> BrowserContext:
         max_retries = 2
 
         for attempt in range(max_retries):
             try:
-                browser = self.get_browser()
-                context = browser.new_context(
+                browser = await self.get_browser()
+                context = await browser.new_context(
                     user_agent=user_agent,
                     locale="en-US",
                     viewport={"width": 1400, "height": 2200},
@@ -125,7 +114,7 @@ class PlaywrightBrowserManager:
                 )
 
                 self._last_context_time = time.time()
-                self._usage_count += 1  # افزایش شمارنده استفاده
+                self._usage_count += 1
 
                 return context
 
@@ -133,30 +122,28 @@ class PlaywrightBrowserManager:
                 print(
                     f"❌ Context creation failed (Attempt {attempt + 1}/{max_retries}): {e}"
                 )
-                self._restart_browser()
+                await self._restart_browser()
                 if attempt == max_retries - 1:
                     raise e
 
-    def cleanup(self):
+    async def cleanup(self):
         try:
             if self._browser:
-                self._browser.close()
+                await self._browser.close()
         except Exception as e:
             print(f"Error closing browser: {e}")
 
         try:
             if self._playwright:
-                self._playwright.__exit__(None, None, None)
+                await self._playwright.stop()
         except Exception as e:
             print(f"Error closing playwright: {e}")
 
 
-# Global singleton instance per process
 _browser_manager: Optional[PlaywrightBrowserManager] = None
 
 
 def get_browser_manager() -> PlaywrightBrowserManager:
-    """Get the global browser manager instance (one per process)."""
     global _browser_manager
     if _browser_manager is None:
         _browser_manager = PlaywrightBrowserManager()

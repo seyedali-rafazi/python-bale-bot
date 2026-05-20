@@ -2,14 +2,15 @@
 
 import re
 import html
-import time
+import asyncio
 from typing import List, Optional, Dict
 from urllib.parse import quote, urlparse
 
-# Sync API ONLY - must not be used in asyncio loop!
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+# استفاده از نسخه ناهمگام (Async) پلای‌رایت
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from services.playwright_browser_manager import get_browser_manager
+# استفاده از استخر مرورگر ناهمگام جدید به جای منیجر همگام قدیمی
+from services.browser_pool import get_browser_pool
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -22,14 +23,17 @@ class PinterestService:
     def __init__(self):
         self.user_agent = USER_AGENT
 
-    def search_images(self, query: str, max_results: int = 30) -> List[str]:
-        html_text = self._load_search_page(query)
+    # این متد باید async باشد چون در داخلش await داریم
+    async def search_images(self, query: str, max_results: int = 30) -> List[str]:
+        html_text = await self._load_search_page(query)
+
         # Recovery: HTML می‌آید ولی پین‌های قابل استخراج نیست (صفحه چالش/بلاک)
         if html_text and "i.pinimg.com" not in html_text:
-            mgr = get_browser_manager()
-            mgr.force_restart()
-            time.sleep(2.0)
-            html_text = self._load_search_page(query)
+            # در سیستم جدید، در صورت بلاک شدن بهتر است مرورگرها را ببندیم تا ری‌استارت شوند
+            pool = await get_browser_pool()
+            await pool.close_all()
+            await asyncio.sleep(2.0)
+            html_text = await self._load_search_page(query)
 
         if not html_text:
             return []
@@ -73,20 +77,22 @@ class PinterestService:
 
         return results
 
-    def _load_search_page(self, query: str) -> Optional[str]:
+    # این متد به دلیل تعامل با Playwright باید async باشد
+    async def _load_search_page(self, query: str) -> Optional[str]:
         search_url = f"https://www.pinterest.com/search/pins/?q={quote(query)}"
         max_retries = 3
 
         for attempt in range(max_retries):
             try:
-                browser_manager = get_browser_manager()
-                context = browser_manager.new_context(self.user_agent)
+                pool = await get_browser_pool()
+                # استفاده از context و page با await
+                context = await pool.create_context(self.user_agent)
                 page = None
 
                 try:
-                    page = context.new_page()
+                    page = await context.new_page()
 
-                    page.set_extra_http_headers(
+                    await page.set_extra_http_headers(
                         {
                             "Accept-Language": "en-US,en;q=0.9",
                             "Referer": "https://www.pinterest.com/",
@@ -97,35 +103,37 @@ class PinterestService:
                         f"Pinterest Playwright opening: {search_url} (attempt {attempt + 1}/{max_retries})"
                     )
 
-                    page.goto(
+                    await page.goto(
                         search_url,
                         wait_until="domcontentloaded",
                         timeout=45000,
                     )
 
                     try:
-                        page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(2000)
 
                         for scroll_attempt in range(4):
                             try:
-                                page.mouse.wheel(0, 2500)
-                                page.wait_for_timeout(1000)
+                                await page.mouse.wheel(0, 2500)
+                                await page.wait_for_timeout(1000)
                             except Exception as scroll_err:
-                                print(f"Scroll attempt {scroll_attempt} failed: {scroll_err}")
+                                print(
+                                    f"Scroll attempt {scroll_attempt} failed: {scroll_err}"
+                                )
                                 break
 
                     except Exception as wait_err:
                         print(f"Wait/scroll error (non-critical): {wait_err}")
 
-                    content = page.content()
+                    content = await page.content()
 
                     try:
-                        page.close()
+                        await page.close()
                     except Exception:
                         pass
 
                     try:
-                        context.close()
+                        await context.close()
                     except Exception:
                         pass
 
@@ -138,37 +146,39 @@ class PinterestService:
 
                     if page:
                         try:
-                            page.close()
+                            await page.close()
                         except Exception:
                             pass
                     try:
-                        context.close()
+                        await context.close()
                     except Exception:
                         pass
 
                     if attempt < max_retries - 1:
-                        get_browser_manager().force_restart()
-                        time.sleep(1.5 * (attempt + 1))
+                        await pool.close_all()
+                        await asyncio.sleep(1.5 * (attempt + 1))
                         print(f"Retrying Pinterest search for: {query}")
                         continue
                     return None
 
                 except Exception as err:
-                    print(f"Pinterest error for query={query} (attempt {attempt + 1}): {err}")
+                    print(
+                        f"Pinterest error for query={query} (attempt {attempt + 1}): {err}"
+                    )
 
                     if page:
                         try:
-                            page.close()
+                            await page.close()
                         except Exception:
                             pass
                     try:
-                        context.close()
+                        await context.close()
                     except Exception:
                         pass
 
                     if attempt < max_retries - 1:
-                        get_browser_manager().force_restart()
-                        time.sleep(1.5 * (attempt + 1))
+                        await pool.close_all()
+                        await asyncio.sleep(1.5 * (attempt + 1))
                         print(f"Retrying Pinterest search for: {query}")
                         continue
                     return None
@@ -176,14 +186,16 @@ class PinterestService:
             except Exception as outer_err:
                 print(f"Pinterest outer error for query={query}: {outer_err}")
                 if attempt < max_retries - 1:
-                    get_browser_manager().force_restart()
-                    time.sleep(1.5 * (attempt + 1))
+                    pool = await get_browser_pool()
+                    await pool.close_all()
+                    await asyncio.sleep(1.5 * (attempt + 1))
                     continue
                 return None
 
         return None
 
     def _extract_pinimg_urls(self, text: str) -> List[str]:
+        # (کد این متد بدون تغییر باقی می‌ماند چون نیازی به async ندارد)
         patterns = [
             r'https://i\.pinimg\.com/[^\s"\'<>\\)]+',
             r'https:\\/\\/i\.pinimg\.com\\/[^"\']+',
@@ -211,6 +223,7 @@ class PinterestService:
         return results
 
     def _clean_url(self, url: str) -> Optional[str]:
+        # (بدون تغییر)
         if not url:
             return None
 
@@ -231,6 +244,7 @@ class PinterestService:
         return url
 
     def _build_quality_candidates(self, url: str) -> List[str]:
+        # (بدون تغییر)
         clean = self._clean_url(url)
         if not clean:
             return []
@@ -263,6 +277,7 @@ class PinterestService:
         return candidates
 
     def _get_image_key(self, url: str) -> Optional[str]:
+        # (بدون تغییر)
         clean = self._clean_url(url)
         if not clean:
             return None
@@ -276,6 +291,7 @@ class PinterestService:
             return None
 
     def _quality_score(self, url: str) -> int:
+        # (بدون تغییر)
         if "/originals/" in url:
             return 0
         if "/736x/" in url:
@@ -289,6 +305,8 @@ class PinterestService:
         return 5
 
 
-def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
+# این تابع اصلی که از خارج صدا زده می‌شود نیز باید async باشد
+async def search_pinterest_images(query: str, max_results: int = 30) -> List[str]:
     service = PinterestService()
-    return service.search_images(query=query, max_results=max_results)
+    # حتماً باید await شود
+    return await service.search_images(query=query, max_results=max_results)
