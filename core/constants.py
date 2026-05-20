@@ -29,11 +29,7 @@ BTN_YT_LINK_MP3 = "🎵 لینک یوتیوب به MP3"
 BTN_YT_TOP_VIDEOS = "🔥 ویدیوهای پر بازدید"
 
 #  منوی اینستاگرام
-BTN_IG_LINK_DL = "🔗 دانلود اینستاگرام (با لینک)"
-BTN_IG_SEARCH = "🔍 جستجو با موضوع"
-BTN_IG_TREND = "🔥 پست‌های ترند اینستاگرام"
-BTN_IG_EXPLORE = "🌍 اکسپلور اینستاگرام"
-BTN_IG_LAST_POST = "🖼 آخرین پست پیج"
+BTN_IG_LINK_DL = "🔗 دانلود با لینک (پست/ریلز)"
 
 # منو ترجمه
 BTN_TRANSLATE = "🔤 ترجمه متن"

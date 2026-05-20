@@ -67,8 +67,7 @@ async def reset_user_limits(user_id):
     await conn.execute(
         """
         UPDATE users 
-        SET yt_count = 0, music_count = 0, pinterest_count = 0,
-            tt_dl_count = 0, tt_exp_count = 0, ig_dl_count = 0, ig_exp_count = 0
+        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0, tt_exp_count = 0
         WHERE user_id = ?
     """,
         (user_id,),

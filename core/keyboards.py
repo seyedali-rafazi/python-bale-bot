@@ -82,9 +82,7 @@ def get_youtube_menu_keyboard():
 
 def get_insta_menu_keyboard():
     keyboard = [
-        [KeyboardButton(BTN_IG_EXPLORE)],
         [KeyboardButton(BTN_IG_LINK_DL)],
-        [KeyboardButton(BTN_IG_SEARCH), KeyboardButton(BTN_IG_TREND)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

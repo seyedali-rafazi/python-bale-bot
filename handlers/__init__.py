@@ -18,10 +18,6 @@ from .menus import (
     btn_yt_req,
     btn_ig_req,
     btn_ig_link_dl_req,
-    btn_ig_search_req,
-    btn_ig_trend_req,
-    btn_ig_explore_req,
-    btn_ig_last_post_req,
     btn_back_action,
     btn_ai_menu,
     btn_ai_chat_req,
@@ -224,26 +220,6 @@ def register_all_handlers(application):
             filters.Regex(f"^{re.escape(BTN_IG_LINK_DL)}$"), btn_ig_link_dl_req
         )
     )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IG_SEARCH)}$"), btn_ig_search_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IG_TREND)}$"), btn_ig_trend_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IG_EXPLORE)}$"), btn_ig_explore_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IG_LAST_POST)}$"), btn_ig_last_post_req
-        )
-    )
 
     #  هندلرهای منوی ترجمه
     application.add_handler(
@@ -337,7 +313,7 @@ def register_all_handlers(application):
     application.add_handler(
         CallbackQueryHandler(
             handle_insta_callback,
-            pattern=r"^(ig_dl_|ig_last_)",
+            pattern=r"^ig_dl_",
         )
     )
     application.add_handler(

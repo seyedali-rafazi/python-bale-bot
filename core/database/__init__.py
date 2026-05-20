@@ -43,15 +43,6 @@ from .tiktok import (
     get_random_tiktok_explore_videos,
     delete_invalid_video_from_db,
 )
-from .instagram import (
-    get_ig_downloads,
-    increment_ig_downloads,
-    get_ig_explores,
-    increment_ig_explores,
-    add_instagram_explore_media,
-    get_random_instagram_explore_media,
-    delete_invalid_ig_from_db,
-)
 from .github import get_gh_downloads, increment_gh_downloads
 from .cloud import (
     get_user_cloud_info,
