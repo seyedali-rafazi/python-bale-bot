@@ -151,29 +151,32 @@ def format_merge_instructions(
         return (
             f"📦 فایل در {total_parts} پارت ارسال شد ({archive_basename}.zip و .z01 …)\n\n"
             "✅ روش باز کردن:\n"
-            "۱) همه پارت‌ها را در یک پوشه ذخیره کنید.\n"
-            "۲) فقط فایل "
+            "۱) همه پارت‌ها را در یک پوشه (Folder) مشترک دانلود و ذخیره کنید.\n"
+            "۲) فقط روی فایل "
             f"`{archive_basename}.zip`"
-            " را با WinRAR، 7-Zip یا ZArchiver باز کنید.\n"
-            "(نیازی به ادغام دستی نیست — این فرمت split zip استاندارد است.)\n\n"
-            "⚠️ هر پارت جدا قابل استخراج نیست."
+            " کلیک کرده و با برنامه‌های WinRAR، 7-Zip یا ZArchiver آن را Extract (استخراج) کنید.\n\n"
+            "⚠️ توجه: پارت‌ها به تنهایی باز نمی‌شوند و باید همه در کنار هم باشند."
         )
 
-    # concat
-    parts_expr = "+".join(
-        f"{archive_basename}.zip.{i:03d}" for i in range(1, total_parts + 1)
-    )
+    # concat (راهنمای جامع و کاربرپسند)
     return (
-        f"📦 فایل در {total_parts} پارت ارسال شد.\n\n"
-        "⚠️ هر پارت به تنهایی ZIP معتبر نیست — اول ادغام کنید، بعد Extract.\n\n"
-        "✅ ویندوز (CMD در پوشه دانلود):\n"
-        f"`copy /b {parts_expr} {archive_basename}.zip`\n\n"
-        "✅ لینوکس / مک:\n"
-        f"`cat {archive_basename}.zip.* > {archive_basename}.zip`\n\n"
-        "✅ اندروید: ZArchiver → ادغام پارت‌ها (Merge) → سپس باز کردن "
-        f"{archive_basename}.zip"
+        f"📥 **راهنمای باز کردن فایل در {total_parts} پارت**\n\n"
+        "⚠️ **توجه مهم:** این پارت‌ها تکی کار نمی‌کنند! حتماً همه پارت‌ها را در **یک پوشه مشترک** دانلود کنید.\n\n"
+        "📱 **اندروید (Android):**\n"
+        "برنامه **ZArchiver** یا RAR را نصب کنید. فقط روی پارت اول "
+        f"(`{archive_basename}.zip.001`)"
+        " ضربه بزنید و گزینه Extract here (استخراج در اینجا) را انتخاب کنید.\n\n"
+        "💻 **ویندوز (PC):**\n"
+        "برنامه WinRAR یا 7-Zip را نصب کنید. روی پارت اول "
+        f"(`{archive_basename}.zip.001`)"
+        " کلیک راست کرده و **Extract Here** را بزنید.\n\n"
+        "🍏 **آیفون و آیپد (iOS):**\n"
+        "برنامه iZip یا Unzip را نصب کرده و پارت اول را با آن باز کنید تا خودکار استخراج شود.\n\n"
+        "🐧 **مک و لینوکس:**\n"
+        "در ترمینال به پوشه فایل‌ها بروید و این دستور را اجرا کنید:\n"
+        f"`cat {archive_basename}.zip.* > {archive_basename}.zip`\n"
+        "سپس فایل جدید را استخراج کنید."
     )
-
 
 def build_zip_and_split(
     input_path: str,
