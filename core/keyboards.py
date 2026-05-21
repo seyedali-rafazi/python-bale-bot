@@ -135,6 +135,26 @@ def get_github_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+def get_yt_delivery_keyboard():
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📦 ارسال به صورت ZIP",
+                    callback_data="ytdel_zip",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎬 ارسال به صورت ویدیو (MP4)",
+                    callback_data="ytdel_video",
+                )
+            ],
+        ]
+    )
+    return keyboard
+
+
 def get_yt_quality_telegram_keyboard():
     keyboard = InlineKeyboardMarkup(
         [

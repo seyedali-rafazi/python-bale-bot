@@ -125,22 +125,24 @@ def get_video_info(url: str):
 
 
 def uploaded_at_from_video_info(info: dict | None) -> str | None:
-    """Sortable YYYYMMDD from yt-dlp metadata (YouTube publish date)."""
+    """Sortable publish time from yt-dlp (YouTube channel upload, not bot cache)."""
     if not info:
         return None
+    ts = info.get("timestamp") or info.get("release_timestamp")
+    if ts is not None:
+        try:
+            from datetime import datetime, timezone
+
+            return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime(
+                "%Y%m%d%H%M%S"
+            )
+        except (ValueError, OSError, TypeError):
+            pass
     upload_date = info.get("upload_date")
     if upload_date:
         s = str(upload_date).strip()
         if len(s) >= 8 and s[:8].isdigit():
             return s[:8]
-    ts = info.get("timestamp")
-    if ts is not None:
-        try:
-            from datetime import datetime, timezone
-
-            return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y%m%d")
-        except (ValueError, OSError, TypeError):
-            pass
     return None
 
 

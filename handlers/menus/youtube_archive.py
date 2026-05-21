@@ -3,6 +3,8 @@
 import json
 from urllib.parse import quote
 
+from core.database.youtube import backfill_upload_dates_for_cache_rows
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -343,6 +345,11 @@ async def _show_channel_videos(
     videos = await get_channel_videos_page(
         channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE
     )
+    if videos:
+        await backfill_upload_dates_for_cache_rows(videos)
+        videos = await get_channel_videos_page(
+            channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE
+        )
     total = await count_channel_videos(channel_name)
     total_pages = max(1, (total + VIDEOS_PAGE_SIZE - 1) // VIDEOS_PAGE_SIZE)
 
@@ -361,7 +368,12 @@ async def _show_channel_videos(
             short = title[:47] + "…"
         else:
             short = title
-        lines.append(f"• {short}")
+        pub = _row_str(row, "uploaded_at")
+        if len(pub) >= 8:
+            pub_label = f"{pub[:4]}/{pub[4:6]}/{pub[6:8]}"
+            lines.append(f"• {short} — 📅 {pub_label}")
+        else:
+            lines.append(f"• {short}")
         keyboard.append(
             [
                 InlineKeyboardButton(

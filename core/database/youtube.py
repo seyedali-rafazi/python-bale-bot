@@ -15,11 +15,16 @@ PLACEHOLDER_CHANNELS = ("ناشناس", "Unknown", "unknown", "")
 PLACEHOLDER_TITLES = ("بدون عنوان", "")
 
 # Only real channel names appear in the archive channel list
-# Newest YouTube upload first; rows without uploaded_at fall back to cached_at
+# Newest YouTube channel publish date first; never sort by cached_at (bot storage time)
 _CHANNEL_VIDEOS_ORDER_SQL = """
     (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
     uploaded_at DESC,
-    cached_at DESC
+    rowid DESC
+"""
+
+_CACHE_NEEDS_UPLOAD_DATE_SQL = """
+    file_ids IS NOT NULL AND file_ids != '[]'
+    AND (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
 """
 
 _CHANNEL_KNOWN_SQL = """
@@ -162,7 +167,7 @@ async def save_cached_video(
             format_type,
             quality,
             cached_at,
-            (uploaded_at or "").strip()[:8] or None,
+            (uploaded_at or "").strip()[:14] or None,
         ),
     )
     await conn.commit()
@@ -189,7 +194,7 @@ async def update_cache_metadata(
             _normalize_title(title),
             _normalize_channel(channel_name),
             yt_video_id,
-            (uploaded_at or "").strip()[:8] or None,
+            (uploaded_at or "").strip()[:14] or None,
             cache_key,
         ),
     )
@@ -281,7 +286,10 @@ async def drop_legacy_user_youtube_archive_table():
 async def count_cache_needing_metadata() -> int:
     conn = await get_db()
     async with conn.execute(
-        f"SELECT COUNT(*) FROM youtube_cache WHERE {_NEEDS_METADATA_SQL}"
+        f"""
+        SELECT COUNT(*) FROM youtube_cache
+        WHERE {_NEEDS_METADATA_SQL} OR ({_CACHE_NEEDS_UPLOAD_DATE_SQL})
+        """
     ) as cursor:
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -291,10 +299,13 @@ async def get_cache_rows_needing_metadata(limit: int = 50):
     conn = await get_db()
     async with conn.execute(
         f"""
-        SELECT video_id, yt_video_id, title, channel_name
+        SELECT video_id, yt_video_id, title, channel_name, uploaded_at
         FROM youtube_cache
-        WHERE {_NEEDS_METADATA_SQL}
-        ORDER BY COALESCE(cached_at, '') DESC
+        WHERE {_NEEDS_METADATA_SQL} OR ({_CACHE_NEEDS_UPLOAD_DATE_SQL})
+        ORDER BY
+            (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
+            uploaded_at DESC,
+            rowid DESC
         LIMIT ?
         """,
         (limit,),
@@ -339,15 +350,19 @@ async def backfill_youtube_cache_metadata(
             except Exception:
                 info = None
 
-            if info and info.get("title"):
-                from services.youtube import uploaded_at_from_video_info
+            from services.youtube import uploaded_at_from_video_info
 
+            uploaded = uploaded_at_from_video_info(info) if info else None
+            has_title = bool(info and info.get("title"))
+            has_upload_date = bool(uploaded)
+
+            if has_title or has_upload_date:
                 await update_cache_metadata(
                     cache_key,
-                    info.get("title"),
-                    info.get("uploader"),
+                    info.get("title") if has_title else None,
+                    info.get("uploader") if has_title else None,
                     yt_id,
-                    uploaded_at=uploaded_at_from_video_info(info),
+                    uploaded_at=uploaded,
                 )
                 fixed += 1
             else:
@@ -383,12 +398,58 @@ async def get_cache_rows_missing_upload_date(limit: int = 50):
         FROM youtube_cache
         WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
           AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
-        ORDER BY cached_at DESC
+        ORDER BY rowid DESC
         LIMIT ?
         """,
         (limit,),
     ) as cursor:
         return await cursor.fetchall()
+
+
+async def backfill_upload_dates_for_cache_rows(
+    rows, delay_sec: float = 0.35
+) -> int:
+    """Fill missing YouTube publish dates for rows shown in the archive UI."""
+    from services.youtube import get_video_info, uploaded_at_from_video_info
+
+    fixed = 0
+    for row in rows:
+        try:
+            existing = row["uploaded_at"]
+        except (KeyError, IndexError, TypeError):
+            existing = None
+        if existing and str(existing).strip():
+            continue
+
+        cache_key = row["video_id"]
+        try:
+            yt_id = (row["yt_video_id"] or "").strip() or extract_yt_id_from_cache_key(
+                cache_key
+            )
+        except (KeyError, IndexError, TypeError):
+            yt_id = extract_yt_id_from_cache_key(cache_key)
+
+        if not yt_id:
+            continue
+
+        url = f"https://www.youtube.com/watch?v={yt_id}"
+        try:
+            info = await asyncio.to_thread(get_video_info, url)
+        except Exception:
+            info = None
+
+        uploaded = uploaded_at_from_video_info(info) if info else None
+        if not uploaded:
+            continue
+
+        await update_cache_metadata(
+            cache_key, None, None, yt_id, uploaded_at=uploaded
+        )
+        fixed += 1
+        if delay_sec > 0:
+            await asyncio.sleep(delay_sec)
+
+    return fixed
 
 
 async def backfill_cache_upload_dates(
@@ -529,7 +590,7 @@ async def search_global_cache_by_title(query: str, limit: int = 15):
     async with conn.execute(
         f"""
         SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
-               file_ids, format_type, cached_at
+               file_ids, format_type, cached_at, uploaded_at
         FROM youtube_cache
         WHERE title LIKE ?
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
@@ -546,7 +607,7 @@ async def search_global_cache_by_channel(query: str, limit: int = 15):
     async with conn.execute(
         f"""
         SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
-               file_ids, format_type, cached_at
+               file_ids, format_type, cached_at, uploaded_at
         FROM youtube_cache
         WHERE channel_name LIKE ?
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}

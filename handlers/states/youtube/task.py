@@ -49,10 +49,29 @@ from .helpers import (
     process_and_send_video_parts,
     process_and_send_backup_video_parts,
     process_and_send_document_parts,
+    process_and_send_mp4_documents_no_cache,
     upload_audio_to_storage_once,
     send_audio_once,
     save_to_global_cache,
 )
+
+
+def _effective_format(format_type: str, destination: str, delivery_mode: str) -> str:
+    if destination != "telegram":
+        return format_type
+    if format_type == "audio":
+        return "audio_zip"
+    if format_type == "video" and delivery_mode == "zip":
+        return "video_zip"
+    return format_type
+
+
+def _use_youtube_cache(destination: str, format_type: str, delivery_mode: str) -> bool:
+    if destination != "telegram":
+        return False
+    if format_type == "video" and delivery_mode == "video":
+        return False
+    return True
 
 
 async def background_yt_download(
@@ -62,18 +81,17 @@ async def background_yt_download(
     format_type: str,
     destination: str = "telegram",
     quality: str = "480",
+    delivery_mode: str = "zip",
 ):
     video_id = extract_yt_id(url)
-    effective_format = (
-        f"{format_type}_zip" if destination == "telegram" else format_type
-    )
+    effective_format = _effective_format(format_type, destination, delivery_mode)
     cache_key = f"{video_id}_{effective_format}_{destination}_{quality}"
 
     # =========================================
     # کش
     # =========================================
 
-    if destination == "telegram":
+    if _use_youtube_cache(destination, format_type, delivery_mode):
         cached_files = await get_cached_video(cache_key)
 
         if cached_files:
@@ -325,29 +343,34 @@ async def background_yt_download(
                             )
 
                             if destination == "telegram":
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
-                                )
-                                zip_basename = f"youtube_{video_id}_{quality}p"
-                                zip_parts, archive_basename, split_method = (
-                                    await asyncio.to_thread(
-                                        build_zip_and_split,
-                                        raw_file,
-                                        os.path.dirname(raw_file) or ".",
-                                        zip_basename,
-                                        20 * 1024 * 1024,
+                                if delivery_mode == "zip":
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                     )
-                                )
-                                zip_artifacts.extend(zip_parts)
-                                if split_method == "concat":
-                                    full_zip = os.path.join(
-                                        os.path.dirname(raw_file) or ".",
-                                        f"{archive_basename}.zip",
+                                    zip_basename = f"youtube_{video_id}_{quality}p"
+                                    zip_parts, archive_basename, split_method = (
+                                        await asyncio.to_thread(
+                                            build_zip_and_split,
+                                            raw_file,
+                                            os.path.dirname(raw_file) or ".",
+                                            zip_basename,
+                                            20 * 1024 * 1024,
+                                        )
                                     )
-                                    if os.path.isfile(full_zip):
-                                        zip_artifacts.append(full_zip)
-                                result = zip_parts
+                                    zip_artifacts.extend(zip_parts)
+                                    if split_method == "concat":
+                                        full_zip = os.path.join(
+                                            os.path.dirname(raw_file) or ".",
+                                            f"{archive_basename}.zip",
+                                        )
+                                        if os.path.isfile(full_zip):
+                                            zip_artifacts.append(full_zip)
+                                    result = zip_parts
+                                else:
+                                    archive_basename = ""
+                                    split_method = "single"
+                                    result = await split_video_if_needed(raw_file)
                             else:
                                 result = [raw_file]
 
@@ -457,20 +480,28 @@ async def background_yt_download(
                             # =========================
 
                             else:
-                                # Telegram destination always sends ZIP as documents
-                                await process_and_send_document_parts(
-                                    context,
-                                    chat_id,
-                                    result,
-                                    label=f"Video ID: {video_id}",
-                                    cache_key=cache_key,
-                                    archive_basename=archive_basename,
-                                    split_method=split_method,
-                                    video_id=video_id,
-                                    title=info.get("title") if info else None,
-                                    channel_name=info.get("uploader") if info else None,
-                                    uploaded_at=uploaded_at_from_video_info(info),
-                                )
+                                if delivery_mode == "zip":
+                                    await process_and_send_document_parts(
+                                        context,
+                                        chat_id,
+                                        result,
+                                        label=f"Video ID: {video_id}",
+                                        cache_key=cache_key,
+                                        archive_basename=archive_basename,
+                                        split_method=split_method,
+                                        video_id=video_id,
+                                        title=info.get("title") if info else None,
+                                        channel_name=info.get("uploader") if info else None,
+                                        uploaded_at=uploaded_at_from_video_info(info),
+                                    )
+                                else:
+                                    await process_and_send_mp4_documents_no_cache(
+                                        context,
+                                        chat_id,
+                                        result,
+                                        video_id=video_id,
+                                        label=f"Video ID: {video_id}",
+                                    )
 
                         else:
                             raise Exception("Download failed")
@@ -622,16 +653,29 @@ async def background_yt_download(
 
                                     downloaded_files.extend(result)
 
-                                    await process_and_send_backup_video_parts(
-                                        context,
-                                        chat_id,
-                                        result,
-                                        video_id,
-                                        cache_key,
-                                        title=info.get("title") if info else None,
-                                        channel_name=info.get("uploader") if info else None,
-                                        uploaded_at=uploaded_at_from_video_info(info),
-                                    )
+                                    if delivery_mode == "zip":
+                                        await process_and_send_backup_video_parts(
+                                            context,
+                                            chat_id,
+                                            result,
+                                            video_id,
+                                            cache_key,
+                                            title=info.get("title") if info else None,
+                                            channel_name=(
+                                                info.get("uploader") if info else None
+                                            ),
+                                            uploaded_at=uploaded_at_from_video_info(
+                                                info
+                                            ),
+                                        )
+                                    else:
+                                        await process_and_send_mp4_documents_no_cache(
+                                            context,
+                                            chat_id,
+                                            result,
+                                            video_id=video_id,
+                                            label=f"Video ID: {video_id} (Backup)",
+                                        )
 
                             else:
                                 await context.bot.send_message(

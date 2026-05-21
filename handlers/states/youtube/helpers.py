@@ -45,12 +45,28 @@ async def save_to_global_cache(
     channel_name: str | None = None,
     uploaded_at: str | None = None,
 ):
+    yt_id = video_id or extract_yt_id(cache_key)
+    if not (uploaded_at or "").strip() and yt_id:
+        try:
+            from services.youtube import get_video_info, uploaded_at_from_video_info
+
+            info = await asyncio.to_thread(
+                get_video_info, f"https://www.youtube.com/watch?v={yt_id}"
+            )
+            uploaded_at = uploaded_at_from_video_info(info)
+            if not title and info:
+                title = info.get("title")
+            if not channel_name and info:
+                channel_name = info.get("uploader")
+        except Exception as e:
+            print(f"⚠️ Could not resolve YouTube upload date for cache: {e}")
+
     await save_cached_video(
         cache_key,
         file_ids,
         title=title,
         channel_name=channel_name,
-        yt_video_id=video_id,
+        yt_video_id=yt_id,
         format_type=parse_format_from_cache_key(cache_key),
         quality=parse_quality_from_cache_key(cache_key),
         uploaded_at=uploaded_at,
@@ -207,6 +223,53 @@ async def process_and_send_document_parts(
                 ),
             )
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ZIP.")
+
+
+async def process_and_send_mp4_documents_no_cache(
+    context,
+    chat_id: str,
+    result_files: list,
+    video_id: str,
+    label: str = "",
+):
+    """Upload MP4 parts to Bale storage channel and forward to user; no DB cache."""
+    total_parts = len(result_files)
+    part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
+    await context.bot.send_message(
+        chat_id=chat_id, text=f"📤 در حال آپلود ویدیو (MP4){part_msg}..."
+    )
+
+    for idx, file_path in enumerate(result_files, 1):
+        if total_parts > 1:
+            await context.bot.send_message(
+                chat_id=chat_id, text=f"📤 آپلود پارت {idx} از {total_parts}..."
+            )
+        display_name = (
+            f"{video_id}.mp4"
+            if total_parts == 1
+            else f"{video_id}_part{idx}.mp4"
+        )
+        caption = f"{label or f'Video ID: {video_id}'} | {display_name}"
+        try:
+            current_file_id = await upload_document_to_storage_once(
+                context=context,
+                file_path=file_path,
+                caption=caption,
+                filename=display_name,
+            )
+            send_success = await send_document_once(context, chat_id, current_file_id)
+            if not send_success:
+                raise Exception("خطا در فوروارد/ارسال به کاربر")
+        except Exception as e:
+            print(f"❌ Error uploading/sending mp4 part {idx}: {e}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ متاسفانه در آپلود یا ارسال پارت {idx} مشکلی پیش آمد. عملیات لغو شد.",
+            )
+            raise e
+        await asyncio.sleep(1)
+
+    await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ویدیو.")
 
 
 async def upload_video_to_storage_once(context, file_path: str, caption: str):
