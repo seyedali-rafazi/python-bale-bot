@@ -29,7 +29,7 @@ async def youtube_destination_callback(
     if data not in ["ytdest_telegram", "ytdest_server"]:
         return
 
-    user_state = await asyncio.to_thread(get_state, chat_id)
+    user_state = get_state(chat_id)
     if not user_state or user_state.get("step") != "waiting_yt_destination":
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
@@ -49,8 +49,7 @@ async def youtube_destination_callback(
     else:
         destination = "telegram"
 
-    await asyncio.to_thread(
-        set_state,
+    set_state(
         chat_id,
         "waiting_yt_quality",
         yt_url=url,
@@ -84,7 +83,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
     quality = data.split("_")[1]  # e.g., "144"
 
-    user_state = await asyncio.to_thread(get_state, chat_id)
+    user_state = get_state(chat_id)
     if not user_state or user_state.get("step") not in [
         "waiting_yt_quality",
         "processing_yt_quality",
@@ -107,8 +106,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
     except Exception:
         pass
 
-    await asyncio.to_thread(
-        set_state,
+    set_state(
         chat_id,
         "processing_yt_quality",
         yt_url=url,
@@ -156,8 +154,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             else:
                 keyboard = get_yt_quality_server_keyboard()
 
-            await asyncio.to_thread(
-                set_state,
+            set_state(
                 chat_id,
                 "waiting_yt_quality",
                 yt_url=url,
@@ -172,8 +169,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             keyboard = get_yt_quality_telegram_keyboard()
         else:
             keyboard = get_yt_quality_server_keyboard()
-        await asyncio.to_thread(
-            set_state,
+        set_state(
             chat_id,
             "waiting_yt_quality",
             yt_url=url,
@@ -188,7 +184,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
     await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
 
-    await asyncio.to_thread(clear_state, chat_id)
+    clear_state(chat_id)
 
     await context.bot.send_message(
         chat_id=chat_id,

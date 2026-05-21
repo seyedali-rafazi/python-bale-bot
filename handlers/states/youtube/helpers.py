@@ -43,6 +43,7 @@ async def save_to_global_cache(
     file_ids: list,
     title: str | None = None,
     channel_name: str | None = None,
+    uploaded_at: str | None = None,
 ):
     await save_cached_video(
         cache_key,
@@ -52,6 +53,7 @@ async def save_to_global_cache(
         yt_video_id=video_id,
         format_type=parse_format_from_cache_key(cache_key),
         quality=parse_quality_from_cache_key(cache_key),
+        uploaded_at=uploaded_at,
     )
 
 
@@ -147,6 +149,7 @@ async def process_and_send_document_parts(
     video_id: str | None = None,
     title: str | None = None,
     channel_name: str | None = None,
+    uploaded_at: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -194,6 +197,7 @@ async def process_and_send_document_parts(
             yt_video_id=video_id,
             format_type=parse_format_from_cache_key(cache_key),
             quality=parse_quality_from_cache_key(cache_key),
+            uploaded_at=uploaded_at,
         )
         if total_parts > 1:
             await context.bot.send_message(
@@ -243,6 +247,7 @@ async def process_and_send_video_parts(
     cache_key: str,
     title: str | None = None,
     channel_name: str | None = None,
+    uploaded_at: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -283,6 +288,7 @@ async def process_and_send_video_parts(
             yt_video_id=video_id,
             format_type=parse_format_from_cache_key(cache_key),
             quality=parse_quality_from_cache_key(cache_key),
+            uploaded_at=uploaded_at,
         )
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
 
@@ -295,6 +301,7 @@ async def process_and_send_backup_video_parts(
     cache_key: str,
     title: str | None = None,
     channel_name: str | None = None,
+    uploaded_at: str | None = None,
 ):
     uploaded_file_ids = []
     total_parts = len(result_files)
@@ -330,6 +337,7 @@ async def process_and_send_backup_video_parts(
             yt_video_id=video_id,
             format_type=parse_format_from_cache_key(cache_key),
             quality=parse_quality_from_cache_key(cache_key),
+            uploaded_at=uploaded_at,
         )
         await context.bot.send_message(
             chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ."

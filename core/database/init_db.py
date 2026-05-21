@@ -122,6 +122,10 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE youtube_cache ADD COLUMN cached_at TEXT"
         )
+    if "uploaded_at" not in yt_cache_columns:
+        await conn.execute(
+            "ALTER TABLE youtube_cache ADD COLUMN uploaded_at TEXT"
+        )
 
     if "arc_fetch_count" not in columns:
         await conn.execute(

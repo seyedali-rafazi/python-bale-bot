@@ -114,11 +114,33 @@ def get_video_info(url: str):
                 "uploader_id": data.get("channel_id") or data.get("uploader_id"),
                 "channel_url": data.get("channel_url") or data.get("uploader_url"),
                 "uploader_url": data.get("uploader_url"),
+                "upload_date": data.get("upload_date"),
+                "timestamp": data.get("timestamp") or data.get("release_timestamp"),
             }
 
     except Exception as e:
         print(f"Error getting video info: {e}")
 
+    return None
+
+
+def uploaded_at_from_video_info(info: dict | None) -> str | None:
+    """Sortable YYYYMMDD from yt-dlp metadata (YouTube publish date)."""
+    if not info:
+        return None
+    upload_date = info.get("upload_date")
+    if upload_date:
+        s = str(upload_date).strip()
+        if len(s) >= 8 and s[:8].isdigit():
+            return s[:8]
+    ts = info.get("timestamp")
+    if ts is not None:
+        try:
+            from datetime import datetime, timezone
+
+            return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y%m%d")
+        except (ValueError, OSError, TypeError):
+            pass
     return None
 
 

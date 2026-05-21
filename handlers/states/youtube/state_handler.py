@@ -9,7 +9,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_YT_VIDEO, BTN_BACK
+from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
 from services.youtube import search_yt_videos, get_video_info
 from core.yt_moderation import (
@@ -17,6 +17,7 @@ from core.yt_moderation import (
     MSG_BLOCKED_SEARCH,
     is_search_query_blocked,
     check_channel_allowed,
+    check_video_info_allowed,
 )
 from .helpers import check_user_limit
 
@@ -51,9 +52,7 @@ async def handle_youtube_state(
 
         keyboard.append([KeyboardButton(BTN_BACK)])
 
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_selection", videos=results
-        )
+        set_state(chat_id, "waiting_yt_selection", videos=results)
         await update.message.reply_text(
             res_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
@@ -83,9 +82,7 @@ async def handle_youtube_state(
 
         keyboard.append([KeyboardButton(BTN_BACK)])
 
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_selection", videos=results
-        )
+        set_state(chat_id, "waiting_yt_selection", videos=results)
         await update.message.reply_text(
             res_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
@@ -96,9 +93,7 @@ async def handle_youtube_state(
         if not await check_channel_allowed(text):
             await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_ch_search_query", channel=text
-        )
+        set_state(chat_id, "waiting_yt_ch_search_query", channel=text)
         await update.message.reply_text(
             "حالا کلمه کلیدی یا نام ویدیویی که در این کانال دنبالش هستید را بفرستید:"
         )
@@ -129,9 +124,7 @@ async def handle_youtube_state(
 
         keyboard.append([KeyboardButton(BTN_BACK)])
 
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_selection", videos=results
-        )
+        set_state(chat_id, "waiting_yt_selection", videos=results)
         await update.message.reply_text(
             res_text,
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
@@ -158,8 +151,7 @@ async def handle_youtube_state(
 
                 selected_video = videos[index]
 
-                await asyncio.to_thread(
-                    set_state,
+                set_state(
                     chat_id,
                     "waiting_yt_format",
                     yt_url=selected_video["url"],
@@ -181,7 +173,32 @@ async def handle_youtube_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        info = await asyncio.to_thread(get_video_info, text)
+        status_msg = await update.message.reply_text("⏳ در حال بررسی لینک...")
+
+        try:
+            info = await asyncio.to_thread(get_video_info, text)
+        except Exception as e:
+            print(f"get_video_info error: {e}")
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await update.message.reply_text(
+                "❌ خطا در دریافت اطلاعات ویدیو. لطفاً دوباره تلاش کنید."
+            )
+            return
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+
+        if not info:
+            await update.message.reply_text(
+                "❌ ویدیو پیدا نشد یا یوتیوب در دسترس نیست. لینک را بررسی کنید."
+            )
+            return
+
         if not await check_video_info_allowed(info):
             await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
@@ -189,9 +206,7 @@ async def handle_youtube_state(
         dl_format = state_data.get("format")
 
         if not dl_format:
-            await asyncio.to_thread(
-                set_state, chat_id, "waiting_yt_format", yt_url=text
-            )
+            set_state(chat_id, "waiting_yt_format", yt_url=text)
             await update.message.reply_text(
                 "✅ لینک دریافت شد! فرمت را انتخاب کنید 👇",
                 reply_markup=get_yt_format_keyboard(),
@@ -204,9 +219,7 @@ async def handle_youtube_state(
             )
             return
 
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_destination", yt_url=text, format=dl_format
-        )
+        set_state(chat_id, "waiting_yt_destination", yt_url=text, format=dl_format)
         keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -232,6 +245,18 @@ async def handle_youtube_state(
 
     elif step == "waiting_yt_format":
         url = state_data.get("yt_url")
+        if not url:
+            await update.message.reply_text(
+                "❌ لینک منقضی شده. دوباره از منو لینک را ارسال کنید."
+            )
+            return
+
+        if text not in (BTN_YT_VIDEO, BTN_YT_AUDIO):
+            await update.message.reply_text(
+                "لطفاً یکی از دکمه‌های «دانلود ویدیو» یا «دانلود MP3» را بزنید.",
+                reply_markup=get_yt_format_keyboard(),
+            )
+            return
 
         if not await check_user_limit(chat_id):
             await update.message.reply_text(
@@ -241,9 +266,7 @@ async def handle_youtube_state(
 
         format_type = "video" if text == BTN_YT_VIDEO else "audio"
 
-        await asyncio.to_thread(
-            set_state, chat_id, "waiting_yt_destination", yt_url=url, format=format_type
-        )
+        set_state(chat_id, "waiting_yt_destination", yt_url=url, format=format_type)
 
         keyboard = InlineKeyboardMarkup(
             [

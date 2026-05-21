@@ -17,6 +17,7 @@ from services.youtube import (
     download_youtube_audio,
     split_video_if_needed,
     get_video_info,
+    uploaded_at_from_video_info,
     get_video_filesize,
 )
 from services.telegram_backup import download_from_telegram_bot
@@ -98,6 +99,7 @@ async def background_yt_download(
                 cached_files,
                 title=info_cached.get("title") if info_cached else None,
                 channel_name=info_cached.get("uploader") if info_cached else None,
+                uploaded_at=uploaded_at_from_video_info(info_cached),
             )
 
             return
@@ -467,6 +469,7 @@ async def background_yt_download(
                                     video_id=video_id,
                                     title=info.get("title") if info else None,
                                     channel_name=info.get("uploader") if info else None,
+                                    uploaded_at=uploaded_at_from_video_info(info),
                                 )
 
                         else:
@@ -627,6 +630,7 @@ async def background_yt_download(
                                         cache_key,
                                         title=info.get("title") if info else None,
                                         channel_name=info.get("uploader") if info else None,
+                                        uploaded_at=uploaded_at_from_video_info(info),
                                     )
 
                             else:
@@ -827,6 +831,7 @@ async def background_yt_download(
                                     video_id=video_id,
                                     title=info.get("title") if info else None,
                                     channel_name=info.get("uploader") if info else None,
+                                    uploaded_at=uploaded_at_from_video_info(info),
                                 )
 
                         else:

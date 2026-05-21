@@ -61,6 +61,15 @@ def _decode_channel(encoded: str) -> str:
     return unquote(encoded)
 
 
+def _row_str(row, key: str, default: str = "") -> str:
+    """sqlite3.Row has no .get(); use bracket access safely."""
+    try:
+        val = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if val is None else str(val)
+
+
 async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     total_global = await count_user_archive()
@@ -77,7 +86,7 @@ async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_T
         f"👤 اشتراک شما: **{plan}**\n"
         f"📥 دریافت از آرشیو امروز: **{used}** از **{limit}** "
         f"(رایگان: {ARCHIVE_LIMIT_FREE} | Pro: {ARCHIVE_LIMIT_VIP})\n\n"
-        "روی کانال بزنید — ویدیوها از جدید به قدیم مرتب شده‌اند."
+        "روی کانال بزنید — ویدیوها بر اساس **تاریخ انتشار در یوتیوب** (جدیدترین اول) مرتب شده‌اند."
     )
 
     if total_global == 0:
@@ -277,10 +286,10 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
             return
 
-        if await is_channel_blacklisted(entry.get("channel_name") or ""):
+        if await is_channel_blacklisted(_row_str(entry, "channel_name")):
             await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
             return
-        if await is_search_query_blocked(entry.get("title") or ""):
+        if await is_search_query_blocked(_row_str(entry, "title")):
             await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
             return
 
@@ -295,9 +304,25 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("در حال ارسال...")
         from handlers.states.youtube.helpers import send_cached_files
 
-        file_ids = json.loads(entry["file_ids"])
+        try:
+            file_ids = json.loads(entry["file_ids"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            await query.answer("فایل کش خراب است.", show_alert=True)
+            return
+        if not file_ids:
+            await query.answer("فایل کش خالی است.", show_alert=True)
+            return
+
         fmt = entry["format_type"] or "video_zip"
-        await send_cached_files(context, user_id, file_ids, fmt)
+        try:
+            await send_cached_files(context, user_id, file_ids, fmt)
+        except Exception as e:
+            print(f"yt archive send error: {e}")
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
+            )
+            return
         await increment_archive_fetch(user_id)
         await increment_yt_video_view(entry["video_id"])
         return
@@ -327,11 +352,11 @@ async def _show_channel_videos(
 
     lines = [
         f"📺 **{channel_name}**\n",
-        f"صفحه {page + 1} از {total_pages} — جدیدترین ویدیوها:\n",
+        f"صفحه {page + 1} از {total_pages} — جدیدترین انتشار در کانال:\n",
     ]
     keyboard = []
     for row in videos:
-        title = row["title"] or row.get("yt_video_id") or "ویدیو"
+        title = row["title"] or row["yt_video_id"] or "ویدیو"
         if len(title) > 50:
             short = title[:47] + "…"
         else:

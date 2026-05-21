@@ -15,6 +15,13 @@ PLACEHOLDER_CHANNELS = ("ناشناس", "Unknown", "unknown", "")
 PLACEHOLDER_TITLES = ("بدون عنوان", "")
 
 # Only real channel names appear in the archive channel list
+# Newest YouTube upload first; rows without uploaded_at fall back to cached_at
+_CHANNEL_VIDEOS_ORDER_SQL = """
+    (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
+    uploaded_at DESC,
+    cached_at DESC
+"""
+
 _CHANNEL_KNOWN_SQL = """
     channel_name IS NOT NULL
     AND TRIM(channel_name) != ''
@@ -116,6 +123,7 @@ async def save_cached_video(
     yt_video_id: str | None = None,
     format_type: str = "video_zip",
     quality: str = "480",
+    uploaded_at: str | None = None,
 ):
     file_ids_json = json.dumps(file_ids)
     cached_at = get_tehran_now_full()
@@ -124,8 +132,8 @@ async def save_cached_video(
         """
         INSERT INTO youtube_cache (
             video_id, file_ids, title, channel_name, yt_video_id,
-            format_type, quality, cached_at, view_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            format_type, quality, cached_at, uploaded_at, view_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(video_id) DO UPDATE SET
             file_ids = excluded.file_ids,
             title = CASE
@@ -139,7 +147,11 @@ async def save_cached_video(
             yt_video_id = COALESCE(NULLIF(TRIM(excluded.yt_video_id), ''), youtube_cache.yt_video_id),
             format_type = excluded.format_type,
             quality = excluded.quality,
-            cached_at = excluded.cached_at
+            cached_at = excluded.cached_at,
+            uploaded_at = COALESCE(
+                NULLIF(TRIM(excluded.uploaded_at), ''),
+                youtube_cache.uploaded_at
+            )
         """,
         (
             cache_key,
@@ -150,6 +162,7 @@ async def save_cached_video(
             format_type,
             quality,
             cached_at,
+            (uploaded_at or "").strip()[:8] or None,
         ),
     )
     await conn.commit()
@@ -160,6 +173,7 @@ async def update_cache_metadata(
     title: str | None,
     channel_name: str | None,
     yt_video_id: str | None,
+    uploaded_at: str | None = None,
 ):
     conn = await get_db()
     await conn.execute(
@@ -167,13 +181,15 @@ async def update_cache_metadata(
         UPDATE youtube_cache SET
             title = COALESCE(?, title),
             channel_name = COALESCE(?, channel_name),
-            yt_video_id = COALESCE(?, yt_video_id)
+            yt_video_id = COALESCE(?, yt_video_id),
+            uploaded_at = COALESCE(NULLIF(TRIM(?), ''), uploaded_at)
         WHERE video_id = ?
         """,
         (
             _normalize_title(title),
             _normalize_channel(channel_name),
             yt_video_id,
+            (uploaded_at or "").strip()[:8] or None,
             cache_key,
         ),
     )
@@ -324,11 +340,96 @@ async def backfill_youtube_cache_metadata(
                 info = None
 
             if info and info.get("title"):
+                from services.youtube import uploaded_at_from_video_info
+
                 await update_cache_metadata(
                     cache_key,
                     info.get("title"),
                     info.get("uploader"),
                     yt_id,
+                    uploaded_at=uploaded_at_from_video_info(info),
+                )
+                fixed += 1
+            else:
+                failed += 1
+
+            if delay_sec > 0:
+                await asyncio.sleep(delay_sec)
+
+        if len(rows) < batch_size:
+            break
+
+    return {"fixed": fixed, "failed": failed, "processed": processed}
+
+
+async def count_cache_missing_upload_date() -> int:
+    conn = await get_db()
+    async with conn.execute(
+        """
+        SELECT COUNT(*) FROM youtube_cache
+        WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
+          AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
+        """
+    ) as cursor:
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_cache_rows_missing_upload_date(limit: int = 50):
+    conn = await get_db()
+    async with conn.execute(
+        """
+        SELECT video_id, yt_video_id
+        FROM youtube_cache
+        WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
+          AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
+        ORDER BY cached_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ) as cursor:
+        return await cursor.fetchall()
+
+
+async def backfill_cache_upload_dates(
+    batch_size: int = 40,
+    max_total: int | None = 2000,
+    delay_sec: float = 0.35,
+) -> dict:
+    from services.youtube import get_video_info, uploaded_at_from_video_info
+
+    fixed = 0
+    failed = 0
+    processed = 0
+
+    while True:
+        rows = await get_cache_rows_missing_upload_date(batch_size)
+        if not rows:
+            break
+
+        for row in rows:
+            if max_total is not None and processed >= max_total:
+                return {"fixed": fixed, "failed": failed, "processed": processed}
+
+            cache_key = row["video_id"]
+            yt_id = (row["yt_video_id"] or "").strip() or extract_yt_id_from_cache_key(
+                cache_key
+            )
+            processed += 1
+            if not yt_id:
+                failed += 1
+                continue
+
+            url = f"https://www.youtube.com/watch?v={yt_id}"
+            try:
+                info = await asyncio.to_thread(get_video_info, url)
+            except Exception:
+                info = None
+
+            uploaded = uploaded_at_from_video_info(info)
+            if uploaded:
+                await update_cache_metadata(
+                    cache_key, None, None, yt_id, uploaded_at=uploaded
                 )
                 fixed += 1
             else:
@@ -386,12 +487,12 @@ async def get_global_channel_videos_page(
 ):
     conn = await get_db()
     async with conn.execute(
-        """
+        f"""
         SELECT rowid AS id, video_id, yt_video_id, title, file_ids,
-               format_type, quality, cached_at
+               format_type, quality, cached_at, uploaded_at
         FROM youtube_cache
         WHERE channel_name = ?
-        ORDER BY cached_at DESC
+        ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
         LIMIT ? OFFSET ?
         """,
         (channel_name, limit, offset),
@@ -426,12 +527,12 @@ async def search_global_cache_by_title(query: str, limit: int = 15):
     conn = await get_db()
     pattern = f"%{query.strip()}%"
     async with conn.execute(
-        """
+        f"""
         SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, cached_at
         FROM youtube_cache
         WHERE title LIKE ?
-        ORDER BY cached_at DESC
+        ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
         LIMIT ?
         """,
         (pattern, limit),
@@ -443,12 +544,12 @@ async def search_global_cache_by_channel(query: str, limit: int = 15):
     conn = await get_db()
     pattern = f"%{query.strip()}%"
     async with conn.execute(
-        """
+        f"""
         SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, cached_at
         FROM youtube_cache
         WHERE channel_name LIKE ?
-        ORDER BY cached_at DESC
+        ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
         LIMIT ?
         """,
         (pattern, limit),

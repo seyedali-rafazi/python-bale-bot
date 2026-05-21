@@ -38,9 +38,9 @@ async def handle_yt_archive_search_state(
         return
 
     keyboard = []
-    lines = ["🔍 نتایج جستجو (جدیدترین اول):\n"]
+    lines = ["🔍 نتایج جستجو (جدیدترین انتشار در یوتیوب):\n"]
     for row in results[:12]:
-        title = row["title"]
+        title = row["title"] or row["yt_video_id"] or "ویدیو"
         if len(title) > 45:
             title = title[:42] + "…"
         ch = row["channel_name"]
