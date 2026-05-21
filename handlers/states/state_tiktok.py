@@ -16,17 +16,10 @@ from core.database import (
     is_vip,
     get_tt_downloads,
     increment_tt_downloads,
-    add_tiktok_explore_video,
 )
 from core.limits import get_limit
-from services.zip_utils import (
-    build_zip_and_split,
-    format_merge_instructions,
-    part_display_filename,
-)
 
 
-STORAGE_CHANNEL_ID = "@digittt"
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 
@@ -83,95 +76,27 @@ async def background_tt_download(
                 )
                 return
 
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="📤 ویدیو دانلود شد! در حال آپلود در سرور...",
-            )
-
-            # Build ZIP for user delivery (20MB parts)
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
-            )
-
             safe_title = _strip_hashtags(title) or "tiktok_video"
-            zip_basename = "tiktok_video"
-            zip_parts, archive_basename, split_method = await asyncio.to_thread(
-                build_zip_and_split,
-                file_path,
-                os.path.dirname(file_path) or ".",
-                zip_basename,
-                20 * 1024 * 1024,
-            )
+            display_name = f"{safe_title}.mp4" if not safe_title.endswith(".mp4") else safe_title
+            caption = f"✅ {safe_title}"
 
-            # Upload ZIP parts to storage channel too (no tags)
-            channel_file_ids = []
-            total_parts = len(zip_parts)
-            for idx, part_path in enumerate(zip_parts, 1):
-                display_name = part_display_filename(
-                    part_path, archive_basename, idx, total_parts, split_method
-                )
-                caption = (
-                    f"📦 TikTok ZIP\n{safe_title}\n{display_name}"
-                    if safe_title
-                    else f"📦 TikTok ZIP\n{display_name}"
-                )
-                with open(part_path, "rb") as doc:
-                    channel_msg = await context.bot.send_document(
-                        chat_id=STORAGE_CHANNEL_ID,
-                        document=doc,
-                        filename=display_name,
-                        caption=caption,
-                        read_timeout=300,
-                        write_timeout=300,
-                    )
-                    channel_file_ids.append(channel_msg.document.file_id)
-
-            # Store first part id for explore DB (backward compatibility)
-            if channel_file_ids:
-                await add_tiktok_explore_video(channel_file_ids[0])
-
-        # Send ZIP parts to user
-        total_parts = len(zip_parts)
-        if total_parts > 1:
-            await context.bot.send_message(
+            await context.bot.edit_message_text(
                 chat_id=chat_id,
-                text=f"📦 فایل ZIP آماده شد (شامل {total_parts} پارت). در حال ارسال...",
+                message_id=status_msg.message_id,
+                text="📤 ویدیو دانلود شد! در حال ارسال...",
             )
-        else:
-            await context.bot.send_message(chat_id=chat_id, text="📦 فایل ZIP آماده شد. در حال ارسال...")
 
-        for idx, part_path in enumerate(zip_parts, 1):
-            if total_parts > 1:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"📤 ارسال پارت {idx} از {total_parts}...",
-                )
-            display_name = part_display_filename(
-                part_path, archive_basename, idx, total_parts, split_method
-            )
-            with open(part_path, "rb") as doc:
+            with open(file_path, "rb") as doc:
                 await context.bot.send_document(
                     chat_id=chat_id,
                     document=doc,
                     filename=display_name,
-                    caption=f"✅ {safe_title or 'TikTok'}\n📦 {display_name}",
+                    caption=caption,
                     read_timeout=300,
                     write_timeout=300,
                 )
 
-        if total_parts > 1:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=format_merge_instructions(
-                    archive_basename, total_parts, split_method
-                ),
-            )
-
-        # افزایش محدودیت کاربر فقط در اینجا (پس از ارسال موفق) انجام می‌شود
-        await increment_tt_downloads(user_id)  # اضافه شدن await
+        await increment_tt_downloads(user_id)
 
         await context.bot.delete_message(
             chat_id=chat_id, message_id=status_msg.message_id
@@ -183,23 +108,11 @@ async def background_tt_download(
             chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
         )
     finally:
-        # cleanup zip artifacts
-        try:
-            if "zip_parts" in locals():
-                for p in zip_parts:
-                    if p and os.path.exists(p) and p != file_path:
-                        os.remove(p)
-            if "split_method" in locals() and split_method == "concat":
-                full_zip = os.path.join(
-                    os.path.dirname(file_path) or ".",
-                    f"{archive_basename}.zip",
-                )
-                if os.path.isfile(full_zip):
-                    os.remove(full_zip)
-        except Exception:
-            pass
         if "file_path" in locals() and file_path and os.path.exists(file_path):
-            os.remove(file_path)
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
 
 
 async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TYPE):

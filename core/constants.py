@@ -72,7 +72,6 @@ BTN_DL_TIKTOK = "🎵 تیک‌تاک"
 BTN_TT_LINK = "🔗 دانلود تیک‌تاک (با لینک)"
 BTN_TT_SEARCH = "🔍 جستجو با موضوع"
 BTN_TT_TREND = "🔥 ویدیوهای ترند تیک‌تاک"
-BTN_TT_EXPLORE = "🌍 اکسپلور تیک‌تاک"
 
 # منوی گیت‌هاب
 BTN_PROG_GITHUB = "🐙 گیت‌هاب"

@@ -40,12 +40,6 @@ async def init_db():
         await conn.execute("ALTER TABLE users ADD COLUMN tt_dl_count INTEGER DEFAULT 0")
     if "tt_dl_date" not in columns:
         await conn.execute("ALTER TABLE users ADD COLUMN tt_dl_date TEXT")
-    if "tt_exp_count" not in columns:
-        await conn.execute(
-            "ALTER TABLE users ADD COLUMN tt_exp_count INTEGER DEFAULT 0"
-        )
-    if "tt_exp_date" not in columns:
-        await conn.execute("ALTER TABLE users ADD COLUMN tt_exp_date TEXT")
     if "ig_dl_count" not in columns:
         await conn.execute("ALTER TABLE users ADD COLUMN ig_dl_count INTEGER DEFAULT 0")
     if "ig_dl_date" not in columns:
@@ -135,13 +129,6 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE users ADD COLUMN arc_fetch_date TEXT"
         )
-
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS tiktok_explore (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_id TEXT UNIQUE
-        )
-    """)
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS instagram_explore (

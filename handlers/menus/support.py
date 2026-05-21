@@ -13,7 +13,6 @@ from core.database import (
     get_music_downloads,
     get_pinterest_downloads,
     get_tt_downloads,
-    get_tt_explores,
     get_gh_downloads,
     get_cloud_usage_stats,
     get_web_search_downloads,
@@ -74,7 +73,6 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_count = await get_music_downloads(user_id)
     pinterest_count = await get_pinterest_downloads(user_id)
     tt_dl_count = await get_tt_downloads(user_id)
-    tt_exp_count = await get_tt_explores(user_id)
     gh_count = await get_gh_downloads(user_id)
     web_count = await get_web_search_downloads(user_id)
 
@@ -83,7 +81,6 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     music_limit = get_limit("music_download", is_vip)
     pinterest_limit = get_limit("pinterest_search", is_vip)
     tt_dl_limit = get_limit("tiktok_download", is_vip)
-    tt_exp_limit = get_limit("tiktok_explore", is_vip)
     gh_limit = get_limit("github_download", is_vip)
     web_limit = get_limit("web_search", is_vip)
 
@@ -126,7 +123,6 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • موسیقی | دانلود: $ {music_count} / {music_limit} $
 • پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
-• تیک‌تاک | اکسپلور: $ {tt_exp_count} / {tt_exp_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
 • جستجوی وب | دانلود: $ {web_count} / {web_limit} $
 

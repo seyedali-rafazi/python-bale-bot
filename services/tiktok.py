@@ -28,6 +28,8 @@ async def download_tiktok_video(url: str):
         "yt-dlp",
         "-f",
         "bv*+ba/b",
+        "--merge-output-format",
+        "mp4",
         "-o",
         output_template,
         "--no-playlist",

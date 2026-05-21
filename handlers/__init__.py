@@ -60,7 +60,6 @@ from .menus import (
     btn_tt_link_req,
     btn_tt_search_req,
     btn_tt_trend_req,
-    btn_tt_explore_req,
     btn_web_search_req,
     btn_google_search_subject_req,
     btn_google_search_link_req,
@@ -411,11 +410,6 @@ def register_all_handlers(application):
     )
     application.add_handler(
         MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_TREND)}$"), btn_tt_trend_req)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_TT_EXPLORE)}$"), btn_tt_explore_req
-        )
     )
     application.add_handler(
         CallbackQueryHandler(github_callback_handler, pattern=r"^ghdl_")

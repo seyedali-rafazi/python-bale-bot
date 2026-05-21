@@ -43,7 +43,7 @@ async def get_full_user_info(user_id):
         """SELECT user_id, username, is_vip, join_date, vip_expire_date,
                   yt_count, yt_date, music_count, music_date,
                   pinterest_count, pinterest_date, tt_dl_count, tt_dl_date,
-                  tt_exp_count, tt_exp_date, gh_count, gh_date
+                  gh_count, gh_date
            FROM users WHERE user_id = ?""",
         (user_id,),
     ) as cursor:
@@ -67,7 +67,7 @@ async def reset_user_limits(user_id):
     await conn.execute(
         """
         UPDATE users 
-        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0, tt_exp_count = 0
+        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0
         WHERE user_id = ?
     """,
         (user_id,),

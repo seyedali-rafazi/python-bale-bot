@@ -147,8 +147,6 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pinterest_date,
         tt_dl_count,
         tt_dl_date,
-        tt_exp_count,
-        tt_exp_date,
         gh_count,
         gh_date,
     ) = user_data
@@ -194,13 +192,9 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
    ├─ دانلود‌ها: {pinterest_count}
    └─ آخرین استفاده: {pinterest_date if pinterest_date else "هرگز"}
 
-🎭 TikTok (دانلود):
+🎭 TikTok:
    ├─ دانلود‌ها: {tt_dl_count}
    └─ آخرین استفاده: {tt_dl_date if tt_dl_date else "هرگز"}
-
-🎭 TikTok (Export):
-   ├─ Export‌ها: {tt_exp_count}
-   └─ آخرین استفاده: {tt_exp_date if tt_exp_date else "هرگز"}
 
 💻 GitHub:
    ├─ دانلود‌ها: {gh_count}

@@ -70,7 +70,6 @@ from .tiktok import (
     btn_tt_link_req,
     btn_tt_search_req,
     btn_tt_trend_req,
-    btn_tt_explore_req,
 )
 
 from .github import (
