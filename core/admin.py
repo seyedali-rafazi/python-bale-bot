@@ -13,6 +13,8 @@ from core.database import (
     set_vip_expire_date,
     get_full_user_info,
     give_5gb_to_existing_vips,
+    add_cloud_storage,
+    get_user_cloud_info,
 )
 import os
 from dotenv import load_dotenv
@@ -390,6 +392,51 @@ async def cmd_fix_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ خطا: {e}")
+
+
+async def cmd_addcloud(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ فرمت اشتباه است. مثال:\n`/addcloud 123456789 5000`"
+        )
+        return
+
+    target_user = context.args[0]
+    try:
+        size_mb = int(context.args[1])
+        if size_mb < 1:
+            await update.message.reply_text("❌ حجم باید بیشتر از صفر باشد.")
+            return
+    except ValueError:
+        await update.message.reply_text(
+            "❌ لطفاً یک عدد صحیح برای حجم (مگابایت) وارد کنید."
+        )
+        return
+
+    if not await get_full_user_info(target_user):
+        await update.message.reply_text(f"❌ کاربر {target_user} یافت نشد.")
+        return
+
+    cloud_info = await get_user_cloud_info(target_user)
+    old_total = (cloud_info or {}).get("total_mb") or 0
+    old_used = (cloud_info or {}).get("used_mb") or 0
+    old_available = old_total - old_used
+
+    await add_cloud_storage(target_user, size_mb)
+
+    new_total = old_total + size_mb
+    new_available = new_total - old_used
+
+    await update.message.reply_text(
+        f"✅ {size_mb} مگابایت به کاربر {target_user} اضافه شد.\n\n"
+        f"☁️ حجم کل: {old_total} → {new_total} MB\n"
+        f"📦 مصرف شده: {old_used} MB\n"
+        f"💾 فضای آزاد: {old_available} → {new_available} MB"
+    )
 
 
 async def cmd_give_5gb_vips(update: Update, context: ContextTypes.DEFAULT_TYPE):

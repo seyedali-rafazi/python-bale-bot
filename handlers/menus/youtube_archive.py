@@ -106,13 +106,9 @@ async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_T
             ]
         )
     else:
-        channels = await get_user_channels_page(
-            offset=0, limit=CHANNELS_PAGE_SIZE
-        )
+        channels = await get_user_channels_page(offset=0, limit=CHANNELS_PAGE_SIZE)
         total_ch = await count_user_channels()
-        keyboard = _build_channels_keyboard(
-            channels, page=0, total_channels=total_ch
-        )
+        keyboard = _build_channels_keyboard(channels, page=0, total_channels=total_ch)
 
     if update.callback_query:
         await update.callback_query.answer()
@@ -151,19 +147,20 @@ def _build_channels_keyboard(
     nav = []
     if page > 0:
         nav.append(
-            InlineKeyboardButton("◀️ ۵ کانال قبل", callback_data=f"ytarc_chpg_{page - 1}")
+            InlineKeyboardButton(
+                "◀️ ۵ کانال قبل", callback_data=f"ytarc_chpg_{page - 1}"
+            )
         )
     if (page + 1) * CHANNELS_PAGE_SIZE < total_channels:
         nav.append(
-            InlineKeyboardButton("۵ کانال بعد ▶️", callback_data=f"ytarc_chpg_{page + 1}")
+            InlineKeyboardButton(
+                "۵ کانال بعد ▶️", callback_data=f"ytarc_chpg_{page + 1}"
+            )
         )
     nav.append(InlineKeyboardButton("🔄 بروزرسانی", callback_data="ytarc_refresh"))
     if nav:
         rows.append(nav)
 
-    rows.append(
-        [InlineKeyboardButton("◀️ بازگشت به منوی یوتیوب", callback_data="ytarc_back_yt")]
-    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -232,9 +229,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if data.startswith("ytarc_chpg_"):
         page = int(data.split("_")[-1])
         offset = page * CHANNELS_PAGE_SIZE
-        channels = await get_user_channels_page(
-            offset=offset, limit=CHANNELS_PAGE_SIZE
-        )
+        channels = await get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE)
         total_ch = await count_user_channels()
         total_pages = max(1, (total_ch + CHANNELS_PAGE_SIZE - 1) // CHANNELS_PAGE_SIZE)
 
@@ -258,9 +253,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         page = int(parts[2])
         index = int(parts[3])
         offset = page * CHANNELS_PAGE_SIZE
-        channels = await get_user_channels_page(
-            offset=offset, limit=CHANNELS_PAGE_SIZE
-        )
+        channels = await get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE)
         if index >= len(channels):
             await query.answer("کانال یافت نشد.")
             return
@@ -276,9 +269,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         encoded = data.replace("ytarc_vidpg_", "", 1)
         channel_name, vid_page = encoded.rsplit("_", 1)
         channel_name = _decode_channel(channel_name)
-        await _show_channel_videos(
-            update, context, channel_name, page=int(vid_page)
-        )
+        await _show_channel_videos(update, context, channel_name, page=int(vid_page))
         return
 
     if data.startswith("ytarc_vid_"):
