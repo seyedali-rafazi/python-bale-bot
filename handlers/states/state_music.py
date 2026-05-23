@@ -29,7 +29,10 @@ from services.music_identify import (
     IDENTIFY_DIR,
     MAX_DURATION_SEC,
     extract_audio_to_mp3,
+    format_duration_fa,
+    get_api_duration_sec,
     get_message_media,
+    probe_media_duration_sec,
     recognize_music_from_file,
 )
 from services.youtube import download_youtube_audio
@@ -209,10 +212,11 @@ async def handle_music_identify_media(
         )
         return
 
-    file_obj, filename, duration = media
-    if duration is not None and duration > MAX_DURATION_SEC:
+    file_obj, filename = media
+    api_duration = get_api_duration_sec(file_obj)
+    if api_duration is not None and api_duration > MAX_DURATION_SEC:
         await update.message.reply_text(
-            f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {duration // 60} دقیقه و {duration % 60} ثانیه."
+            f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(api_duration)}."
         )
         return
 
@@ -227,6 +231,13 @@ async def handle_music_identify_media(
         tg_file = await context.bot.get_file(file_obj.file_id)
         await tg_file.download_to_drive(raw_path)
         paths_to_remove.append(raw_path)
+
+        real_duration = await asyncio.to_thread(probe_media_duration_sec, raw_path)
+        if real_duration is not None and real_duration > MAX_DURATION_SEC:
+            await status_msg.edit_text(
+                f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(real_duration)}."
+            )
+            return
 
         is_video = (
             update.message.video is not None
