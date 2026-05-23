@@ -124,6 +124,27 @@ def extract_audio_to_mp3(input_path: str, output_path: str, max_seconds: int = M
         return False
 
 
+def _shazam_track_extras(track: dict) -> dict:
+    extras = {}
+    if track.get("url"):
+        extras["shazam_url"] = track["url"]
+    for section in track.get("sections") or []:
+        if section.get("type") != "SONG":
+            continue
+        for meta in section.get("metadata") or []:
+            key = (meta.get("title") or "").strip().lower()
+            text = (meta.get("text") or "").strip()
+            if not text:
+                continue
+            if key == "album":
+                extras["album"] = text
+            elif key in ("released", "release date"):
+                extras["release_date"] = text
+            elif key == "genre":
+                extras["genre"] = text
+    return extras
+
+
 def _parse_shazam_result(data: dict) -> Optional[dict]:
     track = (data or {}).get("track")
     if not track:
@@ -131,10 +152,12 @@ def _parse_shazam_result(data: dict) -> Optional[dict]:
     title = track.get("title")
     if not title:
         return None
-    return {
+    result = {
         "title": title,
         "artist": track.get("subtitle") or "ناشناس",
     }
+    result.update(_shazam_track_extras(track))
+    return result
 
 
 async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
@@ -184,13 +207,39 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
         title = result.get("title")
         if not title:
             return None
-        return {
+        parsed = {
             "title": title,
             "artist": result.get("artist") or "ناشناس",
         }
+        if result.get("album"):
+            parsed["album"] = result["album"]
+        if result.get("release_date"):
+            parsed["release_date"] = result["release_date"]
+        if result.get("song_link"):
+            parsed["shazam_url"] = result["song_link"]
+        return parsed
     except Exception as e:
         print(f"AudD recognize error: {e}")
         return None
+
+
+def format_identified_info_message(identified: dict, *, pending_download: bool = True) -> str:
+    lines = [
+        "✅ آهنگ شناسایی شد:\n",
+        f"🎵 عنوان: {identified['title']}",
+        f"🎤 خواننده: {identified['artist']}",
+    ]
+    if identified.get("album"):
+        lines.append(f"💿 آلبوم: {identified['album']}")
+    if identified.get("genre"):
+        lines.append(f"🎭 سبک: {identified['genre']}")
+    if identified.get("release_date"):
+        lines.append(f"📅 تاریخ انتشار: {identified['release_date']}")
+    if identified.get("shazam_url"):
+        lines.append(f"🔗 لینک: {identified['shazam_url']}")
+    if pending_download:
+        lines.append("\n⏳ در حال دانلود و ارسال آهنگ...")
+    return "\n".join(lines)
 
 
 async def recognize_music_from_file(file_path: str) -> Optional[dict]:

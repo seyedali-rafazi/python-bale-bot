@@ -30,6 +30,7 @@ from services.music_identify import (
     MAX_DURATION_SEC,
     extract_audio_to_mp3,
     format_duration_fa,
+    format_identified_info_message,
     get_api_duration_sec,
     get_message_media,
     probe_media_duration_sec,
@@ -200,6 +201,18 @@ async def background_download_task(
 # ----------------------------------------------------------------
 
 
+def _make_safe_filename(title: str, performer: str) -> str:
+    label = f"{title} - {performer}"
+    return "".join(c for c in label if c.isalnum() or c in " -_").strip() or "track"
+
+
+async def _can_download_music(chat_id: str) -> tuple[bool, int]:
+    user_vip_status = await is_vip(chat_id)
+    limit = 20 if user_vip_status else 6
+    current_downloads = await get_music_downloads(chat_id)
+    return current_downloads < limit, limit
+
+
 async def handle_music_identify_media(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -267,32 +280,49 @@ async def handle_music_identify_media(
             )
             return
 
-        title = identified["title"]
-        artist = identified["artist"]
-        query = f"{title} {artist}".strip()
-        results = await asyncio.to_thread(search_track, query, 8)
+        query = f"{identified['title']} {identified['artist']}".strip()
+        results = await asyncio.to_thread(search_track, query, 5)
+
+        try:
+            await status_msg.delete()
+        except BadRequest:
+            pass
 
         if not results:
-            await status_msg.edit_text(
-                f"✅ آهنگ شناسایی شد:\n🎵 {title}\n🎤 {artist}\n\n"
-                "❌ اما نتیجه‌ای برای دانلود در یوتیوب موزیک پیدا نشد."
+            await update.message.reply_text(
+                format_identified_info_message(identified, pending_download=False)
+                + "\n\n❌ اما نتیجه‌ای برای دانلود در یوتیوب موزیک پیدا نشد."
             )
             return
 
-        keyboard = []
-        for item in results:
-            artist_name = (
-                item["artists"][0]["name"] if item.get("artists") else "ناشناس"
-            )
-            btn_text = f"{item['name']} - {artist_name}"
-            keyboard.append(
-                [InlineKeyboardButton(btn_text, callback_data=f"dltrack_{item['id']}")]
-            )
+        await update.message.reply_text(format_identified_info_message(identified))
 
-        await status_msg.edit_text(
-            f"✅ آهنگ شناسایی شد:\n🎵 {title}\n🎤 {artist}\n\n"
-            "برای دانلود یکی از نتایج زیر را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+        can_download, limit = await _can_download_music(chat_id)
+        if not can_download:
+            await update.message.reply_text(
+                f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ({limit} آهنگ).\n"
+                "فردا مجدداً تلاش کنید."
+            )
+            return
+
+        best = results[0]
+        track_id = best["id"]
+        dl_title = best["name"]
+        dl_performer = (
+            best["artists"][0]["name"] if best.get("artists") else identified["artist"]
+        )
+        safe_filename = _make_safe_filename(dl_title, dl_performer)
+
+        asyncio.create_task(
+            background_download_task(
+                context,
+                chat_id,
+                track_id,
+                dl_title,
+                dl_performer,
+                safe_filename,
+                destination="telegram",
+            )
         )
 
     except Exception as e:
