@@ -55,6 +55,7 @@ from .menus import (
     btn_music_album_req,
     btn_music_artist_req,
     btn_music_playlist_req,
+    btn_music_identify_req,
     btn_pinterest_req,
     btn_tiktok_req,
     btn_tt_link_req,
@@ -64,7 +65,7 @@ from .menus import (
     btn_google_search_subject_req,
     btn_google_search_link_req,
 )
-from .states import process_state_input, process_photo_input
+from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
     cmd_stats,
     cmd_setvip,
@@ -339,6 +340,11 @@ def register_all_handlers(application):
             filters.Regex(f"^{re.escape(BTN_MUSIC_PLAYLIST)}$"), btn_music_playlist_req
         )
     )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MUSIC_IDENTIFY)}$"), btn_music_identify_req
+        )
+    )
 
     # ثبت کال‌بک دکمه‌های شیشه‌ای مربوط به موسیقی
     application.add_handler(
@@ -553,6 +559,14 @@ def register_all_handlers(application):
 
     application.add_handler(
         CallbackQueryHandler(handle_cloud_upload_callback, pattern="^cloud_upload$")
+    )
+
+    # پردازش ویس / صوت / ویدیو (تشخیص آهنگ و ...)
+    application.add_handler(
+        MessageHandler(
+            filters.VOICE | filters.AUDIO | filters.VIDEO | filters.VIDEO_NOTE,
+            process_media_input,
+        )
     )
 
     # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد

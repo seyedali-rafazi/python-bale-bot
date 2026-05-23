@@ -7,7 +7,7 @@ from .state_programming import handle_programming_state
 from .youtube import handle_youtube_state
 from .state_insta import handle_insta_state
 from .state_ai import handle_ai_state, handle_ai_photo
-from .state_music import handle_music_state
+from .state_music import handle_music_state, handle_music_identify_media
 from .state_telegram import handle_telegram_state
 from .state_translation import handle_translation_state
 from .state_weather import handle_weather_state
@@ -91,5 +91,16 @@ async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if step == "waiting_ai_ocr":
         await handle_ai_photo(update, context, chat_id)
+    else:
+        await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")
+
+
+async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    state_data = get_state(chat_id)
+    step = state_data.get("step") if state_data else None
+
+    if step == "waiting_music_identify":
+        await handle_music_identify_media(update, context)
     else:
         await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")

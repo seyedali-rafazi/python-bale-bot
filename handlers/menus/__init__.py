@@ -61,6 +61,7 @@ from .music import (
     btn_music_album_req,
     btn_music_artist_req,
     btn_music_playlist_req,
+    btn_music_identify_req,
 )
 
 from .pinterest import btn_pinterest_req

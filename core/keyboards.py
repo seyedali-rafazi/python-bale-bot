@@ -56,6 +56,7 @@ def get_music_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_MUSIC_TRACK), KeyboardButton(BTN_MUSIC_ALBUM)],
         [KeyboardButton(BTN_MUSIC_ARTIST), KeyboardButton(BTN_MUSIC_PLAYLIST)],
+        [KeyboardButton(BTN_MUSIC_IDENTIFY)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

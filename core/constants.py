@@ -58,6 +58,7 @@ BTN_MUSIC_TRACK = "🔍 جستجوی آهنگ"
 BTN_MUSIC_ALBUM = "💿 جستجوی آلبوم"
 BTN_MUSIC_ARTIST = "🎤 جستجوی خواننده"
 BTN_MUSIC_PLAYLIST = "🎧 پلی‌لیست‌های اسپاتیفای"
+BTN_MUSIC_IDENTIFY = "🎙 تشخیص آهنگ از صدا/ویدیو"
 
 BTN_MUSIC_SEARCH = "🔍 جستجوی آهنگ (نام/خواننده)"
 BTN_MUSIC_SPOTIFY = "🎧 دانلود از اسپاتیفای (با لینک)"

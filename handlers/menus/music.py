@@ -46,3 +46,17 @@ async def btn_music_playlist_req(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_music_playlist")
     await update.message.reply_text("🎧 نام یا موضوع پلی‌لیست را بفرستید:")
+
+
+async def btn_music_identify_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "waiting_music_identify")
+    await update.message.reply_text(
+        "🎙 یکی از موارد زیر را ارسال کنید:\n"
+        "• پیام صوتی (ویس)\n"
+        "• فایل صوتی\n"
+        "• ویدیو (حداکثر ۳ دقیقه)\n\n"
+        "ربات سعی می‌کند نام آهنگ را تشخیص دهد و نتیجه را برای دانلود نشان می‌دهد."
+    )

@@ -3,6 +3,7 @@
 
 import os
 import asyncio
+import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
@@ -23,6 +24,13 @@ from services.music import (
     get_album_tracks,
     get_playlist_tracks,
     get_artist_top_tracks,
+)
+from services.music_identify import (
+    IDENTIFY_DIR,
+    MAX_DURATION_SEC,
+    extract_audio_to_mp3,
+    get_message_media,
+    recognize_music_from_file,
 )
 from services.youtube import download_youtube_audio
 
@@ -187,6 +195,109 @@ async def background_download_task(
 
 
 # ----------------------------------------------------------------
+
+
+async def handle_music_identify_media(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    chat_id = str(update.effective_chat.id)
+    media = get_message_media(update.message)
+    if not media:
+        await update.message.reply_text(
+            "❌ لطفاً ویس، فایل صوتی یا ویدیو (حداکثر ۳ دقیقه) ارسال کنید."
+        )
+        return
+
+    file_obj, filename, duration = media
+    if duration is not None and duration > MAX_DURATION_SEC:
+        await update.message.reply_text(
+            f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {duration // 60} دقیقه و {duration % 60} ثانیه."
+        )
+        return
+
+    status_msg = await update.message.reply_text("🔎 در حال تشخیص آهنگ...")
+
+    req_id = uuid.uuid4().hex[:8]
+    raw_path = os.path.join(IDENTIFY_DIR, f"{chat_id}_{req_id}_{filename}")
+    audio_path = os.path.join(IDENTIFY_DIR, f"{chat_id}_{req_id}_identify.mp3")
+    paths_to_remove = []
+
+    try:
+        tg_file = await context.bot.get_file(file_obj.file_id)
+        await tg_file.download_to_drive(raw_path)
+        paths_to_remove.append(raw_path)
+
+        is_video = (
+            update.message.video is not None
+            or update.message.video_note is not None
+            or (
+                update.message.document
+                and (update.message.document.mime_type or "").startswith("video/")
+            )
+        )
+
+        recognize_path = raw_path
+        if is_video or not raw_path.lower().endswith((".mp3", ".ogg", ".m4a", ".wav")):
+            ok = await asyncio.to_thread(
+                extract_audio_to_mp3, raw_path, audio_path, MAX_DURATION_SEC
+            )
+            if not ok:
+                await status_msg.edit_text("❌ استخراج صدا از فایل ناموفق بود.")
+                return
+            recognize_path = audio_path
+            paths_to_remove.append(audio_path)
+
+        identified = await recognize_music_from_file(recognize_path)
+        if not identified:
+            await status_msg.edit_text(
+                "❌ آهنگی شناسایی نشد.\n"
+                "لطفاً بخش واضح‌تری از آهنگ (بدون نویز زیاد) ارسال کنید."
+            )
+            return
+
+        title = identified["title"]
+        artist = identified["artist"]
+        query = f"{title} {artist}".strip()
+        results = await asyncio.to_thread(search_track, query, 8)
+
+        if not results:
+            await status_msg.edit_text(
+                f"✅ آهنگ شناسایی شد:\n🎵 {title}\n🎤 {artist}\n\n"
+                "❌ اما نتیجه‌ای برای دانلود در یوتیوب موزیک پیدا نشد."
+            )
+            return
+
+        keyboard = []
+        for item in results:
+            artist_name = (
+                item["artists"][0]["name"] if item.get("artists") else "ناشناس"
+            )
+            btn_text = f"{item['name']} - {artist_name}"
+            keyboard.append(
+                [InlineKeyboardButton(btn_text, callback_data=f"dltrack_{item['id']}")]
+            )
+
+        await status_msg.edit_text(
+            f"✅ آهنگ شناسایی شد:\n🎵 {title}\n🎤 {artist}\n\n"
+            "برای دانلود یکی از نتایج زیر را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        print(f"Music identify error: {e}")
+        try:
+            await status_msg.edit_text("❌ خطایی در تشخیص آهنگ رخ داد.")
+        except BadRequest:
+            await update.message.reply_text("❌ خطایی در تشخیص آهنگ رخ داد.")
+
+    finally:
+        for path in paths_to_remove:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    print(f"Failed to remove {path}: {e}")
 
 
 async def handle_music_state(
