@@ -5,6 +5,7 @@ Reuses a single browser instance across multiple searches.
 """
 
 import asyncio
+import os
 import time
 from typing import Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
@@ -15,11 +16,17 @@ class PlaywrightBrowserManager:
         self._browser: Optional[Browser] = None
         self._playwright: Optional[Playwright] = None
         self._last_context_time = time.time()
-        self._context_timeout = 120
+        self._browser_started_at = 0.0
+        self._context_timeout = max(60, int(os.getenv("CHROMIUM_IDLE_RESTART_SEC", "120")))
         self._init_lock = asyncio.Lock()
 
         self._usage_count = 0
-        self._max_usages_before_restart = 20
+        self._max_usages_before_restart = max(
+            3, int(os.getenv("CHROMIUM_MAX_USES_BEFORE_RESTART", "8"))
+        )
+        self._max_browser_age_sec = max(
+            300, int(os.getenv("CHROMIUM_MAX_BROWSER_AGE_SEC", "1800"))
+        )
 
     def _is_browser_alive(self) -> bool:
         try:
@@ -53,6 +60,17 @@ class PlaywrightBrowserManager:
                     )
                     await self._restart_browser()
 
+                elif (
+                    self._browser_started_at > 0
+                    and time.time() - self._browser_started_at
+                    > self._max_browser_age_sec
+                ):
+                    age = time.time() - self._browser_started_at
+                    print(
+                        f"♻️ Browser age {age:.0f}s exceeds {self._max_browser_age_sec}s, restarting..."
+                    )
+                    await self._restart_browser()
+
                 else:
                     time_since_use = time.time() - self._last_context_time
                     if time_since_use > self._context_timeout:
@@ -78,11 +96,16 @@ class PlaywrightBrowserManager:
                             "--disable-sync",
                             "--disable-translate",
                             "--mute-audio",
+                            "--renderer-process-limit=2",
+                            "--disable-background-networking",
+                            "--disable-background-timer-throttling",
+                            "--disable-renderer-backgrounding",
                         ],
                         timeout=30000,
                     )
                     self._usage_count = 0
                     self._last_context_time = time.time()
+                    self._browser_started_at = time.time()
                     print("✅ Browser initialized")
                 except Exception as e:
                     print(f"❌ Browser launch failed: {e}")
@@ -132,12 +155,19 @@ class PlaywrightBrowserManager:
                 await self._browser.close()
         except Exception as e:
             print(f"Error closing browser: {e}")
+        finally:
+            self._browser = None
 
         try:
             if self._playwright:
                 await self._playwright.stop()
         except Exception as e:
             print(f"Error closing playwright: {e}")
+        finally:
+            self._playwright = None
+
+        self._usage_count = 0
+        self._browser_started_at = 0.0
 
 
 _browser_manager: Optional[PlaywrightBrowserManager] = None

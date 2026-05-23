@@ -26,6 +26,7 @@ from services.pinterest_queue import (
     start_pinterest_workers,
 )
 from services.playwright_browser_manager import get_browser_manager
+from services.chromium_maintenance import chromium_maintenance_loop
 
 from services.ai import (
     init_ai_client,
@@ -99,6 +100,8 @@ async def on_startup(app):
 
     await start_pinterest_workers()
 
+    asyncio.create_task(chromium_maintenance_loop())
+
     await init_ai_client()
 
     from core.database.youtube import (
@@ -114,6 +117,7 @@ async def on_startup(app):
     logger.info("✅ HTTP Session initialized")
     logger.info("✅ Database initialized")
     logger.info("✅ Pinterest workers initialized")
+    logger.info("✅ Chromium periodic maintenance started")
     logger.info("✅ AI Client initialized")
 
 

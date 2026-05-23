@@ -92,6 +92,19 @@ class PinterestService:
                 context = await manager.new_context(self.user_agent)
                 page = await context.new_page()
 
+                async def _block_heavy_resources(route):
+                    if route.request.resource_type in (
+                        "image",
+                        "media",
+                        "font",
+                        "stylesheet",
+                    ):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", _block_heavy_resources)
+
                 await page.set_extra_http_headers(
                     {
                         "Accept-Language": "en-US,en;q=0.9",

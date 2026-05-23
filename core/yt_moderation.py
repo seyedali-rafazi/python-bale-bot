@@ -35,6 +35,18 @@ def _normalize_search_text(text: str) -> str:
     return t
 
 
+def _blocked_word_matches(blocked: str, normalized: str, tokens: set[str]) -> bool:
+    """Match whole words/tokens only — avoids e.g. کس matching inside پادکست."""
+    b = blocked.strip().lower()
+    if not b:
+        return False
+    if " " in b:
+        return bool(
+            re.search(rf"(?:^|\s){re.escape(b)}(?:\s|$)", normalized)
+        )
+    return b in tokens
+
+
 async def is_search_query_blocked(query: str) -> bool:
     normalized = _normalize_search_text(query)
     if not normalized:
@@ -44,14 +56,7 @@ async def is_search_query_blocked(query: str) -> bool:
         words = list(_DEFAULT_BLOCKED_WORDS)
     tokens = set(normalized.split())
     for blocked in words:
-        b = blocked.strip().lower()
-        if not b:
-            continue
-        if b in normalized:
-            return True
-        if " " in b and b in normalized:
-            return True
-        if b in tokens:
+        if _blocked_word_matches(blocked, normalized, tokens):
             return True
     return False
 

@@ -27,6 +27,9 @@ from core.database import (
 from core.limits import get_limit
 
 from services.pinterest_queue import (
+    PinterestQueueFullError,
+    estimate_pinterest_wait_seconds,
+    pinterest_search_timeout_seconds,
     queued_pinterest_search,
 )
 
@@ -188,15 +191,39 @@ async def process_pinterest_search(
     loading_message_id: int,
 ):
 
+    search_timeout = pinterest_search_timeout_seconds()
+
     try:
-        # Add 60-second timeout for search (Pinterest often slow)
         image_urls = await asyncio.wait_for(
             queued_pinterest_search(
                 text,
                 max_results=40,
             ),
-            timeout=60.0
+            timeout=search_timeout,
         )
+
+    except PinterestQueueFullError:
+        print(f"Pinterest queue full for query: {text}")
+
+        try:
+            await context.bot.delete_message(
+                chat_id=chat_id,
+                message_id=loading_message_id,
+            )
+        except Exception:
+            pass
+
+        wait_hint = estimate_pinterest_wait_seconds()
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🔴 در حال حاضر جستجوهای زیادی در صف هستند.\n"
+                f"لطفاً حدود {wait_hint // 60 or 1} دقیقه دیگر دوباره تلاش کنید."
+            ),
+        )
+
+        set_state(chat_id, "")
+        return
 
     except asyncio.TimeoutError:
         print(f"Pinterest search TIMEOUT for query: {text}")
@@ -324,7 +351,13 @@ async def handle_pinterest_state(
         set_state(chat_id, "")
         return
 
-    msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر...")
+    wait_sec = estimate_pinterest_wait_seconds()
+    if wait_sec > 45:
+        msg = await update.message.reply_text(
+            f"⏳ در صف جستجو هستید (تخمین انتظار: حدود {wait_sec // 60 or 1} دقیقه)..."
+        )
+    else:
+        msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر...")
 
     # مهم:
     # handler فوری آزاد می‌شود

@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 import shutil
+import signal
+import sys
 import time
 from typing import List, Optional
 
@@ -33,6 +35,22 @@ _DEFAULT_BROWSER_ARGS: List[str] = [
 
 
 _BROWSER_MISSING_LOGGED = False
+
+
+def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Kill SingleFile and any Chrome child processes it spawned."""
+    if process.returncode is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
 
 
 def _get_singlefile_browser_executable() -> Optional[str]:
@@ -118,7 +136,10 @@ async def create_single_file(url, output_path, max_attempts=3):
                 command.insert(1, f"--browser-executable-path={browser_exe}")
 
             process = await asyncio.create_subprocess_exec(
-                *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
 
             try:
@@ -138,10 +159,7 @@ async def create_single_file(url, output_path, max_attempts=3):
                 )
 
             except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
+                _terminate_process_tree(process)
                 print(f"SingleFile timeout for URL: {url} (attempt {attempt + 1})")
             except Exception as e:
                 print(f"SingleFile error: {e}")
