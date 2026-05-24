@@ -1,10 +1,27 @@
 import asyncio
 import re
 import os
+import logging
 from core.database import is_vip, get_yt_downloads, save_cached_video
 from .config import STORAGE_CHANNEL_ID
 from core.limits import get_limit
 from services.zip_utils import format_merge_instructions, part_display_filename
+from .bale_send import (
+    ForwardStatus,
+    forward_file_id_to_user,
+    run_storage_upload,
+    pause_between_parts,
+    format_uncertain_parts_message,
+)
+
+logger = logging.getLogger(__name__)
+
+_STORAGE_UPLOAD_TIMEOUTS = {
+    "read_timeout": 180,
+    "write_timeout": 180,
+    "connect_timeout": 30,
+    "pool_timeout": 30,
+}
 
 
 async def check_user_limit(chat_id: str) -> bool:
@@ -110,48 +127,73 @@ def get_waiting_count(semaphore: asyncio.Semaphore, max_concurrent: int) -> int:
         return 0
 
 
-async def send_video_once(context, chat_id: str, file_id: str):
-    try:
-        await context.bot.send_video(chat_id=chat_id, video=file_id)
-        return True
-    except Exception as e:
-        print(f"⚠️ Error sending video file_id to user {chat_id}: {e}")
-        return False
+async def send_video_once(context, chat_id: str, file_id: str) -> bool:
+    return (
+        await forward_file_id_to_user(context, chat_id, file_id, "video")
+        == ForwardStatus.OK
+    )
 
 
-async def send_audio_once(context, chat_id: str, file_id: str):
-    try:
-        await context.bot.send_audio(chat_id=chat_id, audio=file_id)
-        return True
-    except Exception as e:
-        print(f"⚠️ Error sending audio file_id to user {chat_id}: {e}")
-        return False
+async def send_audio_once(context, chat_id: str, file_id: str) -> bool:
+    return (
+        await forward_file_id_to_user(context, chat_id, file_id, "audio")
+        == ForwardStatus.OK
+    )
 
 
-async def send_document_once(context, chat_id: str, file_id: str):
-    try:
-        await context.bot.send_document(chat_id=chat_id, document=file_id)
-        return True
-    except Exception as e:
-        print(f"⚠️ Error sending document file_id to user {chat_id}: {e}")
-        return False
+async def send_document_once(context, chat_id: str, file_id: str) -> bool:
+    return (
+        await forward_file_id_to_user(context, chat_id, file_id, "document")
+        == ForwardStatus.OK
+    )
 
 
 async def upload_document_to_storage_once(
     context, file_path: str, caption: str, filename: str | None = None
 ):
-    with open(file_path, "rb") as doc:
-        channel_msg = await context.bot.send_document(
-            chat_id=STORAGE_CHANNEL_ID,
-            document=doc,
-            filename=filename,
-            caption=caption,
-            read_timeout=120,
-            write_timeout=120,
-            connect_timeout=30,
-            pool_timeout=30,
-        )
-    return channel_msg.document.file_id
+    async def _upload():
+        with open(file_path, "rb") as doc:
+            channel_msg = await context.bot.send_document(
+                chat_id=STORAGE_CHANNEL_ID,
+                document=doc,
+                filename=filename,
+                caption=caption,
+                **_STORAGE_UPLOAD_TIMEOUTS,
+            )
+        return channel_msg.document.file_id
+
+    return await run_storage_upload(
+        _upload, label=f"storage document {filename or file_path}"
+    )
+
+
+async def _deliver_stored_parts(
+    context,
+    chat_id: str,
+    file_ids: list[str],
+    media_kind: str,
+    *,
+    total_parts: int | None = None,
+) -> list[int]:
+    """Forward file_ids to user once each; return indexes with uncertain delivery."""
+    total = total_parts or len(file_ids)
+    uncertain: list[int] = []
+    for idx, file_id in enumerate(file_ids, 1):
+        if total > 1:
+            await context.bot.send_message(
+                chat_id=chat_id, text=f"📤 ارسال پارت {idx} از {total}..."
+            )
+        status = await forward_file_id_to_user(context, chat_id, file_id, media_kind)
+        if status == ForwardStatus.UNCERTAIN:
+            uncertain.append(idx)
+        elif status == ForwardStatus.FAILED:
+            uncertain.append(idx)
+            logger.error("Forward failed for part %s/%s to %s", idx, total, chat_id)
+        if idx < total:
+            await pause_between_parts(
+                extra_sec=1.0 if status != ForwardStatus.OK else 0.0
+            )
+    return uncertain
 
 
 async def process_and_send_document_parts(
@@ -168,6 +210,7 @@ async def process_and_send_document_parts(
     uploaded_at: str | None = None,
 ):
     uploaded_file_ids = []
+    uncertain_parts: list[int] = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
     await context.bot.send_message(
@@ -191,18 +234,29 @@ async def process_and_send_document_parts(
                 caption=caption,
                 filename=display_name,
             )
-            send_success = await send_document_once(context, chat_id, current_file_id)
-            if not send_success:
-                raise Exception("خطا در فوروارد/ارسال به کاربر")
-            uploaded_file_ids.append(current_file_id)
         except Exception as e:
-            print(f"❌ Error uploading/sending zip part {idx}: {e}")
+            logger.exception("ZIP part %s storage upload failed", idx)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ متاسفانه در آپلود یا ارسال پارت ZIP {idx} مشکلی پیش آمد. عملیات لغو شد.",
+                text=(
+                    f"❌ آپلود پارت ZIP {idx} از {total_parts} در سرور ذخیره‌سازی ناموفق بود.\n"
+                    f"پارت‌های 1 تا {idx - 1} ممکن است قبلاً ارسال شده باشند — "
+                    "قبل از درخواست مجدد چت را بررسی کنید."
+                ),
             )
             raise e
-        await asyncio.sleep(1)
+
+        uploaded_file_ids.append(current_file_id)
+        forward_status = await forward_file_id_to_user(
+            context, chat_id, current_file_id, "document"
+        )
+        if forward_status != ForwardStatus.OK:
+            uncertain_parts.append(idx)
+
+        if idx < total_parts:
+            await pause_between_parts(
+                extra_sec=1.0 if forward_status != ForwardStatus.OK else 0.0
+            )
 
     if len(uploaded_file_ids) == total_parts:
         await save_cached_video(
@@ -222,6 +276,11 @@ async def process_and_send_document_parts(
                     archive_basename, total_parts, split_method
                 ),
             )
+        if uncertain_parts:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=format_uncertain_parts_message(uncertain_parts, total_parts),
+            )
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ZIP.")
 
 
@@ -233,6 +292,7 @@ async def process_and_send_mp4_documents_no_cache(
     label: str = "",
 ):
     """Upload MP4 parts to Bale storage channel and forward to user; no DB cache."""
+    uncertain_parts: list[int] = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
     await context.bot.send_message(
@@ -257,49 +317,64 @@ async def process_and_send_mp4_documents_no_cache(
                 caption=caption,
                 filename=display_name,
             )
-            send_success = await send_document_once(context, chat_id, current_file_id)
-            if not send_success:
-                raise Exception("خطا در فوروارد/ارسال به کاربر")
         except Exception as e:
-            print(f"❌ Error uploading/sending mp4 part {idx}: {e}")
+            logger.exception("MP4 part %s storage upload failed", idx)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ متاسفانه در آپلود یا ارسال پارت {idx} مشکلی پیش آمد. عملیات لغو شد.",
+                text=(
+                    f"❌ آپلود پارت {idx} از {total_parts} ناموفق بود.\n"
+                    "قبل از درخواست مجدد، پارت‌های قبلی را در چت بررسی کنید."
+                ),
             )
             raise e
-        await asyncio.sleep(1)
 
+        forward_status = await forward_file_id_to_user(
+            context, chat_id, current_file_id, "document"
+        )
+        if forward_status != ForwardStatus.OK:
+            uncertain_parts.append(idx)
+
+        if idx < total_parts:
+            await pause_between_parts(
+                extra_sec=1.0 if forward_status != ForwardStatus.OK else 0.0
+            )
+
+    if uncertain_parts:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=format_uncertain_parts_message(uncertain_parts, total_parts),
+        )
     await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ویدیو.")
 
 
 async def upload_video_to_storage_once(context, file_path: str, caption: str):
-    with open(file_path, "rb") as vid:
-        channel_msg = await context.bot.send_video(
-            chat_id=STORAGE_CHANNEL_ID,
-            video=vid,
-            caption=caption,
-            read_timeout=120,
-            write_timeout=120,
-            connect_timeout=30,
-            pool_timeout=30,
-        )
-    return channel_msg.video.file_id
+    async def _upload():
+        with open(file_path, "rb") as vid:
+            channel_msg = await context.bot.send_video(
+                chat_id=STORAGE_CHANNEL_ID,
+                video=vid,
+                caption=caption,
+                **_STORAGE_UPLOAD_TIMEOUTS,
+            )
+        return channel_msg.video.file_id
+
+    return await run_storage_upload(_upload, label=f"storage video {file_path}")
 
 
 async def upload_audio_to_storage_once(context, file_path: str, caption: str):
-    with open(file_path, "rb") as aud:
-        channel_msg = await context.bot.send_audio(
-            chat_id=STORAGE_CHANNEL_ID,
-            audio=aud,
-            title="صوت یوتیوب",
-            performer="ربات دانلودر",
-            caption=caption,
-            read_timeout=120,
-            write_timeout=120,
-            connect_timeout=30,
-            pool_timeout=30,
-        )
-    return channel_msg.audio.file_id
+    async def _upload():
+        with open(file_path, "rb") as aud:
+            channel_msg = await context.bot.send_audio(
+                chat_id=STORAGE_CHANNEL_ID,
+                audio=aud,
+                title="صوت یوتیوب",
+                performer="ربات دانلودر",
+                caption=caption,
+                **_STORAGE_UPLOAD_TIMEOUTS,
+            )
+        return channel_msg.audio.file_id
+
+    return await run_storage_upload(_upload, label=f"storage audio {file_path}")
 
 
 async def process_and_send_video_parts(
@@ -313,6 +388,7 @@ async def process_and_send_video_parts(
     uploaded_at: str | None = None,
 ):
     uploaded_file_ids = []
+    uncertain_parts: list[int] = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
     await context.bot.send_message(
@@ -329,18 +405,28 @@ async def process_and_send_video_parts(
             current_file_id = await upload_video_to_storage_once(
                 context=context, file_path=file_path, caption=caption
             )
-            send_success = await send_video_once(context, chat_id, current_file_id)
-            if not send_success:
-                raise Exception("خطا در فوروارد/ارسال به کاربر")
-            uploaded_file_ids.append(current_file_id)
         except Exception as e:
-            print(f"❌ Error uploading/sending part {idx}: {e}")
+            logger.exception("Video part %s storage upload failed", idx)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"❌ متاسفانه در آپلود یا ارسال پارت {idx} مشکلی پیش آمد. عملیات لغو شد.",
+                text=(
+                    f"❌ آپلود پارت {idx} از {total_parts} ناموفق بود.\n"
+                    "قبل از درخواست مجدد، پارت‌های قبلی را در چت بررسی کنید."
+                ),
             )
             raise e
-        await asyncio.sleep(1)
+
+        uploaded_file_ids.append(current_file_id)
+        forward_status = await forward_file_id_to_user(
+            context, chat_id, current_file_id, "video"
+        )
+        if forward_status != ForwardStatus.OK:
+            uncertain_parts.append(idx)
+
+        if idx < total_parts:
+            await pause_between_parts(
+                extra_sec=1.0 if forward_status != ForwardStatus.OK else 0.0
+            )
 
     if len(uploaded_file_ids) == total_parts:
         await save_cached_video(
@@ -353,6 +439,11 @@ async def process_and_send_video_parts(
             quality=parse_quality_from_cache_key(cache_key),
             uploaded_at=uploaded_at,
         )
+        if uncertain_parts:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=format_uncertain_parts_message(uncertain_parts, total_parts),
+            )
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
 
 
@@ -363,15 +454,22 @@ async def send_cached_files(
         chat_id=chat_id, text="✅ این فایل در سرور موجود است. در حال ارسال فوری..."
     )
     total_parts = len(cached_files)
-    for idx, file_id in enumerate(cached_files, 1):
-        if total_parts > 1:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 ارسال پارت {idx} از {total_parts}..."
-            )
-        if format_type.endswith("_zip"):
-            await send_document_once(context, chat_id, file_id)
-        elif format_type == "video":
-            await send_video_once(context, chat_id, file_id)
-        else:
-            await send_audio_once(context, chat_id, file_id)
-        await asyncio.sleep(1)
+    if format_type.endswith("_zip"):
+        media_kind = "document"
+    elif format_type == "video":
+        media_kind = "video"
+    else:
+        media_kind = "audio"
+
+    uncertain = await _deliver_stored_parts(
+        context,
+        chat_id,
+        cached_files,
+        media_kind,
+        total_parts=total_parts,
+    )
+    if uncertain:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=format_uncertain_parts_message(uncertain, total_parts),
+        )
