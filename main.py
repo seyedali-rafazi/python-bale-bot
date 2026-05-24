@@ -20,6 +20,7 @@ from core.database import init_db
 
 from services.http_client import (
     init_http_session,
+    close_http_session,
 )
 
 from services.pinterest_queue import (
@@ -34,6 +35,7 @@ from services.hourly_monitoring import (
 
 from services.ai import (
     init_ai_client,
+    close_ai_client,
 )
 
 load_dotenv()
@@ -50,6 +52,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+_chromium_maintenance_task: asyncio.Task | None = None
 
 
 # =========================================================
@@ -98,13 +102,15 @@ async def cleanup_old_downloads(
 
 async def on_startup(app):
 
+    global _chromium_maintenance_task
+
     await init_http_session()
 
     await init_db()
 
     await start_pinterest_workers()
 
-    asyncio.create_task(chromium_maintenance_loop())
+    _chromium_maintenance_task = asyncio.create_task(chromium_maintenance_loop())
 
     await init_ai_client()
 
@@ -126,6 +132,27 @@ async def on_startup(app):
 
 
 async def on_shutdown(app):
+    global _chromium_maintenance_task
+
+    if _chromium_maintenance_task is not None and not _chromium_maintenance_task.done():
+        _chromium_maintenance_task.cancel()
+        try:
+            await _chromium_maintenance_task
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        await close_http_session()
+        logger.info("✅ HTTP session closed on shutdown")
+    except Exception:
+        logger.exception("HTTP session cleanup on shutdown failed")
+
+    try:
+        await close_ai_client()
+        logger.info("✅ AI client disconnected on shutdown")
+    except Exception:
+        logger.exception("AI client cleanup on shutdown failed")
+
     try:
         await get_browser_manager().cleanup()
         logger.info("✅ Playwright browser cleaned up on shutdown")

@@ -17,6 +17,7 @@ from core.database import (
     get_user_cloud_info,
 )
 import os
+import logging
 from dotenv import load_dotenv
 import asyncio
 import aiosqlite
@@ -40,10 +41,9 @@ from core.database.youtube import (
 )
 from datetime import datetime
 
-from services.hourly_monitoring import send_hourly_monitoring_report
-
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 # آیدی عددی ادمین را در فایل .env قرار دهید
 ADMIN_ID = os.getenv("ADMIN_ID")
 
@@ -553,6 +553,21 @@ async def cmd_monitor_report(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if chat_id != ADMIN_ID:
         return
 
+    from core.database import get_monitoring_report_data, get_total_users, get_total_vip_users
+    from services.hourly_monitoring import (
+        build_monitoring_report_text,
+        send_hourly_monitoring_report,
+    )
+
     await update.message.reply_text("⏳ در حال تهیه و ارسال گزارش...")
-    await send_hourly_monitoring_report(context)
-    await update.message.reply_text("✅ گزارش به کانال مانیتورینگ ارسال شد.")
+    try:
+        data = await get_monitoring_report_data()
+        total_users = await get_total_users()
+        vip_users = await get_total_vip_users()
+        report = build_monitoring_report_text(data, total_users, vip_users)
+        await update.message.reply_text(report, parse_mode="Markdown")
+        await send_hourly_monitoring_report(context)
+        await update.message.reply_text("✅ گزارش به کانال مانیتورینگ ارسال شد.")
+    except Exception:
+        logger.exception("Failed to build/send monitoring report")
+        await update.message.reply_text("❌ خطا در تهیه گزارش مانیتورینگ.")
