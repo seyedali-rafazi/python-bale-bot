@@ -563,20 +563,27 @@ def register_all_handlers(application):
         CallbackQueryHandler(handle_cloud_upload_callback, pattern="^cloud_upload$")
     )
 
-    # پردازش ویس / صوت / ویدیو (تشخیص آهنگ و ...)
+    # پردازش ویس / صوت / ویدیو (تشخیص آهنگ و ...) — فقط چت خصوصی
     application.add_handler(
         MessageHandler(
-            filters.VOICE | filters.AUDIO | filters.VIDEO | filters.VIDEO_NOTE,
+            filters.ChatType.PRIVATE
+            & (filters.VOICE | filters.AUDIO | filters.VIDEO | filters.VIDEO_NOTE),
             process_media_input,
         )
     )
 
-    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - همیشه باید آخرِ متن‌ها باشد
+    # پردازش متون ارسالی کاربر بر اساس وضعیت (State) - فقط چت خصوصی
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, process_state_input)
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+            process_state_input,
+        )
     )
 
-    # پردازش عکس‌ها (پشتیبانی همزمان از عکس عادی و عکسِ ارسال‌شده به صورت فایل)
+    # پردازش عکس‌ها — فقط چت خصوصی
     application.add_handler(
-        MessageHandler(filters.PHOTO | filters.Document.IMAGE, process_photo_input)
+        MessageHandler(
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.Document.IMAGE),
+            process_photo_input,
+        )
     )

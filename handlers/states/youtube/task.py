@@ -20,7 +20,6 @@ from services.youtube import (
     uploaded_at_from_video_info,
     get_video_filesize,
 )
-from services.telegram_backup import download_from_telegram_bot
 from services.zip_utils import build_zip_and_split
 
 try:
@@ -46,8 +45,6 @@ from .helpers import (
     format_duration,
     format_size,
     get_waiting_count,
-    process_and_send_video_parts,
-    process_and_send_backup_video_parts,
     process_and_send_document_parts,
     process_and_send_mp4_documents_no_cache,
     upload_audio_to_storage_once,
@@ -512,7 +509,7 @@ async def background_yt_download(
                         error_text = str(send_err).lower()
 
                         # =========================================
-                        # جلوگیری از backup برای فایل بزرگ
+                        # فایل بزرگ — بدون تلاش مجدد از سرور دیگر
                         # =========================================
 
                         if raw_file == "TOO_LARGE" or any(
@@ -535,163 +532,11 @@ async def background_yt_download(
 
                             return
 
-                        # =========================================
-
                         await context.bot.send_message(
                             chat_id=chat_id,
-                            text="⚠️ تلاش از طریق سرور بکاپ ... ⏳",
+                            text="❌ خطا در دانلود یا ارسال ویدیو. لطفاً بعداً دوباره تلاش کنید.",
                         )
-
-                        try:
-                            backup_file = await download_from_telegram_bot(url)
-
-                            if backup_file and os.path.exists(backup_file):
-                                # =====================================
-                                # چک سایز بکاپ
-                                # =====================================
-
-                                backup_size = os.path.getsize(backup_file)
-
-                                if backup_size > 1 * 1024 * 1024 * 1024:
-                                    try:
-                                        os.remove(backup_file)
-                                    except:
-                                        pass
-
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text="❌ فایل بکاپ بزرگ‌تر از 1 گیگابایت است.",
-                                    )
-
-                                    await decrement_yt_downloads(chat_id)
-
-                                    return
-
-                                # =====================================
-
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="⏳ در حال آماده‌سازی فایل بکاپ...",
-                                )
-
-                                if destination == "server":
-                                    # =====================================
-                                    # چک فضای ابری قبل از آپلود بکاپ
-                                    # =====================================
-                                    user_storage_mb = await get_available_cloud_mb(
-                                        chat_id
-                                    )
-                                    if user_storage_mb is None or user_storage_mb <= 0:
-                                        user_storage_mb = 0
-
-                                    backup_size_mb = round(
-                                        backup_size / (1024 * 1024), 2
-                                    )
-
-                                    if (
-                                        user_storage_mb <= 0
-                                        or backup_size_mb > user_storage_mb
-                                    ):
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text=(
-                                                f"❌ فضای ابری شما کافی نیست!\n\n"
-                                                f"حجم فایل بکاپ: {backup_size_mb} مگابایت\n"
-                                                f"فضای باقیمانده شما: {round(user_storage_mb, 2)} مگابایت\n\n"
-                                                f"لطفاً برای ارتقای حجم ابری خود از طریق منوی فروشگاه اقدام کنید."
-                                            ),
-                                        )
-                                        await decrement_yt_downloads(chat_id)
-                                        return
-
-                                    # =====================================
-
-                                    progress_dict["is_finished"] = False
-
-                                    updater_task = asyncio.create_task(
-                                        update_progress_message()
-                                    )
-
-                                    s3_url = await asyncio.to_thread(
-                                        upload_to_s3,
-                                        backup_file,
-                                        None,
-                                        progress_dict,
-                                    )
-
-                                    progress_dict["is_finished"] = True
-
-                                    if s3_url:
-                                        backup_size_mb = round(
-                                            backup_size / (1024 * 1024), 2
-                                        )
-                                        file_name = os.path.basename(backup_file)
-
-                                        await add_cloud_file(
-                                            chat_id, file_name, backup_size_mb, s3_url
-                                        )
-                                        await reduce_cloud_storage(
-                                            chat_id, backup_size_mb
-                                        )
-
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text=f"✅ ذخیره موفق در فضای ابری (بکاپ):\n\n📉 حجم کسر شده: {backup_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
-                                            parse_mode="Markdown",
-                                        )
-
-                                    else:
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text="❌ خطا در آپلود ابری.",
-                                        )
-
-                                        await decrement_yt_downloads(chat_id)
-
-                                else:
-                                    result = await split_video_if_needed(backup_file)
-
-                                    downloaded_files.extend(result)
-
-                                    if delivery_mode == "zip":
-                                        await process_and_send_backup_video_parts(
-                                            context,
-                                            chat_id,
-                                            result,
-                                            video_id,
-                                            cache_key,
-                                            title=info.get("title") if info else None,
-                                            channel_name=(
-                                                info.get("uploader") if info else None
-                                            ),
-                                            uploaded_at=uploaded_at_from_video_info(
-                                                info
-                                            ),
-                                        )
-                                    else:
-                                        await process_and_send_mp4_documents_no_cache(
-                                            context,
-                                            chat_id,
-                                            result,
-                                            video_id=video_id,
-                                            label=f"Video ID: {video_id} (Backup)",
-                                        )
-
-                            else:
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ سرور بکاپ ناموفق بود.",
-                                )
-
-                                await decrement_yt_downloads(chat_id)
-
-                        except Exception as backup_err:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"❌ خطای بکاپ: {str(backup_err)}",
-                            )
-
-                            await decrement_yt_downloads(chat_id)
+                        await decrement_yt_downloads(chat_id)
 
                     finally:
                         for file_path in downloaded_files:

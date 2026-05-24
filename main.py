@@ -205,13 +205,23 @@ def main():
 
     WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
 
+    # Do not subscribe to channel_post — bot posts to monitor/storage channels must
+    # not echo back into text handlers and cause reply loops.
+    webhook_allowed_updates = [
+        "message",
+        "edited_message",
+        "callback_query",
+        "pre_checkout_query",
+        "shipping_query",
+    ]
+
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=BALE_TOKEN,
         webhook_url=WEBHOOK_URL,
         drop_pending_updates=True,
-        allowed_updates=None,
+        allowed_updates=webhook_allowed_updates,
     )
 
 

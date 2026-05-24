@@ -553,21 +553,12 @@ async def cmd_monitor_report(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if chat_id != ADMIN_ID:
         return
 
-    from core.database import get_monitoring_report_data, get_total_users, get_total_vip_users
-    from services.hourly_monitoring import (
-        build_monitoring_report_text,
-        send_hourly_monitoring_report,
-    )
+    from services.hourly_monitoring import send_hourly_monitoring_report
 
     await update.message.reply_text("⏳ در حال تهیه و ارسال گزارش...")
     try:
-        data = await get_monitoring_report_data()
-        total_users = await get_total_users()
-        vip_users = await get_total_vip_users()
-        report = build_monitoring_report_text(data, total_users, vip_users)
-        await update.message.reply_text(report, parse_mode="Markdown")
-        await send_hourly_monitoring_report(context)
-        await update.message.reply_text("✅ گزارش به کانال مانیتورینگ ارسال شد.")
+        await send_hourly_monitoring_report(context, also_send_to=chat_id)
+        await update.message.reply_text("✅ گزارش (فایل) به کانال مانیتورینگ ارسال شد.")
     except Exception:
         logger.exception("Failed to build/send monitoring report")
         await update.message.reply_text("❌ خطا در تهیه گزارش مانیتورینگ.")

@@ -356,57 +356,6 @@ async def process_and_send_video_parts(
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال.")
 
 
-async def process_and_send_backup_video_parts(
-    context,
-    chat_id: str,
-    result_files: list,
-    video_id: str,
-    cache_key: str,
-    title: str | None = None,
-    channel_name: str | None = None,
-    uploaded_at: str | None = None,
-):
-    uploaded_file_ids = []
-    total_parts = len(result_files)
-    for idx, file_path in enumerate(result_files, 1):
-        if total_parts > 1:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 ارسال پارت بکاپ {idx} از {total_parts}..."
-            )
-        caption = f"Video ID: {video_id} (Backup) | Part {idx}/{total_parts}"
-        try:
-            current_file_id = await upload_video_to_storage_once(
-                context=context, file_path=file_path, caption=caption
-            )
-            send_success = await send_video_once(context, chat_id, current_file_id)
-            if not send_success:
-                raise Exception("خطا در ارسال پارت بکاپ")
-            uploaded_file_ids.append(current_file_id)
-        except Exception as e:
-            print(f"❌ Error backup part {idx}: {e}")
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"❌ ارسال پارت {idx} ناموفق بود. عملیات بکاپ لغو شد.",
-            )
-            raise e
-        await asyncio.sleep(1)
-
-    if len(uploaded_file_ids) == total_parts:
-        await save_cached_video(
-            cache_key,
-            uploaded_file_ids,
-            title=title,
-            channel_name=channel_name,
-            yt_video_id=video_id,
-            format_type=parse_format_from_cache_key(cache_key),
-            quality=parse_quality_from_cache_key(cache_key),
-            uploaded_at=uploaded_at,
-        )
-        await context.bot.send_message(
-            chat_id=chat_id, text="✅ پایان عملیات ارسال بکاپ."
-        )
-
-
 async def send_cached_files(
     context, chat_id: str, cached_files: list, format_type: str
 ):

@@ -31,6 +31,9 @@ _BOT_OWN_REPLIES = frozenset(
 
 
 def _is_human_message(update: Update) -> bool:
+    chat = update.effective_chat
+    if chat is None or chat.type != "private":
+        return False
     user = update.effective_user
     if user is None or user.is_bot:
         return False
