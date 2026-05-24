@@ -1,7 +1,7 @@
 # core/database/__init__.py
 
 from .base import DB_NAME
-from .utils import get_tehran_today, get_tehran_now_full
+from .utils import get_tehran_today, get_tehran_now_full, get_tehran_archive_week_key
 from .init_db import init_db
 from .settings import get_setting, set_setting
 from .transactions import add_transaction
@@ -75,8 +75,18 @@ from .user_yt_archive import (
     can_user_fetch_from_archive,
     increment_archive_fetch,
     get_archive_fetches_today,
+    get_archive_fetches_used,
+    archive_limit_period_label,
     ARCHIVE_LIMIT_FREE,
     ARCHIVE_LIMIT_VIP,
     CHANNELS_PAGE_SIZE,
     VIDEOS_PAGE_SIZE,
+)
+from .user_ai import (
+    get_user_ai_limit,
+    get_ai_questions_today,
+    can_user_ask_ai,
+    increment_ai_question,
+    AI_LIMIT_FREE,
+    AI_LIMIT_VIP,
 )

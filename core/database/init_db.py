@@ -129,6 +129,14 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE users ADD COLUMN arc_fetch_date TEXT"
         )
+    if "ai_chat_count" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_chat_count INTEGER DEFAULT 0"
+        )
+    if "ai_chat_date" not in columns:
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN ai_chat_date TEXT"
+        )
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS instagram_explore (

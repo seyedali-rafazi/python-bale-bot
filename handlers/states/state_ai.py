@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
+from core.database import can_user_ask_ai, increment_ai_question
 
 from services.ai import (
     ask_chatbot,
@@ -178,6 +179,26 @@ async def handle_ai_state(
         # -------------------------------------------------
 
         if step == "waiting_ai_chat":
+            if not (text and text.strip()):
+                await update.message.reply_text(
+                    "❌ دستیار هوشمند فقط **متن** می‌پذیرد.\n"
+                    "عکس، صدا، ویدیو و فایل پشتیبانی نمی‌شود.",
+                    parse_mode="Markdown",
+                )
+                return
+
+            allowed, used, limit = await can_user_ask_ai(chat_id)
+            if not allowed:
+                await update.message.reply_text(
+                    f"❌ سقف پرسش روزانه شما تمام شده است.\n\n"
+                    f"📊 امروز: {used} از {limit} پرسش\n"
+                    f"🔄 ریست: نیمه‌شب به وقت تهران\n"
+                    f"🌟 با اشتراک Pro تا {20} پرسش در روز دریافت کنید."
+                )
+                return
+
+            await increment_ai_question(chat_id)
+
             msg = await update.message.reply_text(
                 "⏳ درخواست شما در صف پردازش قرار گرفت..."
             )

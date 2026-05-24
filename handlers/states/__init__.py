@@ -91,6 +91,11 @@ async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if step == "waiting_ai_ocr":
         await handle_ai_photo(update, context, chat_id)
+    elif step == "waiting_ai_chat":
+        await update.message.reply_text(
+            "❌ دستیار هوشمند فقط متن می‌پذیرد.\n"
+            "لطفاً سوال خود را به صورت پیام متنی بنویسید."
+        )
     else:
         await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")
 
@@ -102,5 +107,10 @@ async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if step == "waiting_music_identify":
         await handle_music_identify_media(update, context)
+    elif step == "waiting_ai_chat":
+        await update.message.reply_text(
+            "❌ دستیار هوشمند فقط متن می‌پذیرد.\n"
+            "صدا، ویدیو و فایل در این بخش پشتیبانی نمی‌شود."
+        )
     else:
         await update.message.reply_text("متوجه نشدم. لطفاً از منو استفاده کنید.")

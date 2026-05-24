@@ -13,8 +13,13 @@ async def btn_ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
     await update.message.reply_text(
-        "🤖 به بخش هوش مصنوعی خوش آمدید!\nلطفاً یک گزینه را انتخاب کنید 👇",
+        "🤖 به بخش هوش مصنوعی خوش آمدید!\n\n"
+        "💬 **دستیار هوشمند** فقط پیام **متنی** می‌پذیرد "
+        "(عکس، صدا، ویدیو و فایل پشتیبانی نمی‌شود).\n"
+        "سایر گزینه‌های این منو (OCR، صدا، تصویر و …) جداگانه کار می‌کنند.\n\n"
+        "لطفاً یک گزینه را انتخاب کنید 👇",
         reply_markup=get_ai_menu_keyboard(),
+        parse_mode="Markdown",
     )
 
 
@@ -25,10 +30,13 @@ async def btn_ai_chat_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_ai_chat")
     await update.message.reply_text(
-        "💬 دستیار هوشمند آماده است!\nسوال یا متن خود را بفرستید:",
+        "💬 دستیار هوشمند آماده است!\n\n"
+        "فقط **متن** بفرستید — عکس، صدا، ویدیو و فایل پذیرفته نمی‌شود.\n"
+        "سوال یا متن خود را بنویسید:",
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
         ),
+        parse_mode="Markdown",
     )
 
 

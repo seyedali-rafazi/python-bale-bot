@@ -37,6 +37,7 @@ from core.database import (
     VIDEOS_PAGE_SIZE,
     ARCHIVE_LIMIT_FREE,
     ARCHIVE_LIMIT_VIP,
+    archive_limit_period_label,
 )
 from core.database.vip import is_vip
 from core.yt_moderation import (
@@ -80,14 +81,19 @@ async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_T
     vip = await is_vip(user_id)
 
     plan = "Pro" if vip == 1 else "رایگان"
+    period_label = archive_limit_period_label(vip)
+    free_hint = (
+        f"رایگان: {ARCHIVE_LIMIT_FREE} در هفته (ریست شنبه نیمه‌شب تهران)"
+    )
+    vip_hint = f"Pro: {ARCHIVE_LIMIT_VIP} در روز (ریست نیمه‌شب تهران)"
     feature_text = (
         "📚 **کش مشترک ویدیوهای یوتیوب**\n\n"
         "وقتی هر کاربری ویدیویی دانلود کند، برای **همه** در این آرشیو "
         "ذخیره می‌شود و بدون دانلود مجدد قابل دریافت است.\n\n"
         f"🌐 تعداد ویدیو در کش سرور: **{total_global}**\n"
         f"👤 اشتراک شما: **{plan}**\n"
-        f"📥 دریافت از آرشیو امروز: **{used}** از **{limit}** "
-        f"(رایگان: {ARCHIVE_LIMIT_FREE} | Pro: {ARCHIVE_LIMIT_VIP})\n\n"
+        f"📥 دریافت از آرشیو ({period_label}): **{used}** از **{limit}**\n"
+        f"({free_hint} | {vip_hint})\n\n"
         "روی کانال بزنید — ویدیوها بر اساس **تاریخ انتشار در یوتیوب** (جدیدترین اول) مرتب شده‌اند."
     )
 
@@ -288,8 +294,10 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         allowed, used, limit = await can_user_fetch_from_archive(user_id)
         if not allowed:
+            vip = await is_vip(user_id)
+            period = archive_limit_period_label(vip)
             await query.answer(
-                f"محدودیت روزانه: {used}/{limit} دریافت از آرشیو.",
+                f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
                 show_alert=True,
             )
             return

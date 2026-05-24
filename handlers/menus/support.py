@@ -16,6 +16,9 @@ from core.database import (
     get_gh_downloads,
     get_cloud_usage_stats,
     get_web_search_downloads,
+    get_ai_questions_today,
+    get_archive_fetches_used,
+    archive_limit_period_label,
 )
 from core.limits import get_limit
 
@@ -75,6 +78,8 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tt_dl_count = await get_tt_downloads(user_id)
     gh_count = await get_gh_downloads(user_id)
     web_count = await get_web_search_downloads(user_id)
+    ai_count = await get_ai_questions_today(user_id)
+    arc_count = await get_archive_fetches_used(user_id)
 
     # تعیین لیمیت‌های قبلی (فرض بر این است که get_limit یک تابع سینک معمولی در فایل limits است)
     yt_limit = get_limit("youtube_download", is_vip)
@@ -83,6 +88,9 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tt_dl_limit = get_limit("tiktok_download", is_vip)
     gh_limit = get_limit("github_download", is_vip)
     web_limit = get_limit("web_search", is_vip)
+    ai_limit = get_limit("ai_chat", is_vip)
+    arc_limit = get_limit("yt_archive", is_vip)
+    arc_period = archive_limit_period_label(is_vip)
 
     # دریافت آمار ذخیره‌سازی ابری
     cloud_stats = await get_cloud_usage_stats(user_id)
@@ -125,6 +133,10 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
 • جستجوی وب | دانلود: $ {web_count} / {web_limit} $
+• هوش مصنوعی | پرسش متنی: $ {ai_count} / {ai_limit} $ (فقط متن؛ ریست نیمه‌شب تهران)
+
+📥 **کش یوتیوب (دریافت از آرشیو — {arc_period}):**
+• $ {arc_count} / {arc_limit} $
 
 {cloud_info_text}
 """
