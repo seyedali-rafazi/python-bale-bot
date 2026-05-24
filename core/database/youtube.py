@@ -91,6 +91,9 @@ async def increment_yt_downloads(user_id):
             (new_count, today, user_id),
         )
     await conn.commit()
+    from .monitoring import log_upload_success
+
+    await log_upload_success("youtube", user_id)
 
 
 async def decrement_yt_downloads(user_id):

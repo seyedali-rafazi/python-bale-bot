@@ -7,7 +7,7 @@ from core.state_manager import clear_state
 from core.keyboards import get_main_menu_keyboard
 from services.translator import translate_text
 from services.weather import get_weather_forecast
-from core.database import add_user
+from core.database import add_user, log_user_active, log_upload_success
 import os
 from dotenv import load_dotenv
 
@@ -35,6 +35,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ثبت کاربر در دیتابیس (اضافه شدن await)
     await add_user(chat_id, username)
+    await log_user_active(chat_id)
 
     # بررسی جوین اجباری
     is_member = await check_membership(context.bot, chat_id)
@@ -71,6 +72,7 @@ async def cmd_tr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         translate_text, source_lang, target_lang, text_to_translate
     )
     await update.message.reply_text(f"✅ **ترجمه:**\n\n{result}")
+    await log_upload_success("translation", str(update.effective_chat.id))
 
 
 async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,3 +86,4 @@ async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏳ در حال دریافت آب و هوای {city_name}...")
     result = await asyncio.to_thread(get_weather_forecast, city_name)
     await update.message.reply_text(result)
+    await log_upload_success("weather", str(update.effective_chat.id))

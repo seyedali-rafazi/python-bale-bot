@@ -31,3 +31,6 @@ async def increment_tt_downloads(user_id):
             (new_count, today, user_id),
         )
     await conn.commit()
+    from .monitoring import log_upload_success
+
+    await log_upload_success("tiktok", user_id)

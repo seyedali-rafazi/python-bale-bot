@@ -75,6 +75,9 @@ async def increment_archive_fetch(user_id: str):
             (count, period, user_id),
         )
     await conn.commit()
+    from .monitoring import log_upload_success
+
+    await log_upload_success("yt_archive", user_id)
 
 
 def archive_limit_period_label(is_vip: int) -> str:

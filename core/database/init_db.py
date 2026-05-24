@@ -185,6 +185,24 @@ async def init_db():
         )
     """)
 
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS monitoring_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section TEXT NOT NULL,
+            event_type TEXT NOT NULL DEFAULT 'upload_success',
+            user_id TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_monitoring_events_created_at
+        ON monitoring_events(created_at)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_monitoring_events_section
+        ON monitoring_events(section, created_at)
+    """)
+
     await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")
 
     await conn.execute("""

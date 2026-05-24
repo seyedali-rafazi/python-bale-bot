@@ -49,3 +49,6 @@ async def increment_ai_question(user_id: str):
             (count, today, user_id),
         )
     await conn.commit()
+    from .monitoring import log_upload_success
+
+    await log_upload_success("ai_chat", user_id)

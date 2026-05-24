@@ -9,6 +9,7 @@ from core.database import (
     get_available_cloud_mb,
     reduce_cloud_storage,
     add_cloud_file,
+    log_upload_success,
 )
 
 try:
@@ -113,6 +114,7 @@ async def background_download_insta_link(
                             text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد:\n\n📉 حجم کسر شده: {file_size_mb} مگابایت\n⏳ لینک دانلود تا 3 ساعت معتبر است.\n\n🔗 [لینک دانلود]({s3_url})",
                             parse_mode="Markdown",
                         )
+                        await log_upload_success("instagram", chat_id)
                         try:
                             await processing_msg.delete()
                         except Exception:
@@ -133,6 +135,7 @@ async def background_download_insta_link(
                             await context.bot.send_document(
                                 chat_id=chat_id, document=file_path
                             )
+                        await log_upload_success("instagram", chat_id)
                     finally:
                         pass
 

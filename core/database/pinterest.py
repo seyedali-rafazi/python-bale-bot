@@ -36,3 +36,6 @@ async def increment_pinterest_downloads(user_id):
             (new_count, today, user_id),
         )
     await conn.commit()
+    from .monitoring import log_upload_success
+
+    await log_upload_success("pinterest", user_id)

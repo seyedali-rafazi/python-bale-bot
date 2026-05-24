@@ -10,6 +10,7 @@ from core.database import (
     reduce_cloud_storage,
     add_cloud_file,
     get_cloud_usage_stats,
+    log_upload_success,
 )
 from services.parspack_s3 import upload_to_s3
 
@@ -134,6 +135,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
             """
             
             await progress_msg.edit_text(success_text, parse_mode="Markdown")
+            await log_upload_success("cloud", user_id)
         else:
             await progress_msg.edit_text("❌ خطایی در آپلود فایل رخ داد. دوباره تلاش کنید.")
             # Clean up temp file

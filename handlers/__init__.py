@@ -82,6 +82,7 @@ from core.admin import (
     cmd_clean_yt_cache,
     cmd_channel_blacklist,
     cmd_blockword,
+    cmd_monitor_report,
 )
 import os
 from dotenv import load_dotenv
@@ -145,6 +146,7 @@ def register_all_handlers(application):
         CommandHandler("channelblacklist", cmd_channel_blacklist)
     )
     application.add_handler(CommandHandler("blockword", cmd_blockword))
+    application.add_handler(CommandHandler("monitor", cmd_monitor_report))
 
     # دستورات پایه
     application.add_handler(CommandHandler("start", cmd_start))

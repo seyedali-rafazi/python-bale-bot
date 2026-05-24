@@ -40,6 +40,8 @@ from core.database.youtube import (
 )
 from datetime import datetime
 
+from services.hourly_monitoring import send_hourly_monitoring_report
+
 
 load_dotenv()
 # آیدی عددی ادمین را در فایل .env قرار دهید
@@ -544,3 +546,13 @@ async def cmd_blockword(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ کلمه به لیست ممنوع اضافه شد.")
     else:
         await update.message.reply_text("❌ کلمه نامعتبر است (حداقل ۲ حرف).")
+
+
+async def cmd_monitor_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id != ADMIN_ID:
+        return
+
+    await update.message.reply_text("⏳ در حال تهیه و ارسال گزارش...")
+    await send_hourly_monitoring_report(context)
+    await update.message.reply_text("✅ گزارش به کانال مانیتورینگ ارسال شد.")

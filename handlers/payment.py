@@ -2,7 +2,7 @@
 
 from telegram import Update, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from core.database import add_vip_time, add_transaction, add_cloud_storage
+from core.database import add_vip_time, add_transaction, add_cloud_storage, log_upload_success
 from dotenv import load_dotenv
 import os
 
@@ -164,6 +164,7 @@ async def successful_payment_callback(
             receipt_text = "✅ <b>پرداخت موفق!</b>"
 
         await update.message.reply_text(text=receipt_text, parse_mode="HTML")
+        await log_upload_success("payment", chat_id)
 
     except Exception as e:
         print(f"Error in payment: {e}")

@@ -27,6 +27,10 @@ from services.pinterest_queue import (
 )
 from services.playwright_browser_manager import get_browser_manager
 from services.chromium_maintenance import chromium_maintenance_loop
+from services.hourly_monitoring import (
+    send_hourly_monitoring_report,
+    seconds_until_next_hour_tehran,
+)
 
 from services.ai import (
     init_ai_client,
@@ -153,6 +157,13 @@ def main():
             interval=7200,
             first=30,
         )
+        application.job_queue.run_repeating(
+            send_hourly_monitoring_report,
+            interval=3600,
+            first=seconds_until_next_hour_tehran(),
+            name="hourly_monitoring_report",
+        )
+        logger.info("✅ Hourly monitoring report scheduled")
 
     register_all_handlers(application)
 

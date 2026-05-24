@@ -2,6 +2,7 @@ import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from services.weather import get_weather_forecast
+from core.database import log_upload_success
 
 
 async def handle_weather_state(
@@ -18,3 +19,4 @@ async def handle_weather_state(
         # فراخوانی سرویس آب و هوا
         result = await asyncio.to_thread(get_weather_forecast, text)
         await update.message.reply_text(result)
+        await log_upload_success("weather", chat_id)

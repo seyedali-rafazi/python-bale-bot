@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from services.translator import translate_text
 from core.state_manager import clear_state  # فرض بر اینکه این تابع را دارید
+from core.database import log_upload_success
 
 # محدودکننده برای جلوگیری از بلاک شدن آی‌پی توسط گوگل (حداکثر 10 ترجمه همزمان)
 TRANSLATION_SEMAPHORE = asyncio.Semaphore(10)
@@ -37,6 +38,7 @@ async def handle_translation_state(
         await wait_msg.edit_text(
             f"✅ **نتیجه ترجمه:**\n\n`{result}`", parse_mode="Markdown"
         )
+        await log_upload_success("translation", chat_id)
 
     except Exception as e:
         print(f"Translation Handler Error: {e}")

@@ -90,3 +90,13 @@ from .user_ai import (
     AI_LIMIT_FREE,
     AI_LIMIT_VIP,
 )
+from .monitoring import (
+    log_monitor_event,
+    log_upload_success,
+    log_user_active,
+    get_monitoring_report_data,
+    count_active_users_today,
+    purge_old_monitoring_events,
+    SECTION_LABELS,
+    ALL_SECTIONS,
+)
