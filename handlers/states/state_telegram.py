@@ -1,10 +1,14 @@
 # handlers/states/state_telegram.py
 
-import re
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
 from services.http_client import get_http_session
+from services.telegram_public import (
+    parse_html_message,
+    parse_message_element,
+    send_parsed_message,
+)
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
@@ -19,7 +23,7 @@ async def fetch_url_async(url: str) -> str:
     timeout = aiohttp.ClientTimeout(total=15)
     session = await get_http_session()
     async with session.get(url, timeout=timeout) as response:
-        response.raise_for_status()  # اگر ارور 404 یا 500 بود خطا بدهد
+        response.raise_for_status()
         return await response.text()
 
 
@@ -31,7 +35,6 @@ async def handle_telegram_state(
     chat_id: str,
     state_data: dict,
 ):
-    # محاسبه تعداد افراد در صف (با احتیاط نسبت به تغییرات آپدیت‌های پایتون)
     waiters = (
         len(processing_semaphore._waiters)
         if hasattr(processing_semaphore, "_waiters") and processing_semaphore._waiters
@@ -43,68 +46,27 @@ async def handle_telegram_state(
             f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
         )
     else:
-        await update.message.reply_text("⏳ در حال دریافت اطلاعات از بله...")
+        await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
+
+    bot = context.bot
 
     try:
         async with processing_semaphore:
             if step == "waiting_tg_single":
                 link = text.strip()
                 try:
-                    embed_url = link + "?embed=1"
+                    embed_url = link + ("&" if "?" in link else "?") + "embed=1"
                     html_content = await fetch_url_async(embed_url)
-
-                    # پارس کردن HTML همچنان در Thread اجرا می‌شود چون BeautifulSoup همگام و پردازشی (CPU-bound) است
                     soup = await asyncio.to_thread(
                         BeautifulSoup, html_content, "html.parser"
                     )
-
-                    msg_div = soup.find("div", class_="tgme_widget_message_text")
-                    msg_text = (
-                        msg_div.get_text(separator="\n").strip() if msg_div else ""
-                    )
-
-                    video_url = None
-                    video_tag = soup.find("video")
-                    if video_tag:
-                        if video_tag.get("src"):
-                            video_url = video_tag["src"]
-                        else:
-                            source_tag = video_tag.find("source")
-                            if source_tag and source_tag.get("src"):
-                                video_url = source_tag["src"]
-
-                    photo_url = None
-                    if not video_url:
-                        photo_wrap = soup.find(
-                            "a", class_="tgme_widget_message_photo_wrap"
-                        )
-                        if photo_wrap and photo_wrap.get("style"):
-                            match = re.search(
-                                r"background-image:url\('([^']+)'\)",
-                                photo_wrap["style"],
-                            )
-                            if match:
-                                photo_url = match.group(1)
-
-                    caption = msg_text if len(msg_text) <= 1024 else ""
-
-                    if video_url:
-                        await update.message.reply_video(
-                            video=video_url, caption=caption
-                        )
-                    elif photo_url:
-                        await update.message.reply_photo(
-                            photo=photo_url, caption=caption
-                        )
-                    elif not msg_text:
+                    parsed = parse_html_message(soup)
+                    sent = await send_parsed_message(bot, chat_id, parsed)
+                    if not sent:
                         await update.message.reply_text(
-                            "❌ محتوایی در این لینک یافت نشد (احتمالاً فایل سندی است که از وب قابل دریافت نیست)."
+                            "❌ محتوایی در این لینک یافت نشد، یا فایل‌ها از وب قابل دریافت نیستند "
+                            "(مثلاً سند بدون لینک مستقیم). لینک را در اپ تلگرام باز کنید."
                         )
-
-                    if msg_text and (
-                        not (video_url or photo_url) or len(msg_text) > 1024
-                    ):
-                        await update.message.reply_text(msg_text)
 
                 except asyncio.TimeoutError:
                     await update.message.reply_text(
@@ -126,7 +88,6 @@ async def handle_telegram_state(
                 try:
                     url = f"https://t.me/s/{channel_id}"
                     html_content = await fetch_url_async(url)
-
                     soup = await asyncio.to_thread(
                         BeautifulSoup, html_content, "html.parser"
                     )
@@ -138,52 +99,27 @@ async def handle_telegram_state(
                             "❌ پیامی یافت نشد! مطمئن شوید آیدی صحیح است و کانال عمومی می‌باشد."
                         )
                     else:
+                        any_sent = False
                         for msg in latest_messages:
-                            msg_div = msg.find("div", class_="tgme_widget_message_text")
-                            msg_text = (
-                                msg_div.get_text(separator="\n").strip()
-                                if msg_div
-                                else ""
-                            )
-
-                            has_video = bool(msg.find("video"))
-                            if has_video:
-                                msg_text = f"*(یک ویدیو در این پیام وجود داشت که برای کاهش بار سرور ارسال نشد)*\n\n{msg_text}"
-
-                            photo_url = None
-                            if not has_video:
-                                photo_wrap = msg.find(
-                                    "a", class_="tgme_widget_message_photo_wrap"
-                                )
-                                if photo_wrap and photo_wrap.get("style"):
-                                    match = re.search(
-                                        r"background-image:url\('([^']+)'\)",
-                                        photo_wrap["style"],
-                                    )
-                                    if match:
-                                        photo_url = match.group(1)
-
-                            caption = msg_text if len(msg_text) <= 1024 else ""
-
+                            parsed = parse_message_element(msg)
                             try:
-                                if photo_url:
-                                    await update.message.reply_photo(
-                                        photo=photo_url, caption=caption
-                                    )
-                                if msg_text and (not photo_url or len(msg_text) > 1024):
-                                    await update.message.reply_text(
-                                        msg_text, parse_mode="Markdown"
-                                    )
+                                if await send_parsed_message(bot, chat_id, parsed):
+                                    any_sent = True
                             except Exception as send_err:
                                 print(f"Error sending media: {send_err}")
-                                if msg_text:
-                                    await update.message.reply_text(
-                                        msg_text, parse_mode="Markdown"
+                                if parsed.text:
+                                    await bot.send_message(
+                                        chat_id=chat_id, text=parsed.text
                                     )
+                                    any_sent = True
+                        if not any_sent:
+                            await update.message.reply_text(
+                                "❌ در پیام‌های اخیر، محتوای قابل ارسال (زیر ۲۰ مگابایت) یافت نشد."
+                            )
 
                 except asyncio.TimeoutError:
                     await update.message.reply_text(
-                        "❌ ارتباط با سرور بله قطع شد. لطفاً بعدا تلاش کنید."
+                        "❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید."
                     )
                 except Exception as e:
                     print(f"Telegram Latest Error: {e}")
