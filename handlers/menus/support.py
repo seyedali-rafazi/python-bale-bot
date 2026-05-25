@@ -19,6 +19,7 @@ from core.database import (
     get_ai_questions_today,
     get_archive_fetches_used,
     archive_limit_period_label,
+    get_tg_downloads,
 )
 from core.limits import get_limit
 
@@ -80,6 +81,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     web_count = await get_web_search_downloads(user_id)
     ai_count = await get_ai_questions_today(user_id)
     arc_count = await get_archive_fetches_used(user_id)
+    tg_count = await get_tg_downloads(user_id)
 
     # تعیین لیمیت‌های قبلی (فرض بر این است که get_limit یک تابع سینک معمولی در فایل limits است)
     yt_limit = get_limit("youtube_download", is_vip)
@@ -90,6 +92,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     web_limit = get_limit("web_search", is_vip)
     ai_limit = get_limit("ai_chat", is_vip)
     arc_limit = get_limit("yt_archive", is_vip)
+    tg_limit = get_limit("telegram_download", is_vip)
     arc_period = archive_limit_period_label(is_vip)
 
     # دریافت آمار ذخیره‌سازی ابری
@@ -132,6 +135,7 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • پینترست | جستجو: $ {pinterest_count} / {pinterest_limit} $
 • تیک‌تاک | دانلود: $ {tt_dl_count} / {tt_dl_limit} $
 • گیت‌هاب | دانلود: $ {gh_count} / {gh_limit} $
+• تلگرام | دریافت: $ {tg_count} / {tg_limit} $
 • جستجوی وب | دانلود: $ {web_count} / {web_limit} $
 • هوش مصنوعی | پرسش متنی: $ {ai_count} / {ai_limit} $ (فقط متن؛ ریست نیمه‌شب تهران)
 

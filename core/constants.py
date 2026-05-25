@@ -13,7 +13,7 @@ BTN_AI_TTS = "🗣 تبدیل متن به صدا"
 BTN_AI_IMAGE = "🎨 تولید عکس از متن"
 BTN_TELEGRAM = "✈️ تلگرام"
 BTN_TG_SINGLE = "🔍 دریافت یک پیام (با لینک)"
-BTN_TG_LATEST = "آخرین پیام‌های کانال (۵ پیام)"
+BTN_TG_LATEST = "آخرین پیام‌های کانال (۲۰ پیام)"
 
 BTN_GOOGLE_SEARCH = "🔍 جستجوی وب"
 BTN_GOOGLE_SEARCH_SUBJECT = "موضوع جستجو"

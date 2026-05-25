@@ -78,6 +78,10 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE users ADD COLUMN web_search_dl_date TEXT"
         )
+    if "tg_count" not in columns:
+        await conn.execute("ALTER TABLE users ADD COLUMN tg_count INTEGER DEFAULT 0")
+    if "tg_date" not in columns:
+        await conn.execute("ALTER TABLE users ADD COLUMN tg_date TEXT")
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS youtube_cache (

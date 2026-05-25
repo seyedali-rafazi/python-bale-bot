@@ -11,6 +11,7 @@ FREE_LIMITS = {
     "web_search": 1,
     "yt_archive": 2,
     "ai_chat": 2,
+    "telegram_download": 1,
 }
 
 VIP_LIMITS = {
@@ -24,6 +25,7 @@ VIP_LIMITS = {
     "web_search": 30,
     "yt_archive": 20,
     "ai_chat": 20,
+    "telegram_download": 10,
 }
 
 

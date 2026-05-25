@@ -99,6 +99,11 @@ async def _ensure_ai_client() -> TelegramClient:
     return _ai_client
 
 
+async def get_telethon_client() -> TelegramClient:
+    """Shared Telethon session (AI + Telegram channel/message downloads)."""
+    return await _ensure_ai_client()
+
+
 # =========================================================
 # AI CHAT
 # =========================================================

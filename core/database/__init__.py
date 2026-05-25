@@ -50,6 +50,7 @@ from .yt_blacklist import (
 from .pinterest import get_pinterest_downloads, increment_pinterest_downloads
 from .tiktok import get_tt_downloads, increment_tt_downloads
 from .github import get_gh_downloads, increment_gh_downloads
+from .telegram import get_tg_downloads, increment_tg_downloads
 from .cloud import (
     get_user_cloud_info,
     get_available_cloud_mb,
