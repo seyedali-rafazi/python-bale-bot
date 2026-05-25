@@ -33,6 +33,16 @@ _CHANNEL_KNOWN_SQL = """
     AND channel_name NOT IN ('ناشناس', 'Unknown', 'unknown')
 """
 
+# One list entry per YouTube video (not per quality row in youtube_cache)
+_YT_GROUP_KEY_SQL = """
+    COALESCE(
+        NULLIF(TRIM(yt_video_id), ''),
+        substr(video_id, 1, 11)
+    )
+"""
+
+_CACHE_HAS_FILES_SQL = "file_ids IS NOT NULL AND file_ids != '[]'"
+
 _NEEDS_METADATA_SQL = """
     (
         channel_name IS NULL OR channel_name IN ('ناشناس', 'Unknown', 'unknown', '')
@@ -521,9 +531,10 @@ async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_S
     conn = await get_db()
     async with conn.execute(
         f"""
-        SELECT channel_name, COUNT(*) AS video_count
+        SELECT channel_name, COUNT(DISTINCT {_YT_GROUP_KEY_SQL}) AS video_count
         FROM youtube_cache
         WHERE {_CHANNEL_KNOWN_SQL}
+          AND {_CACHE_HAS_FILES_SQL}
         GROUP BY channel_name
         ORDER BY video_count DESC, channel_name ASC
         LIMIT ? OFFSET ?
@@ -549,17 +560,26 @@ async def count_global_channels() -> int:
 async def get_global_channel_videos_page(
     channel_name: str, offset: int = 0, limit: int = VIDEOS_PAGE_SIZE
 ):
+    """One row per YouTube video (newest cache row per yt_video_id)."""
     conn = await get_db()
     async with conn.execute(
         f"""
         SELECT rowid AS id, video_id, yt_video_id, title, file_ids,
-               format_type, quality, cached_at, uploaded_at
+               format_type, quality, cached_at, uploaded_at, channel_name
         FROM youtube_cache
         WHERE channel_name = ?
+          AND {_CACHE_HAS_FILES_SQL}
+          AND rowid IN (
+            SELECT MAX(rowid)
+            FROM youtube_cache
+            WHERE channel_name = ?
+              AND {_CACHE_HAS_FILES_SQL}
+            GROUP BY {_YT_GROUP_KEY_SQL}
+          )
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
         LIMIT ? OFFSET ?
         """,
-        (channel_name, limit, offset),
+        (channel_name, channel_name, limit, offset),
     ) as cursor:
         return await cursor.fetchall()
 
@@ -567,11 +587,75 @@ async def get_global_channel_videos_page(
 async def count_global_channel_videos(channel_name: str) -> int:
     conn = await get_db()
     async with conn.execute(
-        "SELECT COUNT(*) FROM youtube_cache WHERE channel_name = ?",
+        f"""
+        SELECT COUNT(*) FROM (
+            SELECT 1
+            FROM youtube_cache
+            WHERE channel_name = ?
+              AND {_CACHE_HAS_FILES_SQL}
+            GROUP BY {_YT_GROUP_KEY_SQL}
+        )
+        """,
         (channel_name,),
     ) as cursor:
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+async def get_cache_variants_for_video(
+    channel_name: str, yt_video_id: str
+) -> list:
+    """All cached qualities/formats for the same YouTube video in a channel."""
+    conn = await get_db()
+    yt_video_id = (yt_video_id or "").strip()
+    async with conn.execute(
+        f"""
+        SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
+               file_ids, format_type, quality, cached_at, uploaded_at
+        FROM youtube_cache
+        WHERE channel_name = ?
+          AND {_YT_GROUP_KEY_SQL} = ?
+          AND {_CACHE_HAS_FILES_SQL}
+        ORDER BY
+            CASE WHEN format_type LIKE '%audio%' THEN 1 ELSE 0 END,
+            CAST(COALESCE(NULLIF(quality, ''), '0') AS INTEGER) DESC,
+            rowid DESC
+        """,
+        (channel_name, yt_video_id),
+    ) as cursor:
+        return await cursor.fetchall()
+
+
+def archive_row_yt_id(row) -> str:
+    try:
+        yt_id = row["yt_video_id"]
+    except (KeyError, TypeError):
+        yt_id = None
+    if yt_id and str(yt_id).strip():
+        return str(yt_id).strip()
+    try:
+        vid = row["video_id"]
+    except (KeyError, TypeError):
+        vid = ""
+    return extract_yt_id_from_cache_key(vid or "") or ""
+
+
+def dedupe_archive_rows(rows: list) -> list:
+    """Keep one representative row per YouTube video (newest upload date)."""
+    best: dict[str, tuple] = {}
+    order: list[str] = []
+    for row in rows:
+        key = archive_row_yt_id(row) or f"row_{row['id']}"
+        uploaded = ""
+        try:
+            uploaded = row["uploaded_at"] or ""
+        except (KeyError, TypeError):
+            pass
+        if key not in best or (uploaded or "") > (best[key][1] or ""):
+            best[key] = (row, uploaded)
+            if key not in order:
+                order.append(key)
+    return [best[k][0] for k in order]
 
 
 async def get_cache_entry_by_rowid(rowid: int):

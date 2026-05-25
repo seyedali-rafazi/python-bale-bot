@@ -12,6 +12,8 @@ from .youtube import (
     get_global_channel_videos_page,
     count_global_channel_videos,
     get_cache_entry_by_rowid,
+    get_cache_variants_for_video,
+    dedupe_archive_rows,
     search_global_cache_by_title,
     search_global_cache_by_channel,
     CHANNELS_PAGE_SIZE,
@@ -93,5 +95,6 @@ count_user_channels = count_global_channels
 get_channel_videos_page = get_global_channel_videos_page
 count_channel_videos = count_global_channel_videos
 get_archive_entry = get_cache_entry_by_rowid
+get_archive_variants = get_cache_variants_for_video
 search_archive_by_title = search_global_cache_by_title
 search_archive_by_channel = search_global_cache_by_channel

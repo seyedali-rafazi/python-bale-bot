@@ -71,6 +71,8 @@ from .user_yt_archive import (
     get_channel_videos_page,
     count_channel_videos,
     get_archive_entry,
+    get_archive_variants,
+    dedupe_archive_rows,
     search_archive_by_title,
     search_archive_by_channel,
     can_user_fetch_from_archive,

@@ -3,7 +3,11 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from core.database import search_archive_by_title, search_archive_by_channel
+from core.database import (
+    search_archive_by_title,
+    search_archive_by_channel,
+    dedupe_archive_rows,
+)
 from core.yt_moderation import (
     MSG_BLOCKED_SEARCH,
     MSG_BLOCKED_CHANNEL,
@@ -37,6 +41,8 @@ async def handle_yt_archive_search_state(
         await update.message.reply_text(empty_msg)
         return
 
+    results = dedupe_archive_rows(results)
+
     keyboard = []
     lines = ["🔍 نتایج جستجو (جدیدترین انتشار در یوتیوب):\n"]
     for row in results[:12]:
@@ -49,7 +55,7 @@ async def handle_yt_archive_search_state(
             [
                 InlineKeyboardButton(
                     f"▶️ {title[:30]}",
-                    callback_data=f"ytarc_vid_{row['id']}",
+                    callback_data=f"ytarc_pick_{row['id']}",
                 )
             ]
         )

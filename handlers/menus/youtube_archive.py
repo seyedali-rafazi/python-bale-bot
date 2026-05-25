@@ -30,6 +30,8 @@ from core.database import (
     get_channel_videos_page,
     count_channel_videos,
     get_archive_entry,
+    get_archive_variants,
+    dedupe_archive_rows,
     can_user_fetch_from_archive,
     increment_archive_fetch,
     increment_yt_video_view,
@@ -39,6 +41,7 @@ from core.database import (
     ARCHIVE_LIMIT_VIP,
     archive_limit_period_label,
 )
+from core.database.youtube import archive_row_yt_id
 from core.database.vip import is_vip
 from core.yt_moderation import (
     MSG_BLOCKED_CHANNEL,
@@ -62,6 +65,18 @@ def _decode_channel(encoded: str) -> str:
     from urllib.parse import unquote
 
     return unquote(encoded)
+
+
+def _variant_button_label(row) -> str:
+    fmt = _row_str(row, "format_type", "video_zip")
+    quality = _row_str(row, "quality", "")
+    if not quality:
+        from handlers.states.youtube.helpers import parse_quality_from_cache_key
+
+        quality = parse_quality_from_cache_key(_row_str(row, "video_id"))
+    if "audio" in fmt:
+        return "🎵 صوتی (MP3)"
+    return f"📺 {quality}p"
 
 
 def _row_str(row, key: str, default: str = "") -> str:
@@ -278,59 +293,128 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _show_channel_videos(update, context, channel_name, page=int(vid_page))
         return
 
-    if data.startswith("ytarc_vid_"):
-        archive_id = int(data.replace("ytarc_vid_", ""))
-        entry = await get_archive_entry(archive_id)
+    if data.startswith("ytarc_pick_"):
+        rep_id = int(data.replace("ytarc_pick_", ""))
+        entry = await get_archive_entry(rep_id)
         if not entry:
             await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
             return
 
-        if await is_channel_blacklisted(_row_str(entry, "channel_name")):
-            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
-            return
-        if await is_search_query_blocked(_row_str(entry, "title")):
-            await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
-            return
-
-        allowed, used, limit = await can_user_fetch_from_archive(user_id)
-        if not allowed:
-            vip = await is_vip(user_id)
-            period = archive_limit_period_label(vip)
-            await query.answer(
-                f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
-                show_alert=True,
-            )
+        channel_name = _row_str(entry, "channel_name")
+        yt_id = archive_row_yt_id(entry)
+        if not yt_id:
+            await query.answer("شناسه ویدیو نامعتبر است.", show_alert=True)
             return
 
-        await query.answer("در حال ارسال...")
-        from handlers.states.youtube.helpers import send_cached_files
-
-        try:
-            file_ids = json.loads(entry["file_ids"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            await query.answer("فایل کش خراب است.", show_alert=True)
-            return
-        if not file_ids:
-            await query.answer("فایل کش خالی است.", show_alert=True)
+        variants = await get_archive_variants(channel_name, yt_id)
+        if not variants:
+            await query.answer("فایلی در کش نیست.", show_alert=True)
             return
 
-        fmt = entry["format_type"] or "video_zip"
-        try:
-            await send_cached_files(context, user_id, file_ids, fmt)
-        except Exception as e:
-            print(f"yt archive send error: {e}")
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
-            )
+        if len(variants) == 1:
+            context.user_data["ytarc_pending_rowid"] = variants[0]["id"]
+            await _send_archive_video(update, context, user_id, variants[0]["id"])
             return
-        await increment_archive_fetch(user_id)
-        await increment_yt_video_view(entry["video_id"])
+
+        title = _row_str(entry, "title") or yt_id
+        if len(title) > 50:
+            title = title[:47] + "…"
+        lines = [
+            f"📺 **{title}**",
+            "",
+            "چند کیفیت در کش موجود است. یکی را انتخاب کنید:",
+        ]
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    _variant_button_label(v),
+                    callback_data=f"ytarc_vid_{v['id']}",
+                )
+            ]
+            for v in variants
+        ]
+        vid_page = context.user_data.get("ytarc_vid_page", 0)
+        enc = _encode_channel(channel_name)
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "◀️ بازگشت به لیست",
+                    callback_data=f"ytarc_vidpg_{enc}_{vid_page}",
+                )
+            ]
+        )
+        await query.answer()
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
+        )
+        return
+
+    if data.startswith("ytarc_vid_"):
+        archive_id = int(data.replace("ytarc_vid_", ""))
+        await _send_archive_video(update, context, user_id, archive_id)
         return
 
     if data == "ytarc_main":
         await _send_archive_overview(update, context)
         return
+
+
+async def _send_archive_video(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: str,
+    archive_id: int,
+):
+    query = update.callback_query
+    entry = await get_archive_entry(archive_id)
+    if not entry:
+        if query:
+            await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
+        return
+
+    if await is_channel_blacklisted(_row_str(entry, "channel_name")):
+        await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+        return
+    if await is_search_query_blocked(_row_str(entry, "title")):
+        await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
+        return
+
+    allowed, used, limit = await can_user_fetch_from_archive(user_id)
+    if not allowed:
+        vip = await is_vip(user_id)
+        period = archive_limit_period_label(vip)
+        await query.answer(
+            f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer("در حال ارسال...")
+    from handlers.states.youtube.helpers import send_cached_files
+
+    try:
+        file_ids = json.loads(entry["file_ids"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        await query.answer("فایل کش خراب است.", show_alert=True)
+        return
+    if not file_ids:
+        await query.answer("فایل کش خالی است.", show_alert=True)
+        return
+
+    fmt = entry["format_type"] or "video_zip"
+    try:
+        await send_cached_files(context, user_id, file_ids, fmt)
+    except Exception as e:
+        print(f"yt archive send error: {e}")
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
+        )
+        return
+    await increment_archive_fetch(user_id)
+    await increment_yt_video_view(entry["video_id"])
 
 
 async def _show_channel_videos(
@@ -377,10 +461,12 @@ async def _show_channel_videos(
             [
                 InlineKeyboardButton(
                     f"▶️ {short[:35]}",
-                    callback_data=f"ytarc_vid_{row['id']}",
+                    callback_data=f"ytarc_pick_{row['id']}",
                 )
             ]
         )
+
+    context.user_data["ytarc_vid_page"] = page
 
     nav = []
     enc = _encode_channel(channel_name)
