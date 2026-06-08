@@ -167,6 +167,7 @@ async def on_shutdown(app):
 
 def main():
 
+    # اضافه کردن تنظیم حذف آپدیت‌های معلق به بیلدر
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)
@@ -175,6 +176,7 @@ def main():
         .concurrent_updates(True)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
+        .drop_pending_updates(True)  # 👈 این خط را اینجا اضافه کنید
         .build()
     )
 
@@ -203,11 +205,8 @@ def main():
         )
     )
 
-    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
-
-    # Do not subscribe to channel_post — bot posts to monitor/storage channels must
-    # not echo back into text handlers and cause reply loops.
-    webhook_allowed_updates = [
+    # نام متغیر برای وضوح بیشتر اصلاح شد
+    polling_allowed_updates = [
         "message",
         "edited_message",
         "callback_query",
@@ -215,9 +214,10 @@ def main():
         "shipping_query",
     ]
 
+    # اینجا هم بماند تا در هر بار پولینگ سرور ریست شود
     application.run_polling(
         drop_pending_updates=True,
-        allowed_updates=webhook_allowed_updates,
+        allowed_updates=polling_allowed_updates,
     )
 
 
