@@ -1,5 +1,7 @@
 # main.py
 
+# main.py
+
 import asyncio
 import logging
 import os
@@ -102,16 +104,6 @@ async def on_startup(app):
 
     global _chromium_maintenance_task
 
-    # 🔥 راهکار امن: با گرفتن آخرین آپدیت موجود، صف پیام‌های گذشته روی سرور بله کاملاً کور و پاک می‌شود
-    try:
-        updates = await app.bot.get_updates(offset=-1, timeout=1)
-        if updates:
-            # دادن آفست بالاتر به سرور اعلام می‌کند که تمام پیام‌های قبل از این ID پردازش شده تلقی شوند
-            await app.bot.get_updates(offset=updates[-1].update_id + 1, timeout=1)
-        logger.info("🗑️ Pending updates successfully cleared via safe offset approach")
-    except Exception:
-        logger.exception("Failed to flush pending updates smoothly")
-
     await init_http_session()
 
     await init_db()
@@ -211,7 +203,11 @@ def main():
         )
     )
 
-    polling_allowed_updates = [
+    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
+
+    # Do not subscribe to channel_post — bot posts to monitor/storage channels must
+    # not echo back into text handlers and cause reply loops.
+    webhook_allowed_updates = [
         "message",
         "edited_message",
         "callback_query",
@@ -219,10 +215,13 @@ def main():
         "shipping_query",
     ]
 
-    # پارامتر drop_pending_updates اینجا هم به درستی وظیفه‌اش را انجام خواهد داد
-    application.run_polling(
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BALE_TOKEN,
+        webhook_url=WEBHOOK_URL,
         drop_pending_updates=True,
-        allowed_updates=polling_allowed_updates,
+        allowed_updates=webhook_allowed_updates,
     )
 
 
