@@ -1,7 +1,5 @@
 # main.py
 
-# main.py
-
 import asyncio
 import logging
 import os
@@ -104,6 +102,13 @@ async def on_startup(app):
 
     global _chromium_maintenance_task
 
+    # 🛑 حذف تمام پیام‌های قدیمی منتظر در صف سرور به محض روشن شدن ربات
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("🗑️ Pending updates dropped successfully on startup")
+    except Exception:
+        logger.exception("Failed to drop pending updates on startup")
+
     await init_http_session()
 
     await init_db()
@@ -167,7 +172,6 @@ async def on_shutdown(app):
 
 def main():
 
-    # اضافه کردن تنظیم حذف آپدیت‌های معلق به بیلدر
     application = (
         ApplicationBuilder()
         .token(BALE_TOKEN)
@@ -176,7 +180,6 @@ def main():
         .concurrent_updates(True)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
-        .drop_pending_updates(True)  # 👈 این خط را اینجا اضافه کنید
         .build()
     )
 
@@ -205,7 +208,6 @@ def main():
         )
     )
 
-    # نام متغیر برای وضوح بیشتر اصلاح شد
     polling_allowed_updates = [
         "message",
         "edited_message",
@@ -214,7 +216,6 @@ def main():
         "shipping_query",
     ]
 
-    # اینجا هم بماند تا در هر بار پولینگ سرور ریست شود
     application.run_polling(
         drop_pending_updates=True,
         allowed_updates=polling_allowed_updates,
