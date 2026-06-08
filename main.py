@@ -215,11 +215,7 @@ def main():
         "shipping_query",
     ]
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BALE_TOKEN,
-        webhook_url=WEBHOOK_URL,
+    application.run_polling(
         drop_pending_updates=True,
         allowed_updates=webhook_allowed_updates,
     )
