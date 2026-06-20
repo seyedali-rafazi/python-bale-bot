@@ -346,14 +346,16 @@ async def background_yt_download(
                                         text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                     )
                                     zip_basename = f"youtube_{video_id}_{quality}p"
-                                    zip_parts, archive_basename, split_method = (
-                                        await asyncio.to_thread(
-                                            build_zip_and_split,
-                                            raw_file,
-                                            os.path.dirname(raw_file) or ".",
-                                            zip_basename,
-                                            20 * 1024 * 1024,
-                                        )
+                                    (
+                                        zip_parts,
+                                        archive_basename,
+                                        split_method,
+                                    ) = await asyncio.to_thread(
+                                        build_zip_and_split,
+                                        raw_file,
+                                        os.path.dirname(raw_file) or ".",
+                                        zip_basename,
+                                        20 * 1024 * 1024,
                                     )
                                     zip_artifacts.extend(zip_parts)
                                     if split_method == "concat":
@@ -488,7 +490,9 @@ async def background_yt_download(
                                         split_method=split_method,
                                         video_id=video_id,
                                         title=info.get("title") if info else None,
-                                        channel_name=info.get("uploader") if info else None,
+                                        channel_name=info.get("uploader")
+                                        if info
+                                        else None,
                                         uploaded_at=uploaded_at_from_video_info(info),
                                     )
                                 else:
@@ -685,20 +689,57 @@ async def background_yt_download(
                             # =====================
 
                             else:
-                                # Telegram destination: ZIP audio + split to 20MB documents
+                                # Telegram destination: Send as audio file first, then ZIP
+                                file_size_mb = os.path.getsize(file_path) / (
+                                    1024 * 1024
+                                )
+
+                                # Send as audio file if under 50MB
+                                if file_size_mb < 50:
+                                    try:
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text="🎵 در حال ارسال فایل صوتی...",
+                                        )
+
+                                        audio_file_id = await upload_audio_to_storage_once(
+                                            context=context,
+                                            file_path=file_path,
+                                            caption=f"🎵 {info.get('title') if info else video_id}",
+                                        )
+
+                                        # Send audio to user
+                                        await send_audio_once(
+                                            context, chat_id, audio_file_id
+                                        )
+
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text="✅ فایل صوتی ارسال شد!",
+                                        )
+                                    except Exception as audio_err:
+                                        print(f"⚠️ Could not send as audio: {audio_err}")
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text="⚠️ ارسال به صورت فایل صوتی ناموفق بود. در حال ارسال ZIP...",
+                                        )
+
+                                # Also send as ZIP for backup/compatibility
                                 await context.bot.send_message(
                                     chat_id=chat_id,
                                     text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
                                 )
                                 zip_basename = f"youtube_audio_{video_id}"
-                                zip_parts, archive_basename, split_method = (
-                                    await asyncio.to_thread(
-                                        build_zip_and_split,
-                                        file_path,
-                                        os.path.dirname(file_path) or ".",
-                                        zip_basename,
-                                        20 * 1024 * 1024,
-                                    )
+                                (
+                                    zip_parts,
+                                    archive_basename,
+                                    split_method,
+                                ) = await asyncio.to_thread(
+                                    build_zip_and_split,
+                                    file_path,
+                                    os.path.dirname(file_path) or ".",
+                                    zip_basename,
+                                    20 * 1024 * 1024,
                                 )
                                 zip_artifacts.extend(zip_parts)
                                 if split_method == "concat":

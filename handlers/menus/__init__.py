@@ -85,3 +85,11 @@ from .web_scraper import (
     btn_google_search_subject_req,
     btn_google_search_link_req,
 )
+
+from .image_processing import (
+    btn_image_processing_menu,
+    btn_img_create_pdf_req,
+    btn_img_convert_format_req,
+    btn_img_resize_req,
+    btn_img_remove_bg_req,
+)

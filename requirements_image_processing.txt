@@ -1,0 +1,13 @@
+# Image Processing Dependencies
+# Add these to your main requirements.txt or install separately
+
+# PIL/Pillow - Image manipulation library
+Pillow>=10.0.0
+
+# rembg - Background removal library
+rembg>=2.0.50
+
+# Note: rembg has additional dependencies that will be installed automatically:
+# - onnxruntime (for AI model inference)
+# - numpy
+# - opencv-python-headless

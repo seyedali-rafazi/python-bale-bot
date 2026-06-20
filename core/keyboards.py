@@ -27,7 +27,7 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_PINTEREST),
         ],
         [KeyboardButton(BTN_TRANSLATE), KeyboardButton(BTN_WEATHER)],
-        [KeyboardButton(BTN_AI)],
+        [KeyboardButton(BTN_AI), KeyboardButton(BTN_IMAGE_PROCESSING)],
         [KeyboardButton(BTN_TELEGRAM), KeyboardButton(BTN_MUSIC)],
         [KeyboardButton(BTN_SUPPORT)],
     ]
@@ -210,4 +210,15 @@ def get_google_search_menu_keyboard():
         [KeyboardButton(BTN_GOOGLE_SEARCH_LINK)],
         [KeyboardButton(BTN_BACK)],
     ]
+
+
+def get_image_processing_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_IMG_CREATE_PDF)],
+        [KeyboardButton(BTN_IMG_CONVERT_FORMAT)],
+        [KeyboardButton(BTN_IMG_RESIZE)],
+        [KeyboardButton(BTN_IMG_REMOVE_BG)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

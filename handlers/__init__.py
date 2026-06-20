@@ -64,6 +64,11 @@ from .menus import (
     btn_web_search_req,
     btn_google_search_subject_req,
     btn_google_search_link_req,
+    btn_image_processing_menu,
+    btn_img_create_pdf_req,
+    btn_img_convert_format_req,
+    btn_img_resize_req,
+    btn_img_remove_bg_req,
 )
 from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
@@ -142,9 +147,7 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("give5gbvips", cmd_give_5gb_vips))
     application.add_handler(CommandHandler("fixytcache", cmd_fix_yt_cache))
     application.add_handler(CommandHandler("cleanytcache", cmd_clean_yt_cache))
-    application.add_handler(
-        CommandHandler("channelblacklist", cmd_channel_blacklist)
-    )
+    application.add_handler(CommandHandler("channelblacklist", cmd_channel_blacklist))
     application.add_handler(CommandHandler("blockword", cmd_blockword))
     application.add_handler(CommandHandler("monitor", cmd_monitor_report))
 
@@ -408,6 +411,38 @@ def register_all_handlers(application):
     # اضافه کردن کال‌بک دکمه‌های نتایج جستجو
     application.add_handler(
         CallbackQueryHandler(web_search_callback, pattern=r"^webres_\d+$")
+    )
+
+    # هندلرهای پردازش تصویر
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IMAGE_PROCESSING)}$"),
+            btn_image_processing_menu,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IMG_CREATE_PDF)}$"),
+            btn_img_create_pdf_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IMG_CONVERT_FORMAT)}$"),
+            btn_img_convert_format_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IMG_RESIZE)}$"),
+            btn_img_resize_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_IMG_REMOVE_BG)}$"),
+            btn_img_remove_bg_req,
+        )
     )
 
     # هندلر های تیک تاک

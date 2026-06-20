@@ -18,6 +18,12 @@ from .state_tiktok import handle_tiktok_state
 from .state_github import handle_github_state
 from .state_web_search import handle_web_search_state
 from .state_yt_archive import handle_yt_archive_search_state
+from .state_image_processing import (
+    handle_img_create_pdf,
+    handle_img_convert_format,
+    handle_img_resize,
+    handle_img_remove_bg,
+)
 
 _MENU_HINT_COOLDOWN_SEC = 3.0
 _last_menu_hint_at: dict[str, float] = {}
@@ -87,9 +93,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 🌟 مسیریابی بر اساس نام step
 
     if step.startswith("waiting_yt_archive_"):
-        await handle_yt_archive_search_state(
-            update, context, step, text, chat_id
-        )
+        await handle_yt_archive_search_state(update, context, step, text, chat_id)
         return
 
     if step.startswith("waiting_yt"):
@@ -132,6 +136,15 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_web_search_state(update, context, text, chat_id)
         return
 
+    elif step == "img_create_pdf":
+        await handle_img_create_pdf(update, context)
+    elif step == "img_convert_format":
+        await handle_img_convert_format(update, context)
+    elif step == "img_resize":
+        await handle_img_resize(update, context)
+    elif step == "img_remove_bg":
+        await handle_img_remove_bg(update, context)
+
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_human_message(update):
@@ -148,10 +161,16 @@ async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             "❌ دستیار هوشمند فقط متن می‌پذیرد.\n"
             "لطفاً سوال خود را به صورت پیام متنی بنویسید."
         )
+    elif step == "img_create_pdf":
+        await handle_img_create_pdf(update, context)
+    elif step == "img_convert_format":
+        await handle_img_convert_format(update, context)
+    elif step == "img_resize":
+        await handle_img_resize(update, context)
+    elif step == "img_remove_bg":
+        await handle_img_remove_bg(update, context)
     else:
-        await _reply_menu_hint(
-            update, "متوجه نشدم. لطفاً از منو استفاده کنید."
-        )
+        await _reply_menu_hint(update, "متوجه نشدم. لطفاً از منو استفاده کنید.")
 
 
 async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,6 +189,4 @@ async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             "صدا، ویدیو و فایل در این بخش پشتیبانی نمی‌شود."
         )
     else:
-        await _reply_menu_hint(
-            update, "متوجه نشدم. لطفاً از منو استفاده کنید."
-        )
+        await _reply_menu_hint(update, "متوجه نشدم. لطفاً از منو استفاده کنید.")

@@ -89,3 +89,10 @@ BTN_BUY_CLOUD_SIZE3 = "خرید  20GB حجم ابری 🌟"
 BTN_BUY_CLOUD_SIZE4 = "خرید 50GB حجم ابری 🌟"
 BTN_UPLOAD_TO_CLOUD = "📤 آپلود فایل"
 BTN_CLOUD_FILES = "📂 فایل‌های من"
+
+# منوی پردازش تصویر
+BTN_IMAGE_PROCESSING = "🖼 پردازش تصویر"
+BTN_IMG_CREATE_PDF = "📄 ساخت PDF از عکس‌ها"
+BTN_IMG_CONVERT_FORMAT = "🔄 تبدیل فرمت عکس"
+BTN_IMG_RESIZE = "📏 تغییر اندازه عکس"
+BTN_IMG_REMOVE_BG = "✂️ حذف پس‌زمینه عکس"
