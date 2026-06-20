@@ -166,6 +166,11 @@ async def on_shutdown(app):
 
 
 def main():
+    # Validate required environment variables
+    if not BALE_TOKEN:
+        raise RuntimeError(
+            "BALE_TOKEN is not set in the environment. Please set it in your .env file."
+        )
 
     application = (
         ApplicationBuilder()
@@ -196,18 +201,9 @@ def main():
 
     logger.info("✅ Bot Started")
 
-    PORT = int(
-        os.getenv(
-            "PORT",
-            BALE_LISTENING_PORT,
-        )
-    )
-
-    WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
-
     # Do not subscribe to channel_post — bot posts to monitor/storage channels must
     # not echo back into text handlers and cause reply loops.
-    webhook_allowed_updates = [
+    allowed_updates = [
         "message",
         "edited_message",
         "callback_query",
@@ -215,14 +211,45 @@ def main():
         "shipping_query",
     ]
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BALE_TOKEN,
-        webhook_url=WEBHOOK_URL,
-        drop_pending_updates=True,
-        allowed_updates=webhook_allowed_updates,
-    )
+    # Check if webhook URL is configured
+    if BALE_URL and BALE_TOKEN:
+        PORT = int(
+            os.getenv(
+                "PORT",
+                BALE_LISTENING_PORT or "8443",
+            )
+        )
+
+        WEBHOOK_URL = f"{BALE_URL}/{BALE_TOKEN}"
+
+        try:
+            logger.info("🌐 Attempting to start in WEBHOOK mode...")
+            logger.info(f"   Webhook URL: {WEBHOOK_URL}")
+            logger.info(f"   Listening on port: {PORT}")
+
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path=BALE_TOKEN,
+                webhook_url=WEBHOOK_URL,
+                drop_pending_updates=True,
+                allowed_updates=allowed_updates,
+            )
+        except Exception as e:
+            logger.error(f"❌ Webhook mode failed: {e}")
+            logger.info("🔄 Falling back to POLLING mode...")
+
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=allowed_updates,
+            )
+    else:
+        logger.warning("⚠️  BALE_URL or BALE_TOKEN not set — running in POLLING mode")
+
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=allowed_updates,
+        )
 
 
 if __name__ == "__main__":
