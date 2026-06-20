@@ -330,8 +330,11 @@ async def convert_image_format(image_bytes, target_format, chat_id):
     def _convert():
         img = Image.open(io.BytesIO(image_bytes))
 
+        # Determine the save format (PIL uses JPEG not JPG)
+        save_format = "JPEG" if target_format == "JPG" else target_format
+
         # Handle transparency for formats that don't support it
-        if target_format in ["JPG", "JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
+        if save_format in ["JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
             background = Image.new("RGB", img.size, (255, 255, 255))
             if img.mode == "RGBA":
                 background.paste(img, mask=img.split()[3])
@@ -342,10 +345,7 @@ async def convert_image_format(image_bytes, target_format, chat_id):
         output_path = f"downloads/converted_{chat_id}.{target_format.lower()}"
         os.makedirs("downloads", exist_ok=True)
 
-        if target_format == "JPG":
-            target_format = "JPEG"
-
-        img.save(output_path, format=target_format)
+        img.save(output_path, format=save_format)
         return output_path
 
     return await asyncio.to_thread(_convert)
