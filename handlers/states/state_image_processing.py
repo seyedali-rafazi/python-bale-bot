@@ -5,10 +5,18 @@ import io
 from telegram import Update
 from telegram.ext import ContextTypes
 from PIL import Image
-from rembg import remove
 import asyncio
 from core.state_manager import get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
+
+# Try to import rembg, but make it optional
+try:
+    from rembg import remove
+
+    REMBG_AVAILABLE = True
+except ImportError:
+    REMBG_AVAILABLE = False
+    print("⚠️ rembg not available. Background removal feature will be disabled.")
 
 
 async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,6 +243,20 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
     """Handle background removal"""
     chat_id = str(update.effective_chat.id)
 
+    # Check if rembg is available
+    if not REMBG_AVAILABLE:
+        await update.message.reply_text(
+            "❌ قابلیت حذف پس‌زمینه در حال حاضر غیرفعال است.\n\n"
+            "برای فعال‌سازی این قابلیت، نیاز به نصب کتابخانه rembg است:\n"
+            "`pip install rembg[cpu]`"
+        )
+        clear_state(chat_id)
+        await update.message.reply_text(
+            "لطفاً از سایر قابلیت‌های پردازش تصویر استفاده کنید.",
+            reply_markup=get_main_menu_keyboard(),
+        )
+        return
+
     # Handle image upload
     if update.message.photo or (
         update.message.document
@@ -361,6 +383,8 @@ async def resize_image(image_bytes, size_text, chat_id):
 
 async def remove_background(image_bytes, chat_id):
     """Remove background from image"""
+    if not REMBG_AVAILABLE:
+        raise ImportError("rembg library is not installed")
 
     def _remove_bg():
         input_img = Image.open(io.BytesIO(image_bytes))

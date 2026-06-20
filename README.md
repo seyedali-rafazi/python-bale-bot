@@ -30,10 +30,10 @@ A comprehensive Telegram/Bale bot for downloading content from various platforms
 ### 🖼 Image Processing (NEW!)
 - **📄 Create PDF from Images**: Combine up to 20 images into a single PDF
 - **🔄 Convert Image Format**: Convert between PNG, JPG, JPEG, WEBP, BMP, GIF
-- **📏 Resize Images**: 
+- **📏 Resize Images**:
   - Percentage-based resizing (e.g., 50%)
   - Dimension-based resizing (e.g., 800x600)
-- **✂️ Remove Background**: AI-powered background removal using rembg
+- **✂️ Remove Background**: AI-powered background removal (requires optional rembg library)
 
 ### 📸 Instagram Downloader
 - Download posts and reels with direct links
@@ -110,8 +110,13 @@ pip install python-telegram-bot aiosqlite python-dotenv
 # YouTube & Video processing
 pip install yt-dlp
 
-# Image processing (NEW)
-pip install Pillow>=10.0.0 rembg>=2.0.50
+# Image processing (NEW - required)
+pip install Pillow>=10.0.0
+
+# Background removal (OPTIONAL - only if you want this feature)
+pip install rembg[cpu]  # for CPU
+# OR
+pip install rembg[gpu]  # for NVIDIA/CUDA GPU
 
 # Web scraping & automation
 pip install playwright beautifulsoup4 requests
