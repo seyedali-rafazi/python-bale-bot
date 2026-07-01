@@ -22,6 +22,15 @@ MAX_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
 MAX_TELEGRAM_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
+IPV6_PREFIX = os.getenv("IPV6_PREFIX")
+
+
+def get_random_ipv6():
+    """تولید یک آی‌پی تصادفی از ساب‌نت /64"""
+    hextets = [f"{random.randint(0, 65535):x}" for _ in range(4)]
+    suffix = ":".join(hextets)
+    return f"{IPV6_PREFIX}:{suffix}"
+
 
 def get_video_duration(file_path):
     try:
@@ -51,11 +60,14 @@ def _cookie_args():
 
 
 def _base_ytdlp_cmd():
-    print("🌐 Using IPv4 Protocol")
+    random_ip = get_random_ipv6()
+    print(f"🌐 Using Random IPv6: {random_ip}")
 
     cmd = [
         "yt-dlp",
-        "--force-ipv4",
+        "--force-ipv6",
+        "--source-address",
+        random_ip,
         "--js-runtimes",
         "node",
         "--remote-components",
