@@ -57,29 +57,45 @@ _chromium_maintenance_task: asyncio.Task | None = None
 
 
 # =========================================================
-# ANTI-SPAM FILTER
+# ANTI-SPAM FILTER (نسخه پیشرفته ۲ لایه)
 # =========================================================
 
-# ذخیره زمان روشن شدن ربات بر اساس UTC
-BOT_START_TIME = datetime.now(timezone.utc)
-
+BOT_START_TIME_UTC = datetime.now(timezone.utc)
+PROCESS_START_TIME = time.time()
 
 async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    پیام‌هایی که تاریخ آن‌ها قبل از روشن شدن ربات است را نادیده می‌گیرد.
+    فیلتر پیشرفته برای جلوگیری از اجرای پیام‌ها و کلیک‌های قدیمی بله
     """
-    message = update.message or update.edited_message
+    uptime = time.time() - PROCESS_START_TIME
 
-    if message and message.date:
-        if message.date < BOT_START_TIME:
-            # توقف پردازش این آپدیت و جلوگیری از رسیدن آن به هندلرهای اصلی
-            raise ApplicationHandlerStop()
+    # لایه ۱: گارد استارت‌آپ (Blackhole)
+    # در ۱۵ ثانیه اول راه‌اندازی ربات، برای تخلیه صف سرور بله، تمام آپدیت‌ها مستقیماً دور ریخته می‌شوند
+    if uptime < 15:
+        raise ApplicationHandlerStop()
+
+    # لایه ۲: بررسی دقیق تاریخ برای تمام انواع پیام‌ها
+    # این بار کلیک روی دکمه‌ها و پیام‌های کانال را هم بررسی می‌کنیم
+    msg_date = None
+    if update.message:
+        msg_date = update.message.date
+    elif update.edited_message:
+        msg_date = update.edited_message.date
+    elif update.callback_query and update.callback_query.message:
+        msg_date = update.callback_query.message.date
+    elif update.channel_post:
+        msg_date = update.channel_post.date
+    elif update.edited_channel_post:
+        msg_date = update.edited_channel_post.date
+
+    # اگر تاریخ پیام متعلق به قبل از لحظه استارت ربات باشد، پردازش متوقف می‌شود
+    if msg_date and msg_date < BOT_START_TIME_UTC:
+        raise ApplicationHandlerStop()
 
 
 # =========================================================
 # CLEANUP
 # =========================================================
-
 
 async def cleanup_old_downloads(
     context: ContextTypes.DEFAULT_TYPE,
@@ -117,7 +133,6 @@ async def cleanup_old_downloads(
 # =========================================================
 # STARTUP
 # =========================================================
-
 
 async def on_startup(app):
     global _chromium_maintenance_task
@@ -182,9 +197,7 @@ async def on_shutdown(app):
 # MAIN
 # =========================================================
 
-
 def main():
-    # Validate required environment variables
     if not BALE_TOKEN:
         raise RuntimeError(
             "BALE_TOKEN is not set in the environment. Please set it in your .env file."
@@ -215,15 +228,13 @@ def main():
         )
         logger.info("✅ Hourly monitoring report scheduled")
 
-    # +++ اعمال فیلتر زمانی قبل از سایر هندلرها در اولویت بالا (گروه ۱-) +++
+    # +++ اعمال فیلتر زمانی قبل از سایر هندلرها در گروه ۱- +++
     application.add_handler(TypeHandler(Update, ignore_old_updates), group=-1)
 
     register_all_handlers(application)
 
     logger.info("✅ Bot Started")
 
-    # Do not subscribe to channel_post — bot posts to monitor/storage channels must
-    # not echo back into text handlers and cause reply loops.
     allowed_updates = [
         "message",
         "edited_message",
@@ -232,7 +243,6 @@ def main():
         "shipping_query",
     ]
 
-    # Check if webhook URL is configured
     if BALE_URL and BALE_TOKEN:
         PORT = int(
             os.getenv(
