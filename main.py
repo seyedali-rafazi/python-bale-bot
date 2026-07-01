@@ -1,17 +1,17 @@
-# main.py
-
-# main.py
-
 import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
+    TypeHandler,
+    ApplicationHandlerStop,
 )
 
 from handlers import register_all_handlers
@@ -57,6 +57,26 @@ _chromium_maintenance_task: asyncio.Task | None = None
 
 
 # =========================================================
+# ANTI-SPAM FILTER
+# =========================================================
+
+# ذخیره زمان روشن شدن ربات بر اساس UTC
+BOT_START_TIME = datetime.now(timezone.utc)
+
+
+async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    پیام‌هایی که تاریخ آن‌ها قبل از روشن شدن ربات است را نادیده می‌گیرد.
+    """
+    message = update.message or update.edited_message
+
+    if message and message.date:
+        if message.date < BOT_START_TIME:
+            # توقف پردازش این آپدیت و جلوگیری از رسیدن آن به هندلرهای اصلی
+            raise ApplicationHandlerStop()
+
+
+# =========================================================
 # CLEANUP
 # =========================================================
 
@@ -64,7 +84,6 @@ _chromium_maintenance_task: asyncio.Task | None = None
 async def cleanup_old_downloads(
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
     now = time.time()
 
     directories = [
@@ -101,7 +120,6 @@ async def cleanup_old_downloads(
 
 
 async def on_startup(app):
-
     global _chromium_maintenance_task
 
     await init_http_session()
@@ -196,6 +214,9 @@ def main():
             name="hourly_monitoring_report",
         )
         logger.info("✅ Hourly monitoring report scheduled")
+
+    # +++ اعمال فیلتر زمانی قبل از سایر هندلرها در اولویت بالا (گروه ۱-) +++
+    application.add_handler(TypeHandler(Update, ignore_old_updates), group=-1)
 
     register_all_handlers(application)
 
