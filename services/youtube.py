@@ -72,8 +72,8 @@ def _base_ytdlp_cmd():
         "node",
         "--remote-components",
         "ejs:github",
-        # "--extractor-args",
-        # "youtube:player_client=android,web,ios",
+        "--extractor-args",
+        "youtube:player_client=android_embed,web_embedded",
         "--no-playlist",
     ]
 
