@@ -16,6 +16,7 @@ from core.database import (
     is_vip,
     get_tt_downloads,
     increment_tt_downloads,
+    log_upload_success,
 )
 from core.limits import get_limit
 
@@ -97,6 +98,7 @@ async def background_tt_download(
                 )
 
         await increment_tt_downloads(user_id)
+        await log_upload_success("tiktok", user_id)
 
         await context.bot.delete_message(
             chat_id=chat_id, message_id=status_msg.message_id

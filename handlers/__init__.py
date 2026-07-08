@@ -69,6 +69,8 @@ from .menus import (
     btn_img_convert_format_req,
     btn_img_resize_req,
     btn_img_remove_bg_req,
+    btn_img_video_to_gif_req,
+    btn_img_extract_audio_req,
 )
 from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
@@ -442,6 +444,18 @@ def register_all_handlers(application):
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_IMG_REMOVE_BG)}$"),
             btn_img_remove_bg_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MEDIA_VIDEO_TO_GIF)}$"),
+            btn_img_video_to_gif_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_MEDIA_EXTRACT_AUDIO)}$"),
+            btn_img_extract_audio_req,
         )
     )
 

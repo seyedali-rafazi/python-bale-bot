@@ -72,4 +72,27 @@ async def btn_img_remove_bg_req(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def btn_img_video_to_gif_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Request video for converting to GIF"""
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "img_video_to_gif")
+
+    await update.message.reply_text(
+        "🎬 **تبدیل ویدیو به GIF**\n\n"
+        "لطفاً ویدیوی خود را ارسال کنید تا آن را به فایل متحرک GIF تبدیل کنم.\n\n"
+        "⚠️ توجه داشته باشید حجم ویدیو زیاد نباشد تا فرآیند تبدیل سریع‌تر انجام شود."
+    )
+
+
+async def btn_img_extract_audio_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Request video for audio extraction"""
+    chat_id = str(update.effective_chat.id)
+    set_state(chat_id, "img_extract_audio")
+
+    await update.message.reply_text(
+        "🎵 **استخراج صدا از ویدیو**\n\n"
+        "لطفاً ویدیوی خود را ارسال کنید تا صدای آن را استخراج کنم و به صورت فایل صوتی MP3 برای شما بفرستم."
+    )
+
+
 # Made with Bob

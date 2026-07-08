@@ -92,4 +92,6 @@ from .image_processing import (
     btn_img_convert_format_req,
     btn_img_resize_req,
     btn_img_remove_bg_req,
+    btn_img_video_to_gif_req,
+    btn_img_extract_audio_req,
 )

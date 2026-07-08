@@ -214,11 +214,9 @@ def get_google_search_menu_keyboard():
 
 def get_image_processing_menu_keyboard():
     keyboard = [
-        [KeyboardButton(BTN_IMG_CREATE_PDF)],
-        [KeyboardButton(BTN_IMG_CONVERT_FORMAT)],
-        [KeyboardButton(BTN_IMG_RESIZE)],
-        [KeyboardButton(BTN_IMG_REMOVE_BG)],
+        [KeyboardButton(BTN_IMG_CREATE_PDF), KeyboardButton(BTN_IMG_CONVERT_FORMAT)],
+        [KeyboardButton(BTN_IMG_RESIZE), KeyboardButton(BTN_IMG_REMOVE_BG)],
+        [KeyboardButton(BTN_MEDIA_VIDEO_TO_GIF), KeyboardButton(BTN_MEDIA_EXTRACT_AUDIO)],
         [KeyboardButton(BTN_BACK)],
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

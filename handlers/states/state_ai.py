@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.database import can_user_ask_ai, increment_ai_question
+from core.database import can_user_ask_ai, increment_ai_question, log_upload_success
 
 from services.ai import (
     ask_chatbot,
@@ -48,6 +48,7 @@ async def process_ai_chat(
             message_id=message_id,
             text=answer[:4096],
         )
+        await log_upload_success("ai_chat", chat_id)
 
     except Exception:
         logger.exception("process_ai_chat failed")
@@ -92,6 +93,7 @@ async def process_ai_tts(
             chat_id=chat_id,
             audio=audio_fp,
         )
+        await log_upload_success("ai_chat", chat_id)
 
         await context.bot.delete_message(
             chat_id=chat_id,
@@ -140,6 +142,7 @@ async def process_ai_image(
             chat_id=chat_id,
             photo=img_fp,
         )
+        await log_upload_success("ai_chat", chat_id)
 
         await context.bot.delete_message(
             chat_id=chat_id,
@@ -294,6 +297,7 @@ async def handle_ai_photo(
             extracted_text = await perform_ocr(image_bytes)
 
         await msg.edit_text(f"✅ متن استخراج شده:\n\n{extracted_text}")
+        await log_upload_success("ai_chat", chat_id)
 
     except Exception:
         logger.exception("handle_ai_photo failed")

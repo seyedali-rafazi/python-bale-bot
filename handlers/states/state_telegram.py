@@ -15,7 +15,7 @@ from services import telegram_telethon
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
-from core.database import is_vip, get_tg_downloads, increment_tg_downloads
+from core.database import is_vip, get_tg_downloads, increment_tg_downloads, log_upload_success
 from core.limits import get_limit
 
 logger = logging.getLogger(__name__)
@@ -228,6 +228,7 @@ async def handle_telegram_state(
 
             if success:
                 await increment_tg_downloads(user_id)
+                await log_upload_success("telegram", user_id)
 
     except Exception as general_err:
         print(f"Queue/Processing Error: {general_err}")

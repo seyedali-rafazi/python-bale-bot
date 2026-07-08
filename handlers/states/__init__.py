@@ -23,6 +23,8 @@ from .state_image_processing import (
     handle_img_convert_format,
     handle_img_resize,
     handle_img_remove_bg,
+    handle_img_video_to_gif,
+    handle_img_extract_audio,
 )
 
 _MENU_HINT_COOLDOWN_SEC = 3.0
@@ -144,6 +146,10 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_img_resize(update, context)
     elif step == "img_remove_bg":
         await handle_img_remove_bg(update, context)
+    elif step == "img_video_to_gif":
+        await handle_img_video_to_gif(update, context)
+    elif step == "img_extract_audio":
+        await handle_img_extract_audio(update, context)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,6 +189,10 @@ async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if step == "waiting_music_identify":
         await handle_music_identify_media(update, context)
+    elif step == "img_video_to_gif":
+        await handle_img_video_to_gif(update, context)
+    elif step == "img_extract_audio":
+        await handle_img_extract_audio(update, context)
     elif step == "waiting_ai_chat":
         await update.message.reply_text(
             "❌ دستیار هوشمند فقط متن می‌پذیرد.\n"

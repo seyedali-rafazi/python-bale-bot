@@ -135,7 +135,7 @@ async def handle_youtube_state(
         if text.startswith("📥 دانلود ویدیو "):
             if not await check_user_limit(chat_id):
                 await update.message.reply_text(
-                    "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                    "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
                 )
                 return
 
@@ -215,7 +215,7 @@ async def handle_youtube_state(
 
         if not await check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 
@@ -260,7 +260,7 @@ async def handle_youtube_state(
 
         if not await check_user_limit(chat_id):
             await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 2 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+                "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 

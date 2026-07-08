@@ -15,6 +15,7 @@ from core.database import (
     get_available_cloud_mb,
     reduce_cloud_storage,
     add_cloud_file,
+    log_upload_success,
 )
 from services.music import (
     search_track,
@@ -142,6 +143,7 @@ async def background_download_task(
                         )
 
                         await increment_music_downloads(chat_id)
+                        await log_upload_success("music", chat_id)
                         return
 
                     else:
@@ -169,6 +171,7 @@ async def background_download_task(
 
                     # ثبت آمار پس از موفقیت (اصلاح شد: اضافه شدن await)
                     await increment_music_downloads(chat_id)
+                    await log_upload_success("music", chat_id)
 
                     try:
                         await context.bot.edit_message_text(

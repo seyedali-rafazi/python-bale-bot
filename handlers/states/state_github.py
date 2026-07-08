@@ -3,7 +3,7 @@ import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from services.http_client import get_http_session
 from telegram.ext import ContextTypes
-from core.database import get_gh_downloads, increment_gh_downloads, is_vip
+from core.database import get_gh_downloads, increment_gh_downloads, is_vip, log_upload_success
 from core.state_manager import clear_state
 import uuid
 import os
@@ -203,6 +203,7 @@ async def process_github_download(
                             chat_id=chat_id, document=temp_path, filename=file_name
                         )
                         await increment_gh_downloads(user_id)
+                        await log_upload_success("github", user_id)
             else:
                 await context.bot.send_message(
                     chat_id,

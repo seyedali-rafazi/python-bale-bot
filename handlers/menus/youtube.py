@@ -15,19 +15,6 @@ async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
 
-    # دریافت اطلاعات کاربر از دیتابیس
-    user_id = update.effective_user.id
-    user_info = await get_user_info(user_id)
-
-    # بررسی VIP بودن (is_vip در ایندکس 1 خروجی دیتابیس است)
-    is_vip = user_info[1] if user_info else 0
-
-    if not is_vip:
-        await update.message.reply_text(
-            "❌ به دلیل مشکلات زیر ساختی بله در اپلود فایل این قسمت مخصوص مشترکان pro میباشد میتوایند از دیگر بخش های ربات استفاده بفرمایید .❌"
-        )
-        return
-
     if await get_setting("youtube_enabled", "1") == "0":
         await update.message.reply_text(
             "❌ بخش یوتیوب فعلاً توسط ادمین غیرفعال شده است."

@@ -22,6 +22,7 @@ from core.database import (
     get_pinterest_downloads,
     increment_pinterest_downloads,
     is_vip,
+    log_upload_success,
 )
 
 from core.limits import get_limit
@@ -308,6 +309,7 @@ async def process_pinterest_search(
         return
 
     await increment_pinterest_downloads(user_id)
+    await log_upload_success("pinterest", user_id)
 
     context.user_data["pin_images"] = image_urls
 

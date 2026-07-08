@@ -10,7 +10,8 @@ from core.database import (
     increment_yt_video_view,
     reduce_cloud_storage,
     add_cloud_file,
-    get_available_cloud_mb,  # تغییر نام به تابع صحیح
+    get_available_cloud_mb,
+    log_upload_success,
 )
 from services.youtube import (
     download_youtube_video,
@@ -106,6 +107,7 @@ async def background_yt_download(
                 cached_files,
                 effective_format,
             )
+            await log_upload_success("youtube", chat_id)
 
             await increment_yt_video_view(cache_key)
             await save_to_global_cache(
@@ -465,6 +467,7 @@ async def background_yt_download(
                                         text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد.\n\n📉 حجم کسر شده: {total_size_mb} مگابایت\n⏳ تاریخ انقضای لینک‌ها: 3 ساعت\n\n{links_text}",
                                         parse_mode="Markdown",
                                     )
+                                    await log_upload_success("youtube", chat_id)
 
                                 else:
                                     await context.bot.send_message(
@@ -503,6 +506,7 @@ async def background_yt_download(
                                         video_id=video_id,
                                         label=f"Video ID: {video_id}",
                                     )
+                                await log_upload_success("youtube", chat_id)
 
                         else:
                             raise Exception("Download failed")
@@ -675,6 +679,7 @@ async def background_yt_download(
                                         text=f"✅ فایل صوتی با موفقیت ذخیره شد:\n\n📉 حجم کسر شده: {audio_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
                                         parse_mode="Markdown",
                                     )
+                                    await log_upload_success("youtube", chat_id)
 
                                 else:
                                     await context.bot.send_message(
@@ -763,6 +768,7 @@ async def background_yt_download(
                                     channel_name=info.get("uploader") if info else None,
                                     uploaded_at=uploaded_at_from_video_info(info),
                                 )
+                                await log_upload_success("youtube", chat_id)
 
                         else:
                             await context.bot.send_message(

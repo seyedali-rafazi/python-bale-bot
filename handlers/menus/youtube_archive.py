@@ -35,6 +35,7 @@ from core.database import (
     can_user_fetch_from_archive,
     increment_archive_fetch,
     increment_yt_video_view,
+    log_upload_success,
     CHANNELS_PAGE_SIZE,
     VIDEOS_PAGE_SIZE,
     ARCHIVE_LIMIT_FREE,
@@ -414,6 +415,7 @@ async def _send_archive_video(
         )
         return
     await increment_archive_fetch(user_id)
+    await log_upload_success("yt_archive", user_id)
     await increment_yt_video_view(entry["video_id"])
 
 

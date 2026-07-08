@@ -22,6 +22,8 @@ SECTION_LABELS = {
     "translation": "🌐 ترجمه",
     "weather": "🌤 هواشناسی",
     "payment": "💳 پرداخت",
+    "telegram": "✈️ تلگرام",
+    "image_processing": "🖼 پردازش تصویر",
 }
 
 ALL_SECTIONS = list(SECTION_LABELS.keys())
@@ -30,7 +32,7 @@ _TODAY_ACTIVITY_SQL = """
     yt_date = ? OR music_date = ? OR pinterest_date = ?
     OR tt_dl_date = ? OR ig_dl_date = ? OR ig_exp_date = ?
     OR gh_date = ? OR web_search_dl_date = ? OR arc_fetch_date = ?
-    OR ai_chat_date = ?
+    OR ai_chat_date = ? OR tg_date = ?
 """
 
 
@@ -115,7 +117,7 @@ async def count_active_users_today() -> int:
     today = get_tehran_today()
     today_start = f"{today} 00:00:00"
     conn = await get_db()
-    params = (today,) * 10 + (today_start,)
+    params = (today,) * 11 + (today_start,)
     async with conn.execute(
         f"""
         SELECT COUNT(DISTINCT user_id) FROM (

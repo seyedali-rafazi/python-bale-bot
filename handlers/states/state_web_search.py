@@ -12,6 +12,7 @@ from core.database import (
     get_web_search_downloads,
     increment_web_search_downloads,
     is_vip,
+    log_upload_success,
 )
 from core.limits import get_limit
 
@@ -71,6 +72,7 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 filename=f"WebPage_{index + 1}.html",
                 caption=f"🔗 لینک اصلی: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
             )
+            await log_upload_success("web_search", chat_id)
         except Exception as e:
             print(f"Send Document Error: {e}")
             await wait_msg.edit_text("❌ خطا در ارسال فایل.")
@@ -178,6 +180,7 @@ async def handle_web_search_state(
                             filename="WebPage.html",
                             caption=f"🔗 لینک: {url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
                         )
+                        await log_upload_success("web_search", chat_id)
                 except Exception as e:
                     print(f"Send Document Error: {e}")
                     await wait_msg.edit_text("❌ خطا در ارسال فایل.")
