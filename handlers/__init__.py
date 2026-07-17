@@ -71,6 +71,11 @@ from .menus import (
     btn_img_remove_bg_req,
     btn_img_video_to_gif_req,
     btn_img_extract_audio_req,
+    btn_research_menu,
+    btn_kaggle_menu,
+    btn_kaggle_search_req,
+    btn_kaggle_popular_req,
+    btn_kaggle_dl_link_req,
 )
 from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
@@ -110,6 +115,7 @@ from handlers.states.youtube import (
 )
 from handlers.states.state_github import github_callback_handler
 from handlers.states.state_web_search import web_search_callback
+from handlers.states.state_kaggle import kaggle_callback_handler
 
 from .menus.cloud import btn_cloud_storage_menu
 from handlers.states.state_cloud import (
@@ -481,6 +487,36 @@ def register_all_handlers(application):
         MessageHandler(
             filters.Regex(f"^{re.escape(BTN_GH_SEARCH)}$"), btn_gh_search_req
         )
+    )
+
+    # ─── هندلرهای مقاله و تحقیقات (کاگل) ───
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_RESEARCH)}$"), btn_research_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_KAGGLE)}$"), btn_kaggle_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_KAGGLE_SEARCH)}$"), btn_kaggle_search_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_KAGGLE_POPULAR)}$"), btn_kaggle_popular_req
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_KAGGLE_DL_LINK)}$"), btn_kaggle_dl_link_req
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(kaggle_callback_handler, pattern=r"^kgdl_")
     )
 
     # هندلر های پرداخت

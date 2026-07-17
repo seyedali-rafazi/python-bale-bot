@@ -20,6 +20,7 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_PROGRAMMING),
             KeyboardButton(BTN_GOOGLE_SEARCH),
         ],
+        [KeyboardButton(BTN_RESEARCH)],
         [KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_YT_MY_CACHE)],
         [
@@ -217,6 +218,24 @@ def get_image_processing_menu_keyboard():
         [KeyboardButton(BTN_IMG_CREATE_PDF), KeyboardButton(BTN_IMG_CONVERT_FORMAT)],
         [KeyboardButton(BTN_IMG_RESIZE), KeyboardButton(BTN_IMG_REMOVE_BG)],
         [KeyboardButton(BTN_MEDIA_VIDEO_TO_GIF), KeyboardButton(BTN_MEDIA_EXTRACT_AUDIO)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_research_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_KAGGLE)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_kaggle_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_KAGGLE_SEARCH)],
+        [KeyboardButton(BTN_KAGGLE_POPULAR)],
+        [KeyboardButton(BTN_KAGGLE_DL_LINK)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

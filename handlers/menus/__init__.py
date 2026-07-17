@@ -95,3 +95,11 @@ from .image_processing import (
     btn_img_video_to_gif_req,
     btn_img_extract_audio_req,
 )
+
+from .research import (
+    btn_research_menu,
+    btn_kaggle_menu,
+    btn_kaggle_search_req,
+    btn_kaggle_popular_req,
+    btn_kaggle_dl_link_req,
+)

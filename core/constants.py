@@ -98,3 +98,10 @@ BTN_IMG_RESIZE = "📏 تغییر اندازه عکس"
 BTN_IMG_REMOVE_BG = "✂️ حذف پس‌زمینه عکس"
 BTN_MEDIA_VIDEO_TO_GIF = "🎬 تبدیل ویدیو به GIF"
 BTN_MEDIA_EXTRACT_AUDIO = "🎵 استخراج صدا از ویدیو"
+
+# منوی مقاله و تحقیقات
+BTN_RESEARCH = "📚 مقاله و تحقیقات"
+BTN_KAGGLE = "🗂 کاگل (دیتاست)"
+BTN_KAGGLE_SEARCH = "🔍 جستجوی دیتاست"
+BTN_KAGGLE_POPULAR = "🔥 دیتاست‌های محبوب"
+BTN_KAGGLE_DL_LINK = "🔗 دانلود با لینک کاگل"
