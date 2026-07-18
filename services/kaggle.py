@@ -37,9 +37,14 @@ def _get_api():
     # The new token format (KGAT_…) is set via the env var directly.
     os.environ["KAGGLE_API_TOKEN"] = token
 
-    from kaggle.api.kaggle_api_extended import KaggleApiExtended  # type: ignore
-
-    api = KaggleApiExtended()
+    try:
+        # kaggle SDK < 1.7 used KaggleApiExtended
+        from kaggle.api.kaggle_api_extended import KaggleApiExtended  # type: ignore
+        api = KaggleApiExtended()
+    except ImportError:
+        # kaggle SDK >= 1.7 renamed the class to KaggleApi
+        from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore
+        api = KaggleApi()
     api.authenticate()
     return api
 
