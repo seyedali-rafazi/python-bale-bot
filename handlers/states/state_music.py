@@ -16,6 +16,7 @@ from core.database import (
     reduce_cloud_storage,
     add_cloud_file,
     log_upload_success,
+    log_upload_failed,
 )
 from services.music import (
     search_track,
@@ -151,6 +152,7 @@ async def background_download_task(
                             chat_id=chat_id,
                             text="❌ خطا در آپلود ابری.",
                         )
+                        await log_upload_failed("music", chat_id)
                         return
 
                 # ========================
@@ -185,12 +187,14 @@ async def background_download_task(
                 await context.bot.send_message(
                     chat_id, "❌ دانلود از سرور مبدا شکست خورد یا فایل یافت نشد."
                 )
+                await log_upload_failed("music", chat_id)
 
     except Exception as e:
         print(f"Download/Upload Error: {e}")
         await context.bot.send_message(
             chat_id, "❌ خطایی در فرآیند دانلود یا ارسال رخ داد."
         )
+        await log_upload_failed("music", chat_id)
 
     finally:
         # تضمین پاک شدن فایل از روی هارد سرور در هر شرایطی (حتی در صورت کرش یا قطعی اینترنت)

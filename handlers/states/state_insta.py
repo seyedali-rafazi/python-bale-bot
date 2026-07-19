@@ -10,6 +10,7 @@ from core.database import (
     reduce_cloud_storage,
     add_cloud_file,
     log_upload_success,
+    log_upload_failed,
 )
 
 try:
@@ -124,6 +125,7 @@ async def background_download_insta_link(
                             chat_id=chat_id,
                             text="❌ خطا در آپلود ابری.",
                         )
+                        await log_upload_failed("instagram", chat_id)
 
                 else:
                     try:
@@ -147,14 +149,17 @@ async def background_download_insta_link(
                 await processing_msg.edit_text(
                     "❌ دانلود شکست خورد. ممکن است پیج پرایوت باشد."
                 )
+                await log_upload_failed("instagram", chat_id)
 
         except asyncio.TimeoutError:
             await processing_msg.edit_text(
                 "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
             )
+            await log_upload_failed("instagram", chat_id)
         except Exception as e:
             print(f"Insta DL Error: {e}")
             await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+            await log_upload_failed("instagram", chat_id)
         finally:
             if file_path and os.path.exists(file_path):
                 try:

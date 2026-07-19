@@ -27,6 +27,7 @@ from core.database import (
     increment_kaggle_downloads,
     is_vip,
     log_upload_success,
+    log_upload_failed,
     KAGGLE_LIMIT_FREE,
     KAGGLE_LIMIT_VIP,
 )
@@ -132,6 +133,7 @@ async def process_kaggle_download(
                 f"جزئیات: {type(e).__name__}",
                 parse_mode="Markdown",
             )
+            await log_upload_failed("kaggle", user_id)
             return
 
         # ── Step 2: Check if anything was downloaded ──
@@ -198,6 +200,8 @@ async def process_kaggle_download(
                 f"✅ ارسال کامل شد!\n"
                 f"⬇️ دانلودهای باقی‌مانده امروز: {remaining}",
             )
+        else:
+            await log_upload_failed("kaggle", user_id)
 
     finally:
         cleanup_temp(dl_dir)
@@ -236,6 +240,7 @@ async def handle_kaggle_state(
         except Exception:
             logger.exception("Kaggle search failed")
             await update.message.reply_text("❌ خطا در ارتباط با سرور کاگل.")
+            await log_upload_failed("kaggle", user_id)
             clear_state(chat_id)
             return
 

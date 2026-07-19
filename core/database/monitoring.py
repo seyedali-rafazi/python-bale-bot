@@ -9,21 +9,23 @@ from .connection import get_db
 from .utils import TEHRAN_TZ, get_tehran_now_full, get_tehran_today
 
 SECTION_LABELS = {
-    "youtube": "🎬 یوتیوب",
-    "music": "🎵 موسیقی",
-    "pinterest": "📌 پینترست",
-    "tiktok": "🎭 تیک‌تاک",
-    "github": "💻 گیت‌هاب",
-    "instagram": "📸 اینستاگرام",
-    "web_search": "🔍 جستجوی وب",
-    "yt_archive": "📚 آرشیو یوتیوب",
-    "ai_chat": "🤖 هوش مصنوعی",
-    "cloud": "☁️ فضای ابری",
-    "translation": "🌐 ترجمه",
-    "weather": "🌤 هواشناسی",
-    "payment": "💳 پرداخت",
-    "telegram": "✈️ تلگرام",
+    "youtube":          "🎬 یوتیوب",
+    "music":            "🎵 موسیقی",
+    "pinterest":        "📌 پینترست",
+    "tiktok":           "🎭 تیک‌تاک",
+    "github":           "💻 گیت‌هاب",
+    "instagram":        "📸 اینستاگرام",
+    "web_search":       "🔍 جستجوی وب",
+    "yt_archive":       "📚 آرشیو یوتیوب",
+    "ai_chat":          "🤖 هوش مصنوعی",
+    "cloud":            "☁️ فضای ابری",
+    "translation":      "🌐 ترجمه",
+    "weather":          "🌤 هواشناسی",
+    "payment":          "💳 پرداخت",
+    "telegram":         "✈️ تلگرام",
     "image_processing": "🖼 پردازش تصویر",
+    "kaggle":           "🗂 کاگل",
+    "book":             "📖 کتاب",
 }
 
 ALL_SECTIONS = list(SECTION_LABELS.keys())
@@ -56,23 +58,30 @@ async def log_upload_success(section: str, user_id: str | None = None) -> None:
     await log_monitor_event(section, user_id, "upload_success")
 
 
+async def log_upload_failed(section: str, user_id: str | None = None) -> None:
+    """Log a failed request/upload for a given section."""
+    await log_monitor_event(section, user_id, "upload_failed")
+
+
 async def log_user_active(user_id: str) -> None:
     await log_monitor_event("bot", user_id, "user_active")
 
 
-async def _section_counts_between(start: str, end: str) -> dict[str, int]:
+async def _section_counts_between(
+    start: str, end: str, event_type: str = "upload_success"
+) -> dict[str, int]:
     conn = await get_db()
     counts = {section: 0 for section in ALL_SECTIONS}
     async with conn.execute(
         """
         SELECT section, COUNT(*) AS cnt
         FROM monitoring_events
-        WHERE event_type = 'upload_success'
+        WHERE event_type = ?
           AND created_at >= ?
           AND created_at < ?
         GROUP BY section
         """,
-        (start, end),
+        (event_type, start, end),
     ) as cursor:
         rows = await cursor.fetchall()
     for row in rows:
@@ -83,16 +92,18 @@ async def _section_counts_between(start: str, end: str) -> dict[str, int]:
     return counts
 
 
-async def _count_responses_between(start: str, end: str) -> int:
+async def _count_responses_between(
+    start: str, end: str, event_type: str = "upload_success"
+) -> int:
     conn = await get_db()
     async with conn.execute(
         """
         SELECT COUNT(*) FROM monitoring_events
-        WHERE event_type = 'upload_success'
+        WHERE event_type = ?
           AND created_at >= ?
           AND created_at < ?
         """,
-        (start, end),
+        (event_type, start, end),
     ) as cursor:
         row = await cursor.fetchone()
         return row[0] if row else 0
@@ -156,19 +167,34 @@ async def get_monitoring_report_data() -> dict:
         + timedelta(days=1)
     ).strftime("%Y-%m-%d 00:00:00")
 
-    hour_counts = await _section_counts_between(hour_start, hour_end)
-    today_counts = await _section_counts_between(today_start, tomorrow)
+    # Success counts
+    hour_ok  = await _section_counts_between(hour_start, hour_end, "upload_success")
+    today_ok = await _section_counts_between(today_start, tomorrow, "upload_success")
+
+    # Failed counts
+    hour_fail  = await _section_counts_between(hour_start, hour_end, "upload_failed")
+    today_fail = await _section_counts_between(today_start, tomorrow, "upload_failed")
 
     return {
         "report_date": today,
-        "hour_label": f"{label_start} – {label_end}",
-        "hour_start": hour_start,
-        "hour_end": hour_end,
-        "hour_section_counts": hour_counts,
-        "today_section_counts": today_counts,
-        "hour_responses": await _count_responses_between(hour_start, hour_end),
-        "today_responses": await _count_responses_between(today_start, tomorrow),
-        "hour_active_users": await _count_active_users_between(hour_start, hour_end),
+        "hour_label":  f"{label_start} – {label_end}",
+        "hour_start":  hour_start,
+        "hour_end":    hour_end,
+
+        # success
+        "hour_section_counts":  hour_ok,
+        "today_section_counts": today_ok,
+        "hour_responses":       await _count_responses_between(hour_start, hour_end, "upload_success"),
+        "today_responses":      await _count_responses_between(today_start, tomorrow, "upload_success"),
+
+        # failures
+        "hour_section_fails":   hour_fail,
+        "today_section_fails":  today_fail,
+        "hour_failures":        await _count_responses_between(hour_start, hour_end, "upload_failed"),
+        "today_failures":       await _count_responses_between(today_start, tomorrow, "upload_failed"),
+
+        # users
+        "hour_active_users":  await _count_active_users_between(hour_start, hour_end),
         "today_active_users": await count_active_users_today(),
     }
 

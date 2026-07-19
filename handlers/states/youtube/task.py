@@ -12,6 +12,7 @@ from core.database import (
     add_cloud_file,
     get_available_cloud_mb,
     log_upload_success,
+    log_upload_failed,
 )
 from services.youtube import (
     download_youtube_video,
@@ -474,7 +475,7 @@ async def background_yt_download(
                                         chat_id=chat_id,
                                         text="❌ خطا در آپلود ابری.",
                                     )
-
+                                    await log_upload_failed("youtube", chat_id)
                                     await decrement_yt_downloads(chat_id)
 
                             # =========================
@@ -544,6 +545,7 @@ async def background_yt_download(
                             chat_id=chat_id,
                             text="❌ خطا در دانلود یا ارسال ویدیو. لطفاً بعداً دوباره تلاش کنید.",
                         )
+                        await log_upload_failed("youtube", chat_id)
                         await decrement_yt_downloads(chat_id)
 
                     finally:
@@ -776,6 +778,7 @@ async def background_yt_download(
                                 text="❌ دانلود شکست خورد.",
                             )
 
+                            await log_upload_failed("youtube", chat_id)
                             await decrement_yt_downloads(chat_id)
 
                     except Exception as send_err:
@@ -784,6 +787,7 @@ async def background_yt_download(
                             text=f"❌ خطا: {str(send_err)}",
                         )
 
+                        await log_upload_failed("youtube", chat_id)
                         await decrement_yt_downloads(chat_id)
 
                     finally:

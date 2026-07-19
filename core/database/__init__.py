@@ -102,6 +102,7 @@ from .user_ai import (
 from .monitoring import (
     log_monitor_event,
     log_upload_success,
+    log_upload_failed,
     log_user_active,
     get_monitoring_report_data,
     count_active_users_today,

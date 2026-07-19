@@ -17,6 +17,7 @@ from core.database import (
     get_tt_downloads,
     increment_tt_downloads,
     log_upload_success,
+    log_upload_failed,
 )
 from core.limits import get_limit
 
@@ -69,12 +70,13 @@ async def background_tt_download(
 
             file_path = await download_tiktok_video(url)
 
-            if not file_path or not os.path.exists(file_path):
+                if file_path and not os.path.exists(file_path):
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
                     text="❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.",
                 )
+                await log_upload_failed("tiktok", user_id)
                 return
 
             safe_title = _strip_hashtags(title) or "tiktok_video"
@@ -109,6 +111,7 @@ async def background_tt_download(
         await context.bot.send_message(
             chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
         )
+        await log_upload_failed("tiktok", user_id)
     finally:
         if "file_path" in locals() and file_path and os.path.exists(file_path):
             try:

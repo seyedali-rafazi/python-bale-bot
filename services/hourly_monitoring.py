@@ -25,25 +25,46 @@ MONITORING_ENABLED = os.getenv("MONITORING_ENABLED", "1").strip().lower() in (
 )
 
 
-def _format_section_block(counts: dict[str, int]) -> list[str]:
+def _format_section_block(
+    ok_counts: dict[str, int],
+    fail_counts: dict[str, int],
+) -> list[str]:
+    """
+    Format one table-row per active section showing:
+      Label  ✅ N  ❌ M
+    Only sections that had at least one event (success or failure) are shown.
+    """
     lines: list[str] = []
-    total = 0
+    total_ok = 0
+    total_fail = 0
+
     for section in ALL_SECTIONS:
-        count = counts.get(section, 0)
-        if count <= 0:
+        ok = ok_counts.get(section, 0)
+        fail = fail_counts.get(section, 0)
+        if ok == 0 and fail == 0:
             continue
-        total += count
-        lines.append(f"  {SECTION_LABELS[section]}: {count}")
-    if total == 0:
+        total_ok += ok
+        total_fail += fail
+        label = SECTION_LABELS[section]
+        lines.append(f"  {label}: ✅ {ok}  ❌ {fail}")
+
+    if not lines:
         lines.append("  — فعالیتی ثبت نشده")
     else:
-        lines.append(f"  📦 جمع: {total}")
+        lines.append(f"  {'─' * 20}")
+        lines.append(f"  📦 جمع: ✅ {total_ok}  ❌ {total_fail}")
+
     return lines
 
 
 def build_monitoring_report_text(data: dict, total_users: int, vip_users: int) -> str:
     now_label = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     normal_users = total_users - vip_users
+
+    hour_ok   = data["hour_section_counts"]
+    hour_fail = data["hour_section_fails"]
+    day_ok    = data["today_section_counts"]
+    day_fail  = data["today_section_fails"]
 
     lines = [
         "📊 گزارش ساعتی ربات",
@@ -55,15 +76,15 @@ def build_monitoring_report_text(data: dict, total_users: int, vip_users: int) -
         f"  • امروز: {data['today_active_users']} نفر",
         f"  • این ساعت: {data['hour_active_users']} نفر",
         "",
-        "✅ آپلود / پاسخ موفق — این ساعت",
-        *_format_section_block(data["hour_section_counts"]),
+        "📊 عملکرد این ساعت  (✅ موفق  |  ❌ ناموفق)",
+        *_format_section_block(hour_ok, hour_fail),
         "",
-        f"💬 کل پاسخ‌های موفق این ساعت: {data['hour_responses']}",
+        f"💬 کل این ساعت: ✅ {data['hour_responses']}  ❌ {data['hour_failures']}",
         "",
-        "📈 مجموع موفق امروز (از نیمه‌شب)",
-        *_format_section_block(data["today_section_counts"]),
+        "📈 عملکرد امروز (از نیمه‌شب)  (✅ موفق  |  ❌ ناموفق)",
+        *_format_section_block(day_ok, day_fail),
         "",
-        f"💬 کل پاسخ‌های موفق امروز: {data['today_responses']}",
+        f"💬 کل امروز: ✅ {data['today_responses']}  ❌ {data['today_failures']}",
         "",
         "📋 آمار کلی کاربران",
         f"  • کل کاربران: {total_users}",

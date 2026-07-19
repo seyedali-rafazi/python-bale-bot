@@ -19,6 +19,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import clear_state
+from core.database import log_upload_failed
 from services.book import search_books, download_book, format_book_info
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ async def _handle_book_search(
     except Exception:
         logger.exception("Book search failed for query: %s", query)
         await msg.edit_text("❌ خطا در ارتباط با سرور Open Library. لطفاً دوباره تلاش کنید.")
+        await log_upload_failed("book", chat_id)
         return
 
     if not books:
@@ -144,6 +146,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 f"https://archive.org/details/{ia_id}\n"
                 "دانلود کنید.",
             )
+            await log_upload_failed("book", chat_id)
             return
 
         # Send the file
@@ -173,3 +176,4 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 chat_id,
                 "❌ خطا در ارسال فایل. لطفاً دوباره تلاش کنید.",
             )
+            await log_upload_failed("book", chat_id)
