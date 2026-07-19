@@ -76,6 +76,8 @@ from .menus import (
     btn_kaggle_search_req,
     btn_kaggle_popular_req,
     btn_kaggle_dl_link_req,
+    btn_book_menu,
+    btn_book_search_req,
 )
 from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
@@ -116,6 +118,7 @@ from handlers.states.youtube import (
 from handlers.states.state_github import github_callback_handler
 from handlers.states.state_web_search import web_search_callback
 from handlers.states.state_kaggle import kaggle_callback_handler
+from handlers.states.state_book import book_callback_handler
 
 from .menus.cloud import btn_cloud_storage_menu
 from handlers.states.state_cloud import (
@@ -517,6 +520,21 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(kaggle_callback_handler, pattern=r"^kgdl_")
+    )
+
+    # ─── هندلرهای دانلود کتاب ───
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_BOOK_DOWNLOAD)}$"), btn_book_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_BOOK_SEARCH)}$"), btn_book_search_req
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(book_callback_handler, pattern=r"^bookdl_")
     )
 
     # هندلر های پرداخت

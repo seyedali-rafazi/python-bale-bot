@@ -226,6 +226,15 @@ def get_image_processing_menu_keyboard():
 def get_research_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_KAGGLE)],
+        [KeyboardButton(BTN_BOOK_DOWNLOAD)],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_book_menu_keyboard():
+    keyboard = [
+        [KeyboardButton(BTN_BOOK_SEARCH)],
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

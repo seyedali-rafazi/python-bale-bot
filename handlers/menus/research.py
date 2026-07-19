@@ -123,3 +123,31 @@ async def btn_kaggle_dl_link_req(update: Update, context: ContextTypes.DEFAULT_T
         "• `heptapod/titanic`",
         parse_mode="Markdown",
     )
+
+
+async def btn_book_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the book download sub-menu."""
+    if not await ensure_membership(update, context):
+        return
+    from core.keyboards import get_book_menu_keyboard
+
+    await update.message.reply_text(
+        "📖 *بخش دانلود کتاب*\n\n"
+        "از این بخش می‌توانید کتاب‌های رایگان و عمومی را جستجو و دانلود کنید.\n\n"
+        "📚 منبع: Open Library & Internet Archive\n"
+        "📄 فرمت: PDF / EPUB",
+        reply_markup=get_book_menu_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+async def btn_book_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompts user to enter a book title or author."""
+    if not await ensure_membership(update, context):
+        return
+    set_state(str(update.effective_chat.id), "waiting_book_search")
+    await update.message.reply_text(
+        "🔍 نام کتاب یا نویسنده را وارد کنید:\n"
+        "مثال: `Python Programming` یا `Clean Code` یا `ابوعلی سینا`",
+        parse_mode="Markdown",
+    )

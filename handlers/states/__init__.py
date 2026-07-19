@@ -27,6 +27,7 @@ from .state_image_processing import (
     handle_img_extract_audio,
 )
 from .state_kaggle import handle_kaggle_state
+from .state_book import handle_book_state
 
 _MENU_HINT_COOLDOWN_SEC = 3.0
 _last_menu_hint_at: dict[str, float] = {}
@@ -154,6 +155,9 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     elif step.startswith("waiting_kaggle"):
         await handle_kaggle_state(update, context, step, text, chat_id, state_data)
+
+    elif step.startswith("waiting_book"):
+        await handle_book_state(update, context, step, text, chat_id, state_data)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
