@@ -54,14 +54,14 @@ def _get_api():
 # ──────────────────────────────────────────────────────────────────────────────
 def _search_datasets_sync(query: str, max_results: int = 8) -> list:
     api = _get_api()
-    results = api.dataset_list(search=query, page_size=max_results)
-    return list(results)
+    results = api.dataset_list(search=query)
+    return list(results)[:max_results]
 
 
 def _list_popular_datasets_sync(max_results: int = 8) -> list:
     api = _get_api()
-    results = api.dataset_list(sort_by="votes", page_size=max_results)
-    return list(results)
+    results = api.dataset_list(sort_by="votes")
+    return list(results)[:max_results]
 
 
 async def search_datasets(query: str, max_results: int = 8) -> list:
