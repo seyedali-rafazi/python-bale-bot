@@ -70,7 +70,7 @@ async def background_tt_download(
 
             file_path = await download_tiktok_video(url)
 
-                if file_path and not os.path.exists(file_path):
+            if not file_path or not os.path.exists(file_path):
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
