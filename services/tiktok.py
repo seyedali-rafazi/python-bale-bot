@@ -6,6 +6,8 @@ import glob
 import json
 import logging
 import urllib.parse
+import html
+import re
 from dotenv import load_dotenv
 
 from services.http_client import get_http_session
@@ -39,6 +41,39 @@ def _get_proxy() -> str | None:
         or os.getenv("HTTPS_PROXY")
         or os.getenv("HTTP_PROXY")
     )
+
+
+def _extract_json_data(text: str) -> dict | list | None:
+    """Extract and parse JSON payload even if wrapped inside HTML <pre> tags by Chrome/FlareSolverr."""
+    if not text:
+        return None
+    clean_text = text.strip()
+
+    # 1. Direct JSON parse
+    try:
+        return json.loads(clean_text)
+    except Exception:
+        pass
+
+    # 2. Extract from <pre>...</pre> tag (Chromium JSON viewer wrapper)
+    match = re.search(r"<pre[^>]*>([\s\S]*?)</pre>", clean_text, re.IGNORECASE)
+    if match:
+        extracted = html.unescape(match.group(1).strip())
+        try:
+            return json.loads(extracted)
+        except Exception:
+            pass
+
+    # 3. Regex fallback to find JSON object or array
+    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", clean_text)
+    if match:
+        extracted = html.unescape(match.group(1).strip())
+        try:
+            return json.loads(extracted)
+        except Exception:
+            pass
+
+    return None
 
 
 async def download_tiktok_video(url: str):
@@ -126,14 +161,12 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                 async with session.post(endpoint, data=post_data, **kwargs) as response:
                     if response.status == 200:
                         text_data = await response.text()
-                        try:
-                            data = json.loads(text_data)
+                        data = _extract_json_data(text_data)
+                        if data:
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
                                 return results
-                        except json.JSONDecodeError as json_err:
-                            logger.error("[TikTok] POST JSON decode error from %s: %s | text: %s", endpoint, json_err, text_data[:200])
                     elif response.status == 403:
                         cf_blocked = True
                         logger.warning("[TikTok] POST search HTTP 403 (Cloudflare) from %s", endpoint)
@@ -150,14 +183,12 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                 async with session.get(get_url, **kwargs) as response:
                     if response.status == 200:
                         text_data = await response.text()
-                        try:
-                            data = json.loads(text_data)
+                        data = _extract_json_data(text_data)
+                        if data:
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
                                 return results
-                        except json.JSONDecodeError as json_err:
-                            logger.error("[TikTok] GET JSON decode error from %s: %s | text: %s", endpoint, json_err, text_data[:200])
                     elif response.status == 403:
                         cf_blocked = True
                         logger.warning("[TikTok] GET search HTTP 403 (Cloudflare) from %s", endpoint)
@@ -198,14 +229,14 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
 
             if solution and solution.get("response"):
                 raw_resp = solution["response"]
-                try:
-                    data = json.loads(raw_resp)
+                data = _extract_json_data(raw_resp)
+                if data:
                     results = _parse_tikwm_search_response(data, max_results)
                     if results:
                         logger.info("[TikTok] FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
                         return results
-                except json.JSONDecodeError:
-                    logger.error("[TikTok] FlareSolverr response was not JSON: %s", raw_resp[:300])
+                else:
+                    logger.error("[TikTok] FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
 
         if not results:
             logger.error(
@@ -303,43 +334,41 @@ async def get_tiktok_trends(count: int = 10):
             try:
                 async with session.get(url, **kwargs) as response:
                     if response.status == 200:
-                        data = await response.json()
+                        text_data = await response.text()
+                        data = _extract_json_data(text_data)
+                        if isinstance(data, dict) and data.get("code") == 0:
+                            data_block = data.get("data")
+                            videos = []
+                            if isinstance(data_block, list):
+                                videos = data_block
+                            elif isinstance(data_block, dict):
+                                videos = data_block.get("videos") or data_block.get("list") or []
 
-                        if not isinstance(data, dict) or data.get("code") != 0:
-                            continue
+                            for item in videos:
+                                if not isinstance(item, dict):
+                                    continue
 
-                        data_block = data.get("data")
-                        videos = []
-                        if isinstance(data_block, list):
-                            videos = data_block
-                        elif isinstance(data_block, dict):
-                            videos = data_block.get("videos") or data_block.get("list") or []
+                                title = item.get("title") or item.get("desc") or "Trending video"
+                                video_id = item.get("video_id") or item.get("id")
 
-                        for item in videos:
-                            if not isinstance(item, dict):
-                                continue
+                                author_data = item.get("author")
+                                if isinstance(author_data, dict):
+                                    author = author_data.get("unique_id", "user")
+                                else:
+                                    author = "user"
 
-                            title = item.get("title") or item.get("desc") or "Trending video"
-                            video_id = item.get("video_id") or item.get("id")
+                                if not video_id:
+                                    continue
 
-                            author_data = item.get("author")
-                            if isinstance(author_data, dict):
-                                author = author_data.get("unique_id", "user")
-                            else:
-                                author = "user"
+                                link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
-                            if not video_id:
-                                continue
+                                results.append({"title": title, "url": link})
 
-                            link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                                if len(results) >= count:
+                                    break
 
-                            results.append({"title": title, "url": link})
-
-                            if len(results) >= count:
-                                break
-
-                        if results:
-                            return results
+                            if results:
+                                return results
                     elif response.status == 403:
                         cf_blocked = True
                         logger.warning("[TikTok] Trends HTTP 403 (Cloudflare) from %s", url)
@@ -354,42 +383,39 @@ async def get_tiktok_trends(count: int = 10):
 
             if solution and solution.get("response"):
                 raw_resp = solution["response"]
-                try:
-                    data = json.loads(raw_resp)
-                    if isinstance(data, dict) and data.get("code") == 0:
-                        data_block = data.get("data")
-                        videos = []
-                        if isinstance(data_block, list):
-                            videos = data_block
-                        elif isinstance(data_block, dict):
-                            videos = data_block.get("videos") or data_block.get("list") or []
+                data = _extract_json_data(raw_resp)
+                if isinstance(data, dict) and data.get("code") == 0:
+                    data_block = data.get("data")
+                    videos = []
+                    if isinstance(data_block, list):
+                        videos = data_block
+                    elif isinstance(data_block, dict):
+                        videos = data_block.get("videos") or data_block.get("list") or []
 
-                        for item in videos:
-                            if not isinstance(item, dict):
-                                continue
+                    for item in videos:
+                        if not isinstance(item, dict):
+                            continue
 
-                            title = item.get("title") or item.get("desc") or "Trending video"
-                            video_id = item.get("video_id") or item.get("id")
+                        title = item.get("title") or item.get("desc") or "Trending video"
+                        video_id = item.get("video_id") or item.get("id")
 
-                            author_data = item.get("author")
-                            if isinstance(author_data, dict):
-                                author = author_data.get("unique_id", "user")
-                            else:
-                                author = "user"
+                        author_data = item.get("author")
+                        if isinstance(author_data, dict):
+                            author = author_data.get("unique_id", "user")
+                        else:
+                            author = "user"
 
-                            if not video_id:
-                                continue
+                        if not video_id:
+                            continue
 
-                            link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
-                            results.append({"title": title, "url": link})
+                        results.append({"title": title, "url": link})
 
-                            if len(results) >= count:
-                                break
+                        if len(results) >= count:
+                            break
 
-                        if results:
-                            return results
-                except json.JSONDecodeError:
-                    pass
+                    if results:
+                        return results
 
     return results
