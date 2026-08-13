@@ -20,9 +20,9 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_PROGRAMMING),
             KeyboardButton(BTN_GOOGLE_SEARCH),
         ],
-        [KeyboardButton(BTN_RESEARCH)],
+        [KeyboardButton(BTN_DL_YOUTUBE)],
         [KeyboardButton(BTN_DL_TIKTOK)],
-        [KeyboardButton(BTN_DL_YOUTUBE), KeyboardButton(BTN_YT_MY_CACHE)],
+        [KeyboardButton(BTN_RESEARCH), KeyboardButton(BTN_YT_MY_CACHE)],
         [
             KeyboardButton(BTN_DL_INSTA),
             KeyboardButton(BTN_PINTEREST),

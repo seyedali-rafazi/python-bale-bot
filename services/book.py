@@ -132,11 +132,14 @@ def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
     with _make_client() as client:
         resp = _get_with_retry(
             client, _GUTENDEX_URL,
-            params={"search": query, "languages": "en,fa,ar,fr,de,es"},
+            params={"search": query},
         )
         if not resp:
             return []
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception:
+            return []
 
     books = []
     for item in data.get("results", [])[:max_results * 2]:
@@ -184,7 +187,7 @@ def _search_standard_ebooks_sync(query: str, max_results: int) -> List[dict]:
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            logger.warning("Standard Ebooks OPDS failed: %s", e)
+            logger.debug("Standard Ebooks OPDS unavailable: %s", e)
             return []
 
     query_words = set(query.lower().split())
@@ -308,62 +311,65 @@ def _search_doab_sync(query: str, max_results: int) -> List[dict]:
         )
         if not resp:
             return []
-        items = resp.json()
+        try:
+            items = resp.json()
+        except Exception:
+            return []
 
-    books = []
-    if not isinstance(items, list):
-        return []
+        books = []
+        if not isinstance(items, list):
+            return []
 
-    for item in items:
-        metadata = item.get("metadata", []) or []
+        for item in items:
+            metadata = item.get("metadata", []) or []
 
-        def _meta(key: str) -> str:
-            for m in metadata:
-                if m.get("key") == key:
-                    return (m.get("value") or "").strip()
-            return ""
+            def _meta(key: str) -> str:
+                for m in metadata:
+                    if m.get("key") == key:
+                        return (m.get("value") or "").strip()
+                return ""
 
-        title  = _meta("dc.title") or "نامشخص"
-        author = _meta("dc.contributor.author") or _meta("dc.creator") or "نامشخص"
-        year   = (_meta("dc.date.issued") or "—")[:4]
+            title  = _meta("dc.title") or "نامشخص"
+            author = _meta("dc.contributor.author") or _meta("dc.creator") or "نامشخص"
+            year   = (_meta("dc.date.issued") or "—")[:4]
 
-        # Get DOAB handle for the check API
-        handle = _meta("dc.identifier.uri") or ""
-        doab_id = item.get("handle", "").replace("20.500.12854/", "") if item.get("handle") else ""
+            # Get DOAB handle for the check API
+            handle = _meta("dc.identifier.uri") or ""
+            doab_id = item.get("handle", "").replace("20.500.12854/", "") if item.get("handle") else ""
 
-        # Try DOAB-Check API to get a direct PDF link
-        dl_url = None
-        if doab_id:
-            try:
-                check_resp = _get_with_retry(
-                    client,
-                    _DOAB_CHECK.format(doab_id=doab_id),
-                    retries=1,
-                )
-                if check_resp:
-                    check_data = check_resp.json()
-                    for link in check_data.get("links", []):
-                        if link.get("content_type") == "pdf" and link.get("url"):
-                            dl_url = link["url"]
-                            break
-            except Exception as e:
-                logger.debug("DOAB-Check failed for %s: %s", doab_id, e)
+            # Try DOAB-Check API to get a direct PDF link
+            dl_url = None
+            if doab_id:
+                try:
+                    check_resp = _get_with_retry(
+                        client,
+                        _DOAB_CHECK.format(doab_id=doab_id),
+                        retries=1,
+                    )
+                    if check_resp:
+                        check_data = check_resp.json()
+                        for link in check_data.get("links", []):
+                            if link.get("content_type") == "pdf" and link.get("url"):
+                                dl_url = link["url"]
+                                break
+                except Exception as e:
+                    logger.debug("DOAB-Check failed for %s: %s", doab_id, e)
 
-        books.append({
-            "title":        title[:80],
-            "author":       author[:60],
-            "year":         year,
-            "source":       SRC_DOAB,
-            "source_label": SOURCE_LABELS[SRC_DOAB],
-            "has_file":     bool(dl_url),
-            "download_url": dl_url,
-            "file_ext":     ".pdf",
-            "book_id":      doab_id,
-        })
-        if len(books) >= max_results:
-            break
+            books.append({
+                "title":        title[:80],
+                "author":       author[:60],
+                "year":         year,
+                "source":       SRC_DOAB,
+                "source_label": SOURCE_LABELS[SRC_DOAB],
+                "has_file":     bool(dl_url),
+                "download_url": dl_url,
+                "file_ext":     ".pdf",
+                "book_id":      doab_id,
+            })
+            if len(books) >= max_results:
+                break
 
-    return books
+        return books
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -433,7 +439,7 @@ def _download_url_sync(
             try:
                 with client.stream("GET", download_url) as stream:
                     if stream.status_code != 200:
-                        logger.warning("Download URL returned HTTP %d: %s", stream.status_code, download_url)
+                        logger.info("Download URL returned HTTP %d: %s", stream.status_code, download_url)
                         _safe_unlink(dest_path)
                         return False
 
