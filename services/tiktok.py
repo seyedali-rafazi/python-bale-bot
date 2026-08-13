@@ -37,9 +37,9 @@ DEFAULT_HEADERS = {
 def _get_proxy() -> str | None:
     return (
         os.getenv("TIKTOK_PROXY")
-        or os.getenv("PROXY")
         or os.getenv("HTTPS_PROXY")
         or os.getenv("HTTP_PROXY")
+        or os.getenv("PROXY")
     )
 
 
@@ -76,10 +76,7 @@ def _extract_json_data(text: str) -> dict | list | None:
     return None
 
 
-async def download_tiktok_video(url: str):
-    """دانلود ویدیوی تیک‌تاک با استفاده از yt-dlp"""
-    logger.info("[TikTok] Start downloading: %s", url)
-
+async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None:
     req_id = uuid.uuid4().hex
     output_template = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.%(ext)s")
 
@@ -94,7 +91,6 @@ async def download_tiktok_video(url: str):
         "--no-playlist",
     ]
 
-    proxy = _get_proxy()
     if proxy:
         cmd.extend(["--proxy", proxy])
 
@@ -110,15 +106,37 @@ async def download_tiktok_video(url: str):
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
-            logger.error("[TikTok] Download failed: %s", stderr.decode("utf-8", errors="ignore"))
+            err_msg = stderr.decode("utf-8", errors="ignore")
+            logger.warning("[TikTok] yt-dlp failed (proxy=%s): %s", proxy or "none", err_msg.strip()[:300])
             return None
 
         files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
         return files[0] if files else None
 
     except Exception as e:
-        logger.exception("[TikTok] Exception during download: %s", e)
+        logger.exception("[TikTok] Exception running yt-dlp (proxy=%s): %s", proxy or "none", e)
         return None
+
+
+async def download_tiktok_video(url: str):
+    """دانلود ویدیوی تیک‌تاک با استفاده از yt-dlp (با فال‌بک دانلود مستقیم در صورت خرابی یا قطعی پروکسی)"""
+    logger.info("[TikTok] Start downloading: %s", url)
+
+    proxy = _get_proxy()
+
+    # تلاش اول: با پروکسی در صورت وجود
+    if proxy:
+        file_path = await _exec_ytdlp_download(url, proxy=proxy)
+        if file_path:
+            return file_path
+        logger.warning("[TikTok] Download with proxy '%s' failed. Retrying direct download without proxy...", proxy)
+
+    # تلاش دوم / مستقیم: بدون پروکسی
+    file_path = await _exec_ytdlp_download(url, proxy=None)
+    if file_path:
+        return file_path
+
+    return None
 
 
 async def search_tiktok_videos(query: str, max_results: int = 10):
