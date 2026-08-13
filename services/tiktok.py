@@ -4,22 +4,45 @@ import uuid
 import asyncio
 import glob
 import json
-
+import logging
+import urllib.parse
 from dotenv import load_dotenv
 
 from services.http_client import get_http_session
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
 
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.tikwm.com/",
+}
+
+
+def _get_proxy() -> str | None:
+    return (
+        os.getenv("TIKTOK_PROXY")
+        or os.getenv("PROXY")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("HTTP_PROXY")
+    )
+
 
 async def download_tiktok_video(url: str):
-    """دانلود ویدیوی تیک‌تاک"""
-    print(f"[TikTok] Start downloading: {url}")
+    """دانلود ویدیوی تیک‌تاک با استفاده از yt-dlp"""
+    logger.info("[TikTok] Start downloading: %s", url)
 
     req_id = uuid.uuid4().hex
     output_template = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.%(ext)s")
@@ -33,155 +56,247 @@ async def download_tiktok_video(url: str):
         "-o",
         output_template,
         "--no-playlist",
-        url,
     ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    proxy = _get_proxy()
+    if proxy:
+        cmd.extend(["--proxy", proxy])
 
-    stdout, stderr = await process.communicate()
+    cmd.append(url)
 
-    if process.returncode != 0:
-        print(f"[TikTok] Download failed: {stderr.decode()}")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logger.error("[TikTok] Download failed: %s", stderr.decode("utf-8", errors="ignore"))
+            return None
+
+        files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
+        return files[0] if files else None
+
+    except Exception as e:
+        logger.exception("[TikTok] Exception during download: %s", e)
         return None
-
-    files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
-    return files[0] if files else None
 
 
 async def search_tiktok_videos(query: str, max_results: int = 10):
-    """جستجوی ویدیو در تیک‌تاک"""
-    url = f"https://www.tikwm.com/api/feed/search?keywords={query}&count={max_results}"
+    """جستجوی ویدیو در تیک‌تاک با انکودینگ صحیح، ارسال POST/GET، پورت کانکشن و لاگ دقیق خطاها"""
+    clean_query = query.strip()
+    if not clean_query:
+        return []
 
     results = []
 
     async with TIKWM_API_SEMAPHORE:
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
-        try:
-            session = await get_http_session()
-            async with session.get(url, timeout=15) as response:
-                if response.status != 200:
-                    return results
+        session = await get_http_session()
 
-                text_data = await response.text()
+        endpoints = [
+            "https://www.tikwm.com/api/feed/search",
+            "https://tikwm.com/api/feed/search",
+        ]
 
-                try:
-                    data = json.loads(text_data)
-                except json.JSONDecodeError:
-                    print("[TikTok] JSON decode error")
-                    return results
+        proxy = _get_proxy()
+        kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+            kwargs["proxy"] = proxy
 
-                if not isinstance(data, dict):
-                    return results
-
-                if data.get("code") != 0:
-                    return results
-
-                data_block = data.get("data")
-
-                if not isinstance(data_block, dict):
-                    return results
-
-                videos = data_block.get("videos")
-
-                if not isinstance(videos, list):
-                    return results
-
-                for item in videos:
-                    if not isinstance(item, dict):
-                        continue
-
-                    title = item.get("title") or "بدون کپشن"
-                    title = title.strip()
-                    if not title:
-                        title = "بدون کپشن"
-
-                    if len(title) > 50:
-                        title = title[:50] + "..."
-
-                    video_id = item.get("video_id") or item.get("id")
-                    if not video_id:
-                        continue
-
-                    author_data = item.get("author")
-
-                    if isinstance(author_data, dict):
-                        author = (
-                            author_data.get("unique_id")
-                            or author_data.get("id")
-                            or "user"
-                        )
-                    elif isinstance(author_data, str):
-                        author = author_data
+        for endpoint in endpoints:
+            # روش ۱: ارسال POST با فرم دیتا
+            try:
+                post_data = {
+                    "keywords": clean_query,
+                    "count": str(max_results),
+                    "cursor": "0",
+                    "web": "1",
+                }
+                async with session.post(endpoint, data=post_data, **kwargs) as response:
+                    if response.status == 200:
+                        text_data = await response.text()
+                        try:
+                            data = json.loads(text_data)
+                            results = _parse_tikwm_search_response(data, max_results)
+                            if results:
+                                logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
+                                return results
+                        except json.JSONDecodeError as json_err:
+                            logger.error("[TikTok] POST JSON decode error from %s: %s | text: %s", endpoint, json_err, text_data[:200])
                     else:
-                        author = "user"
+                        logger.warning(
+                            "[TikTok] POST search HTTP %s from %s",
+                            response.status,
+                            endpoint,
+                        )
+            except Exception as e:
+                logger.warning("[TikTok] POST search error on %s: %s", endpoint, e)
 
-                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+            # روش ۲: ارسال GET با URL Query کاملاً انکود شده
+            try:
+                encoded_query = urllib.parse.quote(clean_query)
+                get_url = f"{endpoint}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
 
-                    results.append({"title": title, "url": link})
+                async with session.get(get_url, **kwargs) as response:
+                    if response.status == 200:
+                        text_data = await response.text()
+                        try:
+                            data = json.loads(text_data)
+                            results = _parse_tikwm_search_response(data, max_results)
+                            if results:
+                                logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
+                                return results
+                        except json.JSONDecodeError as json_err:
+                            logger.error("[TikTok] GET JSON decode error from %s: %s | text: %s", endpoint, json_err, text_data[:200])
+                    else:
+                        logger.warning(
+                            "[TikTok] GET search HTTP %s from %s",
+                            response.status,
+                            endpoint,
+                        )
+            except Exception as e:
+                logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
 
-                    if len(results) >= max_results:
-                        break
+        if not results:
+            logger.error(
+                "[TikTok] Search failed for query '%s': No results returned from TikWM API endpoints",
+                clean_query,
+            )
 
-        except Exception as e:
-            print(f"[TikTok] Search API Error: {e}")
+    return results
+
+
+def _parse_tikwm_search_response(data: dict, max_results: int) -> list:
+    results = []
+    if not isinstance(data, dict):
+        logger.warning("[TikTok] Search response is not a dict: %s", type(data))
+        return results
+
+    code = data.get("code")
+    if code != 0:
+        msg = data.get("msg") or data.get("message") or "Unknown API error"
+        logger.warning("[TikTok] Search API returned code %s: %s", code, msg)
+        return results
+
+    data_block = data.get("data")
+    videos = []
+
+    if isinstance(data_block, dict):
+        videos = data_block.get("videos") or data_block.get("list") or []
+    elif isinstance(data_block, list):
+        videos = data_block
+
+    if not isinstance(videos, list):
+        return results
+
+    for item in videos:
+        if not isinstance(item, dict):
+            continue
+
+        title = item.get("title") or item.get("desc") or "بدون کپشن"
+        title = title.strip()
+        if not title:
+            title = "بدون کپشن"
+
+        if len(title) > 50:
+            title = title[:50] + "..."
+
+        video_id = item.get("video_id") or item.get("id")
+        if not video_id:
+            continue
+
+        author_data = item.get("author")
+        if isinstance(author_data, dict):
+            author = (
+                author_data.get("unique_id")
+                or author_data.get("id")
+                or "user"
+            )
+        elif isinstance(author_data, str):
+            author = author_data
+        else:
+            author = "user"
+
+        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+        results.append({"title": title, "url": link})
+
+        if len(results) >= max_results:
+            break
 
     return results
 
 
 async def get_tiktok_trends(count: int = 10):
-    """گرفتن ویدیوهای ترند"""
-    url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
-
+    """گرفتن ویدیوهای ترند تیک‌تاک"""
     results = []
 
     async with TIKWM_API_SEMAPHORE:
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
-        try:
-            session = await get_http_session()
-            async with session.get(url, timeout=15) as response:
-                if response.status != 200:
-                    return results
+        session = await get_http_session()
 
-                data = await response.json()
+        endpoints = [
+            f"https://www.tikwm.com/api/feed/list?region=US&count={count}",
+            f"https://tikwm.com/api/feed/list?region=US&count={count}",
+        ]
 
-                if not isinstance(data, dict):
-                    return results
+        proxy = _get_proxy()
+        kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+            kwargs["proxy"] = proxy
 
-                data_block = data.get("data")
-
-                if not isinstance(data_block, list):
-                    return results
-
-                for item in data_block:
-                    if not isinstance(item, dict):
+        for url in endpoints:
+            try:
+                async with session.get(url, **kwargs) as response:
+                    if response.status != 200:
+                        logger.warning("[TikTok] Trends HTTP %s from %s", response.status, url)
                         continue
 
-                    title = item.get("title") or "Trending video"
-                    video_id = item.get("video_id")
+                    data = await response.json()
 
-                    author_data = item.get("author")
-                    if isinstance(author_data, dict):
-                        author = author_data.get("unique_id", "user")
-                    else:
-                        author = "user"
-
-                    if not video_id:
+                    if not isinstance(data, dict) or data.get("code") != 0:
                         continue
 
-                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                    data_block = data.get("data")
+                    videos = []
+                    if isinstance(data_block, list):
+                        videos = data_block
+                    elif isinstance(data_block, dict):
+                        videos = data_block.get("videos") or data_block.get("list") or []
 
-                    results.append({"title": title, "url": link})
+                    for item in videos:
+                        if not isinstance(item, dict):
+                            continue
 
-                    if len(results) >= count:
-                        break
+                        title = item.get("title") or item.get("desc") or "Trending video"
+                        video_id = item.get("video_id") or item.get("id")
 
-        except Exception as e:
-            print(f"[TikTok] Trends API Error: {e}")
+                        author_data = item.get("author")
+                        if isinstance(author_data, dict):
+                            author = author_data.get("unique_id", "user")
+                        else:
+                            author = "user"
+
+                        if not video_id:
+                            continue
+
+                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+                        results.append({"title": title, "url": link})
+
+                        if len(results) >= count:
+                            break
+
+                    if results:
+                        return results
+
+            except Exception as e:
+                logger.warning("[TikTok] Trends API Error for %s: %s", url, e)
 
     return results

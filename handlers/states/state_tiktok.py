@@ -3,8 +3,11 @@
 import os
 import asyncio
 import re
+import logging
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
+
+logger = logging.getLogger(__name__)
 from core.state_manager import set_state
 from core.constants import BTN_BACK
 from services.tiktok import (
@@ -175,6 +178,7 @@ async def handle_tiktok_state(
         results = await search_tiktok_videos(text, max_results=10)
 
         if not results:
+            logger.warning("[TikTok] Search returned 0 results for query '%s' from user %s", text, user_id_str)
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
 
