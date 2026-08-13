@@ -65,6 +65,7 @@ def _make_client(verify: bool = True) -> httpx.Client:
         follow_redirects=True,
         verify=verify,
         headers=_HEADERS,
+        trust_env=False,
     )
 
 
@@ -177,9 +178,9 @@ def _search_standard_ebooks_sync(query: str, max_results: int) -> List[dict]:
     Rate limit: don't hammer this endpoint.
     """
     headers = {**_HEADERS, "Accept": "application/opds+json"}
-    with httpx.Client(timeout=_TIMEOUT, follow_redirects=True, headers=headers) as client:
+    with _make_client() as client:
         try:
-            resp = client.get(_SE_OPDS_URL)
+            resp = client.get(_SE_OPDS_URL, headers=headers)
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
@@ -249,7 +250,7 @@ def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
             client, _OL_SEARCH,
             params={
                 "q": query,
-                "fields": "key,title,author_name,first_publish_year,lending_edition_s,cover_i",
+                "fields": "key,title,author_name,first_publish_year,lending_edition_s,cover_i,ia,public_scan_b,has_fulltext",
                 "limit": max_results * 2,
             },
         )
@@ -259,10 +260,13 @@ def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
 
     books = []
     for doc in data.get("docs", []):
-        edition_key = doc.get("lending_edition_s")
-        # Build a direct OL ebook URL if a lending edition exists
-        if edition_key:
-            dl_url = f"{_OL_BASE}/books/{edition_key}.pdf"
+        raw_ia = doc.get("ia") or []
+        ia_list = [item for item in raw_ia if item and isinstance(item, str)]
+
+        # Open Library direct PDF URLs (/books/OL...M.pdf) redirect to verify_human (bot protection HTML page).
+        # Direct file downloads are available via Internet Archive identifiers (ia).
+        if ia_list:
+            dl_url = f"https://archive.org/download/{ia_list[0]}/{ia_list[0]}.pdf"
         else:
             dl_url = None
 
@@ -274,6 +278,7 @@ def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
             "source_label": SOURCE_LABELS[SRC_OL],
             "has_file":     bool(dl_url),
             "download_url": dl_url,
+            "ia_list":      ia_list,
             "file_ext":     ".pdf",
             "book_id":      doc.get("key", ""),
         })
@@ -408,6 +413,14 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Download dispatcher
 # ──────────────────────────────────────────────────────────────────────────────
+def _safe_unlink(path: str) -> None:
+    if os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _download_url_sync(
     download_url: str,
     dest_path: str,
@@ -419,24 +432,61 @@ def _download_url_sync(
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 with client.stream("GET", download_url) as stream:
-                    stream.raise_for_status()
+                    if stream.status_code != 200:
+                        logger.warning("Download URL returned HTTP %d: %s", stream.status_code, download_url)
+                        _safe_unlink(dest_path)
+                        return False
+
+                    content_type = stream.headers.get("content-type", "").lower()
+                    if "text/html" in content_type or "application/xhtml+xml" in content_type:
+                        logger.warning("Download URL returned HTML content: %s (type: %s)", download_url, content_type)
+                        _safe_unlink(dest_path)
+                        return False
+
                     downloaded = 0
+                    first_chunk = True
                     with open(dest_path, "wb") as fh:
                         for chunk in stream.iter_bytes(chunk_size=65536):
+                            if first_chunk:
+                                first_chunk = False
+                                chunk_start = chunk[:512].lower()
+                                # Validate HTML / bot protection signature
+                                if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
+                                    logger.warning("Downloaded payload is HTML page: %s", download_url)
+                                    fh.close()
+                                    _safe_unlink(dest_path)
+                                    return False
+
+                                # Validate PDF / EPUB magic bytes
+                                if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
+                                    logger.warning("File missing PDF magic bytes: %s", download_url)
+                                    fh.close()
+                                    _safe_unlink(dest_path)
+                                    return False
+                                elif dest_path.endswith(".epub") and b"PK\x03\x04" not in chunk[:128]:
+                                    logger.warning("File missing EPUB magic bytes: %s", download_url)
+                                    fh.close()
+                                    _safe_unlink(dest_path)
+                                    return False
+
                             fh.write(chunk)
                             downloaded += len(chunk)
                             if downloaded > MAX_BOOK_BYTES:
                                 logger.warning("File too large (>18 MB): %s", download_url)
+                                fh.close()
+                                _safe_unlink(dest_path)
                                 return False
-                return True
+
+                if os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
+                    return True
+                else:
+                    logger.warning("Downloaded file too small (<10KB): %s", download_url)
+                    _safe_unlink(dest_path)
+                    return False
             except Exception as e:
+                _safe_unlink(dest_path)
                 if attempt < _MAX_RETRIES:
                     logger.info("Download retry %d/%d — %s: %s", attempt + 1, _MAX_RETRIES, download_url, e)
-                    if os.path.exists(dest_path):
-                        try:
-                            os.unlink(dest_path)
-                        except OSError:
-                            pass
                     time.sleep(_RETRY_DELAY)
                 else:
                     logger.warning("Download failed after retries — %s: %s", download_url, e)
@@ -450,28 +500,39 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
     """
     Path(dest_dir).mkdir(parents=True, exist_ok=True)
 
+    urls_to_try: List[tuple[str, str]] = []  # (url, file_ext)
+
     download_url = book.get("download_url")
-    if not download_url:
-        logger.info("No download_url for book: %s", book.get("title"))
+    ext = book.get("file_ext", ".epub")
+    if download_url:
+        urls_to_try.append((download_url, ext))
+
+    # For Open Library books with ia_list, add fallback candidate URLs (PDF & EPUB for top ia items)
+    ia_list = book.get("ia_list") or []
+    if book.get("source") == SRC_OL and ia_list:
+        for ia_id in ia_list[:3]:  # Try up to top 3 IA candidates
+            pdf_url = f"https://archive.org/download/{ia_id}/{ia_id}.pdf"
+            epub_url = f"https://archive.org/download/{ia_id}/{ia_id}.epub"
+            if (pdf_url, ".pdf") not in urls_to_try:
+                urls_to_try.append((pdf_url, ".pdf"))
+            if (epub_url, ".epub") not in urls_to_try:
+                urls_to_try.append((epub_url, ".epub"))
+
+    if not urls_to_try:
+        logger.info("No download URLs available for book: %s", book.get("title"))
         return None
 
-    ext       = book.get("file_ext", ".epub")
-    safe_name = _safe_filename(book.get("title", "book"), ext)
-    dest_path = os.path.join(dest_dir, safe_name)
-
-    # Gutenberg occasionally has HTTP only; others generally HTTPS
     verify = book.get("source") != SRC_GUTENBERG
 
-    success = _download_url_sync(download_url, dest_path, verify=verify)
-    if success and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1024:
-        return dest_path
+    for url, file_ext in urls_to_try:
+        safe_name = _safe_filename(book.get("title", "book"), file_ext)
+        dest_path = os.path.join(dest_dir, safe_name)
 
-    # Cleanup incomplete file
-    if os.path.exists(dest_path):
-        try:
-            os.unlink(dest_path)
-        except OSError:
-            pass
+        success = _download_url_sync(url, dest_path, verify=verify)
+        if success and os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
+            return dest_path
+        _safe_unlink(dest_path)
+
     return None
 
 
