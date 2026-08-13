@@ -284,25 +284,24 @@ async def process_and_send_document_parts(
         await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ZIP.")
 
 
-async def process_and_send_mp4_documents_no_cache(
+async def process_and_send_mp4_videos_no_cache(
     context,
     chat_id: str,
     result_files: list,
     video_id: str,
     label: str = "",
 ):
-    """Upload MP4 parts to Bale storage channel and forward to user; no DB cache."""
-    uncertain_parts: list[int] = []
+    """Send MP4 video parts directly to user as video; no channel upload and no DB cache."""
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
     await context.bot.send_message(
-        chat_id=chat_id, text=f"📤 در حال آپلود ویدیو (MP4){part_msg}..."
+        chat_id=chat_id, text=f"📤 در حال ارسال ویدیو (MP4){part_msg}..."
     )
 
     for idx, file_path in enumerate(result_files, 1):
         if total_parts > 1:
             await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 آپلود پارت {idx} از {total_parts}..."
+                chat_id=chat_id, text=f"📤 ارسال پارت {idx} از {total_parts}..."
             )
         display_name = (
             f"{video_id}.mp4"
@@ -311,40 +310,35 @@ async def process_and_send_mp4_documents_no_cache(
         )
         caption = f"{label or f'Video ID: {video_id}'} | {display_name}"
         try:
-            current_file_id = await upload_document_to_storage_once(
-                context=context,
-                file_path=file_path,
-                caption=caption,
-                filename=display_name,
-            )
+            with open(file_path, "rb") as vid:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=vid,
+                    caption=caption,
+                    filename=display_name,
+                    read_timeout=180,
+                    write_timeout=180,
+                    connect_timeout=30,
+                    pool_timeout=30,
+                )
         except Exception as e:
-            logger.exception("MP4 part %s storage upload failed", idx)
+            logger.exception("MP4 video part %s send failed", idx)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"❌ آپلود پارت {idx} از {total_parts} ناموفق بود.\n"
-                    "قبل از درخواست مجدد، پارت‌های قبلی را در چت بررسی کنید."
+                    f"❌ ارسال پارت {idx} از {total_parts} ناموفق بود.\n"
+                    "لطفاً دوباره تلاش کنید."
                 ),
             )
             raise e
 
-        forward_status = await forward_file_id_to_user(
-            context, chat_id, current_file_id, "document"
-        )
-        if forward_status != ForwardStatus.OK:
-            uncertain_parts.append(idx)
-
         if idx < total_parts:
-            await pause_between_parts(
-                extra_sec=1.0 if forward_status != ForwardStatus.OK else 0.0
-            )
+            await pause_between_parts()
 
-    if uncertain_parts:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=format_uncertain_parts_message(uncertain_parts, total_parts),
-        )
     await context.bot.send_message(chat_id=chat_id, text="✅ پایان عملیات ارسال ویدیو.")
+
+
+process_and_send_mp4_documents_no_cache = process_and_send_mp4_videos_no_cache
 
 
 async def upload_video_to_storage_once(context, file_path: str, caption: str):

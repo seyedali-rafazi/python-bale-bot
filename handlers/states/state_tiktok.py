@@ -89,10 +89,10 @@ async def background_tt_download(
                 text="📤 ویدیو دانلود شد! در حال ارسال...",
             )
 
-            with open(file_path, "rb") as doc:
-                await context.bot.send_document(
+            with open(file_path, "rb") as vid:
+                await context.bot.send_video(
                     chat_id=chat_id,
-                    document=doc,
+                    video=vid,
                     filename=display_name,
                     caption=caption,
                     read_timeout=300,

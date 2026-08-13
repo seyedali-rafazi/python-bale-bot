@@ -48,7 +48,7 @@ from .helpers import (
     format_size,
     get_waiting_count,
     process_and_send_document_parts,
-    process_and_send_mp4_documents_no_cache,
+    process_and_send_mp4_videos_no_cache,
     upload_audio_to_storage_once,
     send_audio_once,
     save_to_global_cache,
@@ -500,7 +500,7 @@ async def background_yt_download(
                                         uploaded_at=uploaded_at_from_video_info(info),
                                     )
                                 else:
-                                    await process_and_send_mp4_documents_no_cache(
+                                    await process_and_send_mp4_videos_no_cache(
                                         context,
                                         chat_id,
                                         result,

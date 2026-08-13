@@ -4,10 +4,13 @@ Book download state handler.
 
 Flow:
   1. User types a search query  →  show inline result buttons.
-  2. User taps a result button  →  download PDF from Internet Archive
-                                    →  send as document.
+  2. User taps a result button  →  download from one of 4 sources
+                                   →  send as document.
 
-Callback data format: bookdl_<ia_id>
+Book data is stored in context.bot_data["books"][chat_id] keyed by index
+so the callback can retrieve the full book dict without encoding it in callback_data.
+
+Callback data format: bookdl_<chat_id>_<index>
 """
 
 import asyncio
@@ -19,10 +22,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import clear_state
-from core.database import log_upload_failed
-from services.book import search_books, download_book, format_book_info
+from core.database import log_upload_success, log_upload_failed
+from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 
 logger = logging.getLogger(__name__)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # State handler — called from states/__init__.py
@@ -46,13 +50,16 @@ async def _handle_book_search(
     chat_id: str,
 ):
     clear_state(chat_id)
-    msg = await update.message.reply_text(f"🔍 در حال جستجوی «{query}» در کتابخانه...")
+    msg = await update.message.reply_text(
+        f"🔍 در حال جستجوی «{query}» در ۴ کتابخانه دیجیتال...\n"
+        "⏳ لطفاً چند ثانیه صبر کنید."
+    )
 
     try:
         books = await search_books(query, max_results=8)
     except Exception:
         logger.exception("Book search failed for query: %s", query)
-        await msg.edit_text("❌ خطا در ارتباط با سرور Open Library. لطفاً دوباره تلاش کنید.")
+        await msg.edit_text("❌ خطا در جستجو. لطفاً دوباره تلاش کنید.")
         await log_upload_failed("book", chat_id)
         return
 
@@ -60,30 +67,41 @@ async def _handle_book_search(
         await msg.edit_text("❌ کتابی برای این جستجو یافت نشد. کلمات کلیدی دیگری امتحان کنید.")
         return
 
+    # Store books in bot_data so callback can retrieve them
+    if "books" not in context.bot_data:
+        context.bot_data["books"] = {}
+    context.bot_data["books"][chat_id] = books
+
     # Build result text + inline keyboard
     result_text = f"📚 *نتایج جستجوی «{query}»:*\n\n"
     keyboard = []
 
-    for i, book in enumerate(books, 1):
-        result_text += f"{i}. {format_book_info(book)}\n\n"
-        title_short = book["title"][:38]
+    for i, book in enumerate(books):
+        result_text += f"{i + 1}. {format_book_info(book)}\n\n"
+        title_short = book["title"][:35]
 
-        if book["has_pdf"]:
+        if book["has_file"]:
+            ext_tag = book.get("file_ext", ".epub").lstrip(".").upper()
             keyboard.append([
                 InlineKeyboardButton(
-                    f"⬇️ {title_short}",
-                    callback_data=f"bookdl_{book['ia_id']}",
+                    f"⬇️ {title_short} [{ext_tag}]",
+                    callback_data=f"bookdl_{chat_id}_{i}",
                 )
             ])
         else:
             keyboard.append([
                 InlineKeyboardButton(
-                    f"🔒 {title_short} (فایل موجود نیست)",
+                    f"🔒 {title_short} (بدون فایل)",
                     callback_data="bookdl_unavailable",
                 )
             ])
 
-    await msg.edit_text(result_text, parse_mode="Markdown")
+    try:
+        await msg.edit_text(result_text, parse_mode="Markdown")
+    except Exception:
+        await msg.delete()
+        await update.message.reply_text(result_text, parse_mode="Markdown")
+
     await update.message.reply_text(
         "👇 برای دانلود روی کتاب مورد نظر کلیک کنید:\n"
         "_(کتاب‌های با آیکون 🔒 فایل دانلودی ندارند)_",
@@ -100,51 +118,78 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
-    data = query.data  # e.g. "bookdl_someia_id"
+    data    = query.data
     chat_id = str(query.message.chat_id)
 
     if data == "bookdl_unavailable":
         await query.message.reply_text(
             "🔒 این کتاب فایل دانلودی رایگان ندارد.\n"
-            "می‌توانید آن را مستقیماً در سایت Open Library جستجو کنید:\n"
-            "https://openlibrary.org"
+            "می‌توانید آن را مستقیماً جستجو کنید:\n"
+            "• https://www.gutenberg.org\n"
+            "• https://openlibrary.org\n"
+            "• https://www.doabooks.org"
         )
         return
 
-    ia_id = data.replace("bookdl_", "", 1)
+    # Parse: bookdl_<chat_id>_<index>
+    try:
+        parts = data.split("_", 2)   # ["bookdl", chat_id, index]
+        book_index = int(parts[2])
+        stored_chat_id = parts[1]
+    except (IndexError, ValueError):
+        await query.message.reply_text("❌ خطای داخلی. لطفاً دوباره جستجو کنید.")
+        return
 
-    # Disable button to prevent double-tap
+    # Retrieve book dict from bot_data
+    books: list = (context.bot_data.get("books") or {}).get(stored_chat_id, [])
+    if book_index >= len(books):
+        await query.message.reply_text("❌ اطلاعات کتاب منقضی شده. لطفاً دوباره جستجو کنید.")
+        return
+
+    book = books[book_index]
+    if not book.get("download_url"):
+        await query.message.reply_text("❌ لینک دانلود این کتاب موجود نیست.")
+        return
+
+    # Disable buttons to prevent double-tap
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
 
-    await query.message.reply_text(
-        f"⏳ در حال دانلود کتاب از Internet Archive...\n"
-        f"🔖 شناسه: `{ia_id}`\n"
-        f"این ممکن است چند ثانیه طول بکشد.",
+    source_label = book.get("source_label", "کتابخانه دیجیتال")
+    ext_tag = book.get("file_ext", ".epub").lstrip(".").upper()
+
+    wait_msg = await query.message.reply_text(
+        f"⏳ در حال دانلود کتاب از {source_label}...\n"
+        f"📖 *{book['title']}*\n"
+        f"📄 فرمت: {ext_tag}\n"
+        "این ممکن است چند ثانیه طول بکشد.",
         parse_mode="Markdown",
     )
 
     # Download in a thread-safe temp directory
     with tempfile.TemporaryDirectory(prefix="book_dl_") as tmp_dir:
         try:
-            file_path = await download_book(ia_id, tmp_dir)
+            file_path = await download_book(book, tmp_dir)
         except Exception:
-            logger.exception("Book download failed: ia_id=%s", ia_id)
-            await context.bot.send_message(
-                chat_id,
-                "❌ خطا در دانلود کتاب. لطفاً دوباره تلاش کنید.",
-            )
+            logger.exception("Book download exception: %s", book.get("title"))
+            await context.bot.send_message(chat_id, "❌ خطا در دانلود کتاب. لطفاً دوباره تلاش کنید.")
+            await log_upload_failed("book", chat_id)
             return
+        finally:
+            try:
+                await wait_msg.delete()
+            except Exception:
+                pass
 
         if file_path is None:
             await context.bot.send_message(
                 chat_id,
-                "❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۱۸ مگابایت است.\n"
-                "می‌توانید آن را مستقیماً از:\n"
-                f"https://archive.org/details/{ia_id}\n"
-                "دانلود کنید.",
+                f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۱۸ مگابایت است.\n\n"
+                f"📖 *{book['title']}*\n"
+                f"می‌توانید آن را مستقیماً از {source_label} دانلود کنید.",
+                parse_mode="Markdown",
             )
             await log_upload_failed("book", chat_id)
             return
@@ -152,9 +197,10 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         # Send the file
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
         caption = (
-            f"📖 *کتاب دانلود شد*\n"
+            f"📖 *{book['title']}*\n"
+            f"✍️ {book['author']}\n"
             f"📦 حجم: {file_size_mb:.1f} مگابایت\n"
-            f"🌐 منبع: archive.org/details/{ia_id}"
+            f"🌐 منبع: {source_label}"
         )
         try:
             with open(file_path, "rb") as fh:
@@ -170,10 +216,8 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 "✅ کتاب با موفقیت ارسال شد!\n"
                 "برای جستجوی کتاب دیگر دوباره دکمه 🔍 جستجوی کتاب را بزنید.",
             )
+            await log_upload_success("book", chat_id)
         except Exception:
             logger.exception("Failed to send book file: %s", file_path)
-            await context.bot.send_message(
-                chat_id,
-                "❌ خطا در ارسال فایل. لطفاً دوباره تلاش کنید.",
-            )
+            await context.bot.send_message(chat_id, "❌ خطا در ارسال فایل. لطفاً دوباره تلاش کنید.")
             await log_upload_failed("book", chat_id)
