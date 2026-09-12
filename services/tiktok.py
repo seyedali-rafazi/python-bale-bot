@@ -76,12 +76,122 @@ def _extract_json_data(text: str) -> dict | list | None:
     return None
 
 
+async def _download_stream_to_file(download_url: str, output_path: str, proxy: str | None = None) -> bool:
+    """دانلود استریم فایل ویدیو از URL مستقیم روی دیسک با aiohttp"""
+    session = await get_http_session()
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": "https://www.tikwm.com/",
+        "Accept": "*/*",
+    }
+
+    kwargs = {"headers": headers, "timeout": 60}
+    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+        kwargs["proxy"] = proxy
+
+    try:
+        async with session.get(download_url, **kwargs) as resp:
+            if resp.status != 200:
+                logger.warning("[TikTok] Direct stream download returned HTTP %s for URL: %s", resp.status, download_url[:100])
+                return False
+
+            with open(output_path, "wb") as f:
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+            return True
+        else:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            return False
+    except Exception as e:
+        logger.warning("[TikTok] Stream download exception: %s", e)
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+        return False
+
+
+async def _fetch_tikwm_video_info(url: str, proxy: str | None = None) -> dict | None:
+    """دریافت متادیتا و لینک‌های مستقیم دانلود از TikWM API"""
+    clean_url = url.strip()
+    session = await get_http_session()
+
+    endpoints = [
+        "https://www.tikwm.com/api/",
+        "https://tikwm.com/api/",
+    ]
+
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 20}
+    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+        kwargs["proxy"] = proxy
+
+    cf_blocked = False
+
+    for endpoint in endpoints:
+        # روش اول: درخواست POST
+        try:
+            post_data = {"url": clean_url, "hd": "1"}
+            async with session.post(endpoint, data=post_data, **kwargs) as resp:
+                if resp.status == 200:
+                    text_data = await resp.text()
+                    data = _extract_json_data(text_data)
+                    if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
+                        return data.get("data")
+                elif resp.status == 403:
+                    cf_blocked = True
+        except Exception as e:
+            logger.warning("[TikTok] TikWM POST error on %s: %s", endpoint, e)
+
+        # روش دوم: درخواست GET
+        try:
+            encoded_url = urllib.parse.quote(clean_url)
+            get_url = f"{endpoint}?url={encoded_url}&hd=1"
+            async with session.get(get_url, **kwargs) as resp:
+                if resp.status == 200:
+                    text_data = await resp.text()
+                    data = _extract_json_data(text_data)
+                    if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
+                        return data.get("data")
+                elif resp.status == 403:
+                    cf_blocked = True
+        except Exception as e:
+            logger.warning("[TikTok] TikWM GET error on %s: %s", endpoint, e)
+
+    # روش سوم: دور زدن کلادفلر با FlareSolverr در صورت 403
+    if cf_blocked:
+        logger.info("[TikTok] TikWM blocked by Cloudflare (403), attempting FlareSolverr...")
+        try:
+            solution = await flaresolverr_request(
+                url="https://www.tikwm.com/api/",
+                method="POST",
+                post_data=f"url={urllib.parse.quote(clean_url)}&hd=1",
+                headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                timeout=45,
+            )
+            if solution and solution.get("response"):
+                data = _extract_json_data(solution["response"])
+                if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
+                    return data.get("data")
+        except Exception as e:
+            logger.warning("[TikTok] FlareSolverr error: %s", e)
+
+    return None
+
+
 async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None:
+    import sys
     req_id = uuid.uuid4().hex
     output_template = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.%(ext)s")
 
     cmd = [
-        "yt-dlp",
+        sys.executable,
+        "-m",
+        "yt_dlp",
         "-f",
         "bv*+ba/b",
         "--merge-output-format",
@@ -89,7 +199,14 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
         "-o",
         output_template,
         "--no-playlist",
+        "--user-agent",
+        DEFAULT_HEADERS["User-Agent"],
+        "--no-check-certificates",
     ]
+
+    cookie_file = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
+    if os.path.exists(cookie_file):
+        cmd.extend(["--cookies", cookie_file])
 
     if proxy:
         cmd.extend(["--proxy", proxy])
@@ -118,24 +235,60 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
         return None
 
 
-async def download_tiktok_video(url: str):
-    """دانلود ویدیوی تیک‌تاک با استفاده از yt-dlp (با فال‌بک دانلود مستقیم در صورت خرابی یا قطعی پروکسی)"""
+async def download_tiktok_video(url: str) -> str | None:
+    """
+    دانلود ویدیوی تیک‌تاک:
+    ۱. ابتدا دانلود مستقیم بدون واترمارک و سریع از TikWM API (بدون مسدودیت دیتاسنتر).
+    ۲. در صورت مسدودیت کلادفلر، بای‌پاس با FlareSolverr.
+    ۳. در صورت بروز هرگونه مشکل دیگر، فال‌بک به yt-dlp.
+    """
     logger.info("[TikTok] Start downloading: %s", url)
+    clean_url = url.strip()
+    req_id = uuid.uuid4().hex
+    output_path = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.mp4")
 
     proxy = _get_proxy()
 
-    # تلاش اول: با پروکسی در صورت وجود
+    # ۱. روش مستقیم از TikWM API
+    try:
+        video_data = await _fetch_tikwm_video_info(clean_url, proxy=proxy)
+        if not video_data and proxy:
+            video_data = await _fetch_tikwm_video_info(clean_url, proxy=None)
+
+        if video_data:
+            video_url = (
+                video_data.get("hdplay")
+                or video_data.get("play")
+                or video_data.get("wmplay")
+            )
+            if video_url:
+                if video_url.startswith("/"):
+                    video_url = f"https://www.tikwm.com{video_url}"
+
+                logger.info("[TikTok] Direct video URL extracted from TikWM API, downloading file...")
+                downloaded = await _download_stream_to_file(video_url, output_path, proxy=proxy)
+                if not downloaded and proxy:
+                    downloaded = await _download_stream_to_file(video_url, output_path, proxy=None)
+
+                if downloaded and os.path.exists(output_path):
+                    logger.info("[TikTok] Download completed successfully via TikWM API (%s bytes)", os.path.getsize(output_path))
+                    return output_path
+    except Exception as e:
+        logger.warning("[TikTok] TikWM download pipeline exception: %s", e)
+
+    # ۲. فال‌بک به yt-dlp
+    logger.info("[TikTok] TikWM API failed. Falling back to yt-dlp...")
     if proxy:
-        file_path = await _exec_ytdlp_download(url, proxy=proxy)
+        file_path = await _exec_ytdlp_download(clean_url, proxy=proxy)
         if file_path:
             return file_path
-        logger.warning("[TikTok] Download with proxy '%s' failed. Retrying direct download without proxy...", proxy)
+        logger.warning("[TikTok] yt-dlp with proxy '%s' failed. Retrying direct yt-dlp...", proxy)
 
-    # تلاش دوم / مستقیم: بدون پروکسی
-    file_path = await _exec_ytdlp_download(url, proxy=None)
+    file_path = await _exec_ytdlp_download(clean_url, proxy=None)
     if file_path:
         return file_path
 
+    logger.error("[TikTok] All download attempts failed for URL: %s", clean_url)
     return None
 
 
