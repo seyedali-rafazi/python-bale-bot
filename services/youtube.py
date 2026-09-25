@@ -6,6 +6,8 @@ import uuid
 import math
 import asyncio
 import subprocess
+import shutil
+import sys
 from dotenv import load_dotenv
 import random
 import json
@@ -59,15 +61,48 @@ def _cookie_args():
     if COOKIE_FILE and os.path.exists(COOKIE_FILE):
         return ["--cookies", COOKIE_FILE]
 
-    print(f"⚠️ Cookie file not found: {COOKIE_FILE}")
+    print(f"Cookie file not found: {COOKIE_FILE}")
     return []
 
 
+def get_ytdlp_executable() -> list[str]:
+    which = shutil.which("yt-dlp")
+    if which:
+        return [which]
+    venv_dir = os.path.dirname(sys.executable)
+    for name in ("yt-dlp.exe", "yt-dlp"):
+        candidate = os.path.join(venv_dir, name)
+        if os.path.exists(candidate):
+            return [candidate]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
+def get_base_search_cmd() -> list[str]:
+    cmd = list(get_ytdlp_executable())
+    cmd.extend(
+        [
+            "--force-ipv6",
+            "--socket-timeout",
+            "15",
+        ]
+    )
+
+    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
+        random_ip = get_random_ipv6()
+        if random_ip:
+            cmd.extend(["--source-address", random_ip])
+
+    cmd.extend(_cookie_args())
+    return cmd
+
+
 def _base_ytdlp_cmd():
-    cmd = [
-        "yt-dlp",
-        "--force-ipv6",
-    ]
+    cmd = list(get_ytdlp_executable())
+    cmd.extend(
+        [
+            "--force-ipv6",
+        ]
+    )
 
     # Only use --source-address if IPv6 rotation is explicitly enabled
     if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
@@ -582,19 +617,7 @@ def search_yt_videos(query, max_results=5):
         f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
     )
 
-    cmd = [
-        "yt-dlp",
-        "--force-ipv6",
-        "--socket-timeout",
-        "15",
-    ]
-
-    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
-        random_ip = get_random_ipv6()
-        if random_ip:
-            cmd.extend(["--source-address", random_ip])
-
-    cmd.extend(_cookie_args())
+    cmd = get_base_search_cmd()
 
     cmd.extend(
         [
