@@ -23,13 +23,17 @@ MAX_TELEGRAM_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
 SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
 
 IPV6_PREFIX = os.getenv("IPV6_PREFIX")
+ENABLE_IPV6_ROTATION = os.getenv("ENABLE_IPV6_ROTATION", "false").lower() in ("true", "1", "yes")
 
 
 def get_random_ipv6():
-    """تولید یک آی‌پی تصادفی از ساب‌نت /64"""
+    """تولید یک آی‌پی تصادفی از ساب‌نت /64 در صورت فعال بودن"""
+    if not IPV6_PREFIX:
+        return None
+    clean_prefix = IPV6_PREFIX.split("/")[0].rstrip(":")
     hextets = [f"{random.randint(0, 65535):x}" for _ in range(4)]
     suffix = ":".join(hextets)
-    return f"{IPV6_PREFIX}:{suffix}"
+    return f"{clean_prefix}:{suffix}"
 
 
 def get_video_duration(file_path):
@@ -60,22 +64,29 @@ def _cookie_args():
 
 
 def _base_ytdlp_cmd():
-    random_ip = get_random_ipv6()
-    print(f"🌐 Using Random IPv6: {random_ip}")
-
     cmd = [
         "yt-dlp",
         "--force-ipv6",
-        "--source-address",
-        random_ip,
-        "--js-runtimes",
-        "node",
-        "--remote-components",
-        "ejs:github",
-        "--extractor-args",
-        "youtube:player_client=android_embed,web_embedded",
-        "--no-playlist",
     ]
+
+    # Only use --source-address if IPv6 rotation is explicitly enabled
+    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
+        random_ip = get_random_ipv6()
+        if random_ip:
+            print(f"🌐 Using Random IPv6: {random_ip}")
+            cmd.extend(["--source-address", random_ip])
+
+    cmd.extend(
+        [
+            "--js-runtimes",
+            "node",
+            "--remote-components",
+            "ejs:github",
+            "--extractor-args",
+            "youtube:player_client=android_embed,web_embedded",
+            "--no-playlist",
+        ]
+    )
 
     cmd.extend(_cookie_args())
 
@@ -571,7 +582,19 @@ def search_yt_videos(query, max_results=5):
         f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
     )
 
-    cmd = _base_ytdlp_cmd()
+    cmd = [
+        "yt-dlp",
+        "--force-ipv6",
+        "--socket-timeout",
+        "15",
+    ]
+
+    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
+        random_ip = get_random_ipv6()
+        if random_ip:
+            cmd.extend(["--source-address", random_ip])
+
+    cmd.extend(_cookie_args())
 
     cmd.extend(
         [
@@ -589,7 +612,7 @@ def search_yt_videos(query, max_results=5):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=90,
+            timeout=45,
         )
 
         if result.returncode != 0:
