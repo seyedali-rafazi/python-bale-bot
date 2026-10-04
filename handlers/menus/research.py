@@ -135,7 +135,7 @@ async def btn_book_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *بخش دانلود کتاب*\n\n"
         "از این بخش می‌توانید کتاب‌های رایگان و عمومی را جستجو و دانلود کنید.\n\n"
         "📚 منبع: Open Library & Internet Archive\n"
-        "📄 فرمت: PDF / EPUB",
+        "📄 فرمت: PDF",
         reply_markup=get_book_menu_keyboard(),
         parse_mode="Markdown",
     )

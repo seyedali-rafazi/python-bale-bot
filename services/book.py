@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
-MAX_BOOK_BYTES = 18 * 1024 * 1024   # 18 MB — safe for Bale file sending
+MAX_BOOK_BYTES = 50 * 1024 * 1024   # 50 MB — Bale file sending limit
 _MAX_RETRIES   = 2
 _RETRY_DELAY   = 2.0                 # seconds between retries
 _SEARCH_DEADLINE = 15.0              # max seconds to wait for all search sources
@@ -106,23 +106,19 @@ def _safe_filename(name: str, ext: str = ".epub") -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 _GUTENDEX_URL = "https://gutendex.com/books/"
 
-# HTML is intentionally excluded: it can't be sent as a valid book file.
+# PDF only (EPUB/HTML intentionally excluded).
 _PREFER_FORMATS = [
-    ("application/epub+zip", ".epub"),
     ("application/pdf", ".pdf"),
 ]
 
 
 def _gutenberg_pick_url(formats: dict) -> tuple[Optional[str], str]:
-    """Pick the best download URL and extension from a Gutenberg formats dict."""
+    """Pick the PDF download URL from a Gutenberg formats dict."""
     for mime, ext in _PREFER_FORMATS:
         url = formats.get(mime)
         if url:
             return url, ext
-    for key, url in formats.items():
-        if "epub" in key and url:
-            return url, ".epub"
-    return None, ".epub"
+    return None, ".pdf"
 
 
 def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
@@ -380,7 +376,7 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
         asyncio.create_task(asyncio.to_thread(fn, query, per_source))
         for fn in (
             _search_gutenberg_sync,
-            _search_standard_ebooks_sync,
+            # Standard Ebooks only offers EPUB -> skipped (PDF only)
             _search_openlibrary_sync,
             _search_doab_sync,
         )
@@ -497,7 +493,7 @@ def _download_url_sync(
                             fh.write(chunk)
                             downloaded += len(chunk)
                             if downloaded > MAX_BOOK_BYTES:
-                                logger.warning("File too large (>18 MB): %s", download_url)
+                                logger.warning("File too large (>50 MB): %s", download_url)
                                 fh.close()
                                 _safe_unlink(dest_path)
                                 return False
@@ -527,7 +523,7 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
     urls_to_try: List[tuple[str, str]] = []  # (url, file_ext)
 
     download_url = book.get("download_url")
-    ext = book.get("file_ext", ".epub")
+    ext = book.get("file_ext", ".pdf")
     if download_url:
         urls_to_try.append((download_url, ext))
 
@@ -536,11 +532,8 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
     if book.get("source") == SRC_OL and ia_list:
         for ia_id in ia_list[:3]:  # Try up to top 3 IA candidates
             pdf_url = f"https://archive.org/download/{ia_id}/{ia_id}.pdf"
-            epub_url = f"https://archive.org/download/{ia_id}/{ia_id}.epub"
             if (pdf_url, ".pdf") not in urls_to_try:
                 urls_to_try.append((pdf_url, ".pdf"))
-            if (epub_url, ".epub") not in urls_to_try:
-                urls_to_try.append((epub_url, ".epub"))
 
     if not urls_to_try:
         logger.info("No download URLs available for book: %s", book.get("title"))
@@ -574,7 +567,7 @@ def format_book_info(book: dict) -> str:
         icon = "⬇️"
     else:
         icon = "🔒"
-    ext_tag = book.get("file_ext", ".epub").lstrip(".").upper()
+    ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
     return (
         f"{icon} *{book['title']}*\n"
         f"   ✍️ {book['author']} | 📅 {book['year']}\n"

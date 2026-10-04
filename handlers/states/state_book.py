@@ -81,7 +81,7 @@ async def _handle_book_search(
         title_short = book["title"][:35]
 
         if book["has_file"]:
-            ext_tag = book.get("file_ext", ".epub").lstrip(".").upper()
+            ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
             keyboard.append([
                 InlineKeyboardButton(
                     f"⬇️ {title_short} [{ext_tag}]",
@@ -158,7 +158,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         pass
 
     source_label = book.get("source_label", "کتابخانه دیجیتال")
-    ext_tag = book.get("file_ext", ".epub").lstrip(".").upper()
+    ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
 
     wait_msg = await query.message.reply_text(
         f"⏳ در حال دانلود کتاب از {source_label}...\n"
@@ -186,7 +186,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if file_path is None:
             await context.bot.send_message(
                 chat_id,
-                f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۱۸ مگابایت است.\n\n"
+                f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۵۰ مگابایت است.\n\n"
                 f"📖 *{book['title']}*\n"
                 f"می‌توانید آن را مستقیماً از {source_label} دانلود کنید.",
                 parse_mode="Markdown",
