@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 MAX_BOOK_BYTES = 18 * 1024 * 1024   # 18 MB — safe for Bale file sending
 _MAX_RETRIES   = 2
 _RETRY_DELAY   = 2.0                 # seconds between retries
+_SEARCH_DEADLINE = 15.0              # max seconds to wait for all search sources
 
 _TIMEOUT = httpx.Timeout(connect=45.0, read=120.0, write=30.0, pool=10.0)
 _HEADERS = {
@@ -105,23 +106,19 @@ def _safe_filename(name: str, ext: str = ".epub") -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 _GUTENDEX_URL = "https://gutendex.com/books/"
 
+# HTML is intentionally excluded: it can't be sent as a valid book file.
 _PREFER_FORMATS = [
-    "application/pdf",
-    "application/epub+zip",
-    "text/html",
-    "text/plain; charset=utf-8",
-    "text/plain",
+    ("application/epub+zip", ".epub"),
+    ("application/pdf", ".pdf"),
 ]
 
 
 def _gutenberg_pick_url(formats: dict) -> tuple[Optional[str], str]:
     """Pick the best download URL and extension from a Gutenberg formats dict."""
-    for mime in _PREFER_FORMATS:
+    for mime, ext in _PREFER_FORMATS:
         url = formats.get(mime)
-        if url and ".images" not in url:   # skip image-heavy variants
-            ext = ".pdf" if "pdf" in mime else ".epub" if "epub" in mime else ".html"
+        if url:
             return url, ext
-    # Fallback: any epub
     for key, url in formats.items():
         if "epub" in key and url:
             return url, ".epub"
@@ -299,15 +296,18 @@ _DOAB_CHECK  = "https://doab-check.ebookfoundation.org/api/doab/{doab_id}"
 
 
 def _search_doab_sync(query: str, max_results: int) -> List[dict]:
+    from concurrent.futures import ThreadPoolExecutor
+
     with _make_client() as client:
         resp = _get_with_retry(
             client, _DOAB_SEARCH,
             params={
                 "query": query,
-                "rpp":   max_results * 2,
+                "rpp":   max_results,
                 "start": 0,
                 "expand": "metadata",
             },
+            retries=0,
         )
         if not resp:
             return []
@@ -316,11 +316,11 @@ def _search_doab_sync(query: str, max_results: int) -> List[dict]:
         except Exception:
             return []
 
-        books = []
         if not isinstance(items, list):
             return []
+        items = items[:max_results]
 
-        for item in items:
+        def _build(item: dict) -> dict:
             metadata = item.get("metadata", []) or []
 
             def _meta(key: str) -> str:
@@ -332,30 +332,24 @@ def _search_doab_sync(query: str, max_results: int) -> List[dict]:
             title  = _meta("dc.title") or "نامشخص"
             author = _meta("dc.contributor.author") or _meta("dc.creator") or "نامشخص"
             year   = (_meta("dc.date.issued") or "—")[:4]
-
-            # Get DOAB handle for the check API
-            handle = _meta("dc.identifier.uri") or ""
             doab_id = item.get("handle", "").replace("20.500.12854/", "") if item.get("handle") else ""
 
-            # Try DOAB-Check API to get a direct PDF link
             dl_url = None
             if doab_id:
                 try:
-                    check_resp = _get_with_retry(
-                        client,
-                        _DOAB_CHECK.format(doab_id=doab_id),
-                        retries=1,
-                    )
+                    with _make_client() as c2:
+                        check_resp = _get_with_retry(
+                            c2, _DOAB_CHECK.format(doab_id=doab_id), retries=0,
+                        )
                     if check_resp:
-                        check_data = check_resp.json()
-                        for link in check_data.get("links", []):
+                        for link in check_resp.json().get("links", []):
                             if link.get("content_type") == "pdf" and link.get("url"):
                                 dl_url = link["url"]
                                 break
                 except Exception as e:
                     logger.debug("DOAB-Check failed for %s: %s", doab_id, e)
 
-            books.append({
+            return {
                 "title":        title[:80],
                 "author":       author[:60],
                 "year":         year,
@@ -365,11 +359,11 @@ def _search_doab_sync(query: str, max_results: int) -> List[dict]:
                 "download_url": dl_url,
                 "file_ext":     ".pdf",
                 "book_id":      doab_id,
-            })
-            if len(books) >= max_results:
-                break
+            }
 
-        return books
+        # Run DOAB-Check lookups in parallel instead of one-by-one
+        with ThreadPoolExecutor(max_workers=max(1, len(items))) as pool:
+            return list(pool.map(_build, items))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -382,20 +376,27 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
     """
     per_source = max(4, max_results)
 
-    results = await asyncio.gather(
-        asyncio.to_thread(_search_gutenberg_sync,     query, per_source),
-        asyncio.to_thread(_search_standard_ebooks_sync, query, per_source),
-        asyncio.to_thread(_search_openlibrary_sync,   query, per_source),
-        asyncio.to_thread(_search_doab_sync,          query, per_source),
-        return_exceptions=True,
-    )
+    tasks = [
+        asyncio.create_task(asyncio.to_thread(fn, query, per_source))
+        for fn in (
+            _search_gutenberg_sync,
+            _search_standard_ebooks_sync,
+            _search_openlibrary_sync,
+            _search_doab_sync,
+        )
+    ]
+    # Wait at most _SEARCH_DEADLINE seconds; use whatever sources answered in time.
+    done, pending = await asyncio.wait(tasks, timeout=_SEARCH_DEADLINE)
+    for t in pending:
+        t.cancel()
+        logger.warning("A book source timed out during search")
 
     combined: List[dict] = []
-    for res in results:
-        if isinstance(res, Exception):
-            logger.warning("Source error during search: %s", res)
-            continue
-        combined.extend(res)
+    for t in done:
+        try:
+            combined.extend(t.result())
+        except Exception as e:
+            logger.warning("Source error during search: %s", e)
 
     # De-duplicate by normalised title
     seen: set[str] = set()
@@ -419,6 +420,24 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Download dispatcher
 # ──────────────────────────────────────────────────────────────────────────────
+def _is_valid_file(path: str) -> bool:
+    """Check the finished file is complete (not truncated / corrupt)."""
+    import zipfile
+    if not os.path.exists(path) or os.path.getsize(path) < 10000:
+        return False
+    try:
+        if path.endswith(".pdf"):
+            with open(path, "rb") as fh:
+                fh.seek(-2048, os.SEEK_END)
+                return b"%%EOF" in fh.read()
+        if path.endswith(".epub"):
+            with zipfile.ZipFile(path) as z:
+                return z.testzip() is None and "META-INF/container.xml" in z.namelist()
+    except Exception:
+        return False
+    return True
+
+
 def _safe_unlink(path: str) -> None:
     if os.path.exists(path):
         try:
@@ -483,12 +502,11 @@ def _download_url_sync(
                                 _safe_unlink(dest_path)
                                 return False
 
-                if os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
+                if _is_valid_file(dest_path):
                     return True
-                else:
-                    logger.warning("Downloaded file too small (<10KB): %s", download_url)
-                    _safe_unlink(dest_path)
-                    return False
+                logger.warning("Downloaded file invalid/corrupt: %s", download_url)
+                _safe_unlink(dest_path)
+                return False
             except Exception as e:
                 _safe_unlink(dest_path)
                 if attempt < _MAX_RETRIES:
