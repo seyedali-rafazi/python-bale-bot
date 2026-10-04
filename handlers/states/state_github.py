@@ -175,7 +175,7 @@ async def process_github_download(
             if resp.status == 200:
                 downloaded_size = 0
                 is_oversized = False
-                max_bytes = 20 * 1024 * 1024  # محدودیت 20 مگابایت
+                max_bytes = 50 * 1024 * 1024  # محدودیت 50 مگابایت
 
                 with open(temp_path, "wb") as f:
                     # دانلود تکه‌تکه برای کنترل حجم در حین دانلود
@@ -189,7 +189,7 @@ async def process_github_download(
                 if is_oversized:
                     await context.bot.send_message(
                         chat_id,
-                        "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۲۰ مگابایت است).",
+                        "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۵۰ مگابایت است).",
                     )
                 else:
                     file_size_mb = downloaded_size / (1024 * 1024)

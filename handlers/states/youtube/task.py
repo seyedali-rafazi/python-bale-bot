@@ -346,7 +346,7 @@ async def background_yt_download(
                                 if delivery_mode == "zip":
                                     await context.bot.send_message(
                                         chat_id=chat_id,
-                                        text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
+                                        text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 50MB...",
                                     )
                                     zip_basename = f"youtube_{video_id}_{quality}p"
                                     (
@@ -358,7 +358,7 @@ async def background_yt_download(
                                         raw_file,
                                         os.path.dirname(raw_file) or ".",
                                         zip_basename,
-                                        20 * 1024 * 1024,
+                                        50 * 1024 * 1024,
                                     )
                                     zip_artifacts.extend(zip_parts)
                                     if split_method == "concat":
@@ -734,7 +734,7 @@ async def background_yt_download(
                                 # Also send as ZIP for backup/compatibility
                                 await context.bot.send_message(
                                     chat_id=chat_id,
-                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 20MB...",
+                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 50MB...",
                                 )
                                 zip_basename = f"youtube_audio_{video_id}"
                                 (
@@ -746,7 +746,7 @@ async def background_yt_download(
                                     file_path,
                                     os.path.dirname(file_path) or ".",
                                     zip_basename,
-                                    20 * 1024 * 1024,
+                                    50 * 1024 * 1024,
                                 )
                                 zip_artifacts.extend(zip_parts)
                                 if split_method == "concat":

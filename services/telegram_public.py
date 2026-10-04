@@ -1,4 +1,4 @@
-# services/telegram_public.py — parse public t.me embed HTML and forward media (≤20 MB)
+# services/telegram_public.py — parse public t.me embed HTML and forward media (≤50 MB)
 
 import os
 import re
@@ -13,7 +13,7 @@ from telegram import Bot
 
 from services.http_client import get_http_session
 
-MAX_MEDIA_BYTES = 20 * 1024 * 1024
+MAX_MEDIA_BYTES = 50 * 1024 * 1024
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -350,7 +350,7 @@ async def send_parsed_message(
         await bot.send_message(
             chat_id=chat_id,
             text=(
-                f"⚠️ {skipped_large} فایل به‌دلیل حجم بالای ۲۰ مگابایت ارسال نشد."
+                f"⚠️ {skipped_large} فایل به‌دلیل حجم بالای ۵۰ مگابایت ارسال نشد."
             ),
         )
 

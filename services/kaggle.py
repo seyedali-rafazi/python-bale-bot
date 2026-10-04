@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
-MAX_PART_BYTES = 19 * 1024 * 1024  # 19 MB per part (leave 1 MB margin for Bale)
+MAX_PART_BYTES = 49 * 1024 * 1024  # 49 MB per part (leave 1 MB margin for Bale)
 KAGGLE_TEMP_BASE = "kaggle_temp"
 
 
@@ -121,12 +121,12 @@ async def download_dataset(ref: str, dest_dir: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ZIP splitter — splits a directory of files into ≤19 MB parts
+# ZIP splitter — splits a directory of files into ≤49 MB parts
 # ──────────────────────────────────────────────────────────────────────────────
 def split_into_20mb_zips(src_dir: str, out_dir: str, base_name: str) -> List[str]:
     """
     Walk src_dir, collect all files, and pack them into sequential ZIP
-    parts each no larger than MAX_PART_BYTES (19 MB).
+    parts each no larger than MAX_PART_BYTES (49 MB).
 
     Returns a list of absolute paths to the created ZIP files.
     If the dataset is empty, returns an empty list.

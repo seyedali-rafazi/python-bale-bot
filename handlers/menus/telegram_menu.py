@@ -29,5 +29,5 @@ async def btn_tg_latest_req(update, context):
     set_state(chat_id, "waiting_tg_latest")
     await update.message.reply_text(
         "لطفاً آیدی کانال عمومی تلگرام را بفرستید (مثال: @varzesh3 یا varzesh3).\n"
-        "۲۰ پیام آخر ارسال می‌شود (هر فایل حداکثر ۲۰ مگابایت)."
+        "۲۰ پیام آخر ارسال می‌شود (هر فایل حداکثر ۵۰ مگابایت)."
     )

@@ -144,7 +144,7 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
     if size is not None and size > MAX_MEDIA_BYTES:
         await bot.send_message(
             chat_id=chat_id,
-            text=f"⚠️ این فایل ({size // (1024 * 1024)} مگابایت) بیش از ۲۰ مگابایت است.",
+            text=f"⚠️ این فایل ({size // (1024 * 1024)} مگابایت) بیش از ۵۰ مگابایت است.",
         )
         if len(text) > 1024:
             await bot.send_message(chat_id=chat_id, text=text)
@@ -172,7 +172,7 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
         if os.path.getsize(temp_path) > MAX_MEDIA_BYTES:
             await bot.send_message(
                 chat_id=chat_id,
-                text="⚠️ فایل پس از دانلود بیش از ۲۰ مگابایت بود و ارسال نشد.",
+                text="⚠️ فایل پس از دانلود بیش از ۵۰ مگابایت بود و ارسال نشد.",
             )
             if len(text) > 1024:
                 await bot.send_message(chat_id=chat_id, text=text)

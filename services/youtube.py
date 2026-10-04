@@ -22,10 +22,13 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 MAX_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
 MAX_TELEGRAM_DOWNLOAD_SIZE = 1 * 1024 * 1024 * 1024
-SPLIT_SIZE_LIMIT = 20 * 1024 * 1024
+SPLIT_SIZE_LIMIT = 50 * 1024 * 1024
 
 IPV6_PREFIX = os.getenv("IPV6_PREFIX")
 ENABLE_IPV6_ROTATION = os.getenv("ENABLE_IPV6_ROTATION", "false").lower() in ("true", "1", "yes")
+# Optional IPv6: set USE_IPV6=true to force IPv6 (default: IPv4)
+USE_IPV6 = os.getenv("USE_IPV6", "false").lower() in ("true", "1", "yes")
+IP_FORCE_FLAG = "--force-ipv6" if USE_IPV6 else "--force-ipv4"
 
 
 def get_random_ipv6():
@@ -81,13 +84,13 @@ def get_base_search_cmd() -> list[str]:
     cmd = list(get_ytdlp_executable())
     cmd.extend(
         [
-            "--force-ipv6",
+            IP_FORCE_FLAG,
             "--socket-timeout",
             "15",
         ]
     )
 
-    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
+    if USE_IPV6 and ENABLE_IPV6_ROTATION and IPV6_PREFIX:
         random_ip = get_random_ipv6()
         if random_ip:
             cmd.extend(["--source-address", random_ip])
@@ -100,12 +103,12 @@ def _base_ytdlp_cmd():
     cmd = list(get_ytdlp_executable())
     cmd.extend(
         [
-            "--force-ipv6",
+            IP_FORCE_FLAG,
         ]
     )
 
-    # Only use --source-address if IPv6 rotation is explicitly enabled
-    if ENABLE_IPV6_ROTATION and IPV6_PREFIX:
+    # Only use --source-address if IPv6 is enabled and rotation is explicitly enabled
+    if USE_IPV6 and ENABLE_IPV6_ROTATION and IPV6_PREFIX:
         random_ip = get_random_ipv6()
         if random_ip:
             print(f"🌐 Using Random IPv6: {random_ip}")
@@ -386,7 +389,7 @@ def _get_video_id_by_ytdlp(url):
 
 
 async def split_video_if_needed(original_file_path):
-    HARD_LIMIT = 14.5 * 1024 * 1024
+    HARD_LIMIT = 45 * 1024 * 1024
 
     if os.path.getsize(original_file_path) <= HARD_LIMIT:
         return [original_file_path]
