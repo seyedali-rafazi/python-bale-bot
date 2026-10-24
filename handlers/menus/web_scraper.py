@@ -1,14 +1,18 @@
 # handlers/menus/web_scraper.py
 
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 
+from core.constants import BTN_BACK
 from core.state_manager import set_state
 from core.keyboards import get_google_search_menu_keyboard
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_web_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_google_search_menu")
     await update.message.reply_text(
@@ -20,16 +24,29 @@ async def btn_web_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def btn_google_search_subject_req(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_google_search_subject")
-    await update.message.reply_text("🔍 لطفاً موضوعی که می‌خواهید جستجو کنید را بفرستید:")
+    await update.message.reply_text(
+        "🔍 لطفاً موضوعی که می‌خواهید جستجو کنید را بفرستید:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
+    )
 
 
 async def btn_google_search_link_req(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "waiting_google_search_link")
     await update.message.reply_text(
-        "🔗 لطفاً لینکی از صفحه وب را بفرستید:\n\n(لینک باید با http:// یا https:// شروع شود)"
+        "🔗 لطفاً لینکی از صفحه وب را بفرستید:\n\n(لینک باید با http:// یا https:// شروع شود)",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
+        ),
     )
+

@@ -66,7 +66,7 @@ async def handle_github_state(
         await update.message.reply_text(
             "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
         )
-        await clear_state(chat_id)
+        clear_state(chat_id)
         return
 
     if step == "waiting_gh_dl":
@@ -215,7 +215,7 @@ async def process_github_download(
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        await clear_state(chat_id)
+        clear_state(chat_id)
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

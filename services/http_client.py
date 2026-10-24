@@ -16,7 +16,12 @@ async def init_http_session() -> aiohttp.ClientSession:
             ttl_dns_cache=300,
             enable_cleanup_closed=True,
         )
-        _http_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        _http_session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            max_line_size=65536,
+            max_field_size=65536,
+        )
     return _http_session
 
 

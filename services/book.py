@@ -3,10 +3,9 @@
 Multi-source book search & download service.
 
 Sources (in priority order):
-  1. Project Gutenberg (via Gutendex API) — classic/public-domain books, direct downloads
-  2. Standard Ebooks               — beautifully formatted public-domain EPUBs
-  3. Open Library                  — broad catalog; direct OL download where available
-  4. DOAB (Directory of Open Access Books) — academic open-access books
+  1. Internet Archive (Archive.org)  — vast library of technical, academic, and public-domain books (direct PDF)
+  2. Project Gutenberg               — classic literature & public-domain EPUBs (direct download)
+  3. Open Library                    — comprehensive global catalog & metadata
 
 No API key required for any source.
 All blocking I/O is wrapped in asyncio.to_thread().
@@ -20,7 +19,7 @@ import os
 import re
 import time
 import urllib.parse
-import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
 
@@ -32,30 +31,32 @@ logger = logging.getLogger(__name__)
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 MAX_BOOK_BYTES = 50 * 1024 * 1024   # 50 MB — Bale file sending limit
-_MAX_RETRIES   = 2
-_RETRY_DELAY   = 2.0                 # seconds between retries
-_SEARCH_DEADLINE = 15.0              # max seconds to wait for all search sources
+_MAX_RETRIES   = 1
+_RETRY_DELAY   = 1.0                 # seconds between retries
+_SEARCH_DEADLINE = 20.0              # max seconds to wait for search sources
 
-_TIMEOUT = httpx.Timeout(connect=45.0, read=120.0, write=30.0, pool=10.0)
+_TIMEOUT = httpx.Timeout(connect=15.0, read=45.0, write=15.0, pool=10.0)
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, */*",
+    "Accept": "application/json, text/html, */*",
 }
 
 # Source identifiers
+SRC_IA        = "archive_org"
 SRC_GUTENBERG = "gutenberg"
-SRC_STANDARD  = "standard_ebooks"
 SRC_OL        = "open_library"
+SRC_STANDARD  = "standard_ebooks"
 SRC_DOAB      = "doab"
 
 SOURCE_LABELS = {
+    SRC_IA:        "🏛 Internet Archive",
     SRC_GUTENBERG: "📗 Project Gutenberg",
-    SRC_STANDARD:  "📘 Standard Ebooks",
     SRC_OL:        "📙 Open Library",
+    SRC_STANDARD:  "📘 Standard Ebooks",
     SRC_DOAB:      "🎓 DOAB (Open Access)",
 }
 
@@ -92,7 +93,7 @@ def _get_with_retry(
     return None
 
 
-def _safe_filename(name: str, ext: str = ".epub") -> str:
+def _safe_filename(name: str, ext: str = ".pdf") -> str:
     name = re.sub(r"[^\w\s-]", "", name).strip()
     name = re.sub(r"\s+", "_", name)
     base = name[:50] or "book"
@@ -102,30 +103,145 @@ def _safe_filename(name: str, ext: str = ".epub") -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SOURCE 1: Project Gutenberg (Gutendex)
+# SOURCE 1: Internet Archive (Advanced Search & Metadata Files)
 # ──────────────────────────────────────────────────────────────────────────────
-_GUTENDEX_URL = "https://gutendex.com/books/"
-
-# PDF only (EPUB/HTML intentionally excluded).
-_PREFER_FORMATS = [
-    ("application/pdf", ".pdf"),
-]
+_IA_SEARCH_URL = "https://archive.org/advancedsearch.php"
+_IA_META_URL   = "https://archive.org/metadata/{ident}/files"
 
 
-def _gutenberg_pick_url(formats: dict) -> tuple[Optional[str], str]:
-    """Pick the PDF download URL from a Gutenberg formats dict."""
-    for mime, ext in _PREFER_FORMATS:
-        url = formats.get(mime)
-        if url:
-            return url, ext
-    return None, ".pdf"
+def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
+    """Search Internet Archive for public/downloadable texts in PDF format."""
+    clean_query = query.replace('"', '').strip()
+    params = {
+        "q": f"({clean_query}) AND mediatype:texts AND format:pdf",
+        "fl[]": ["identifier", "title", "creator", "year", "downloads"],
+        "sort[]": "downloads desc",
+        "rows": max(max_results * 2, 6),
+        "page": 1,
+        "output": "json",
+    }
+
+    with _make_client() as client:
+        try:
+            resp = _get_with_retry(client, _IA_SEARCH_URL, params=params, retries=1)
+            if not resp:
+                return []
+            docs = resp.json().get("response", {}).get("docs", [])
+        except Exception as e:
+            logger.warning("Internet Archive search failed: %s", e)
+            return []
+
+        def _resolve_pdf(doc: dict) -> Optional[dict]:
+            ident = doc.get("identifier")
+            if not ident:
+                return None
+            try:
+                meta_resp = client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
+                if meta_resp.status_code != 200:
+                    return None
+                files = meta_resp.json().get("result", [])
+                best_pdf = None
+                best_size = 0
+                for f in files:
+                    name = f.get("name", "")
+                    size = int(f.get("size", 0) or 0)
+                    if name.lower().endswith(".pdf") and 50000 < size < MAX_BOOK_BYTES:
+                        if not best_pdf or (size > best_size and not name.endswith("_text.pdf")):
+                            best_pdf = name
+                            best_size = size
+
+                if best_pdf:
+                    creator = doc.get("creator")
+                    if isinstance(creator, list):
+                        creator = ", ".join(creator)
+                    dl_url = f"https://archive.org/download/{ident}/{urllib.parse.quote(best_pdf)}"
+                    return {
+                        "title":        (doc.get("title") or ident)[:80],
+                        "author":       (creator or "نامشخص")[:60],
+                        "year":         str(doc.get("year") or "—"),
+                        "source":       SRC_IA,
+                        "source_label": SOURCE_LABELS[SRC_IA],
+                        "has_file":     True,
+                        "download_url": dl_url,
+                        "file_ext":     ".pdf",
+                        "book_id":      ident,
+                    }
+            except Exception:
+                pass
+            return None
+
+        books: List[dict] = []
+        with ThreadPoolExecutor(max_workers=min(len(docs) or 1, 6)) as pool:
+            for item in pool.map(_resolve_pdf, docs):
+                if item:
+                    books.append(item)
+                if len(books) >= max_results:
+                    break
+        return books
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SOURCE 2: Project Gutenberg (Direct Web Search & EPUBs)
+# ──────────────────────────────────────────────────────────────────────────────
+_GUTENBERG_SEARCH_URL = "https://www.gutenberg.org/ebooks/search/"
 
 
 def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
+    """Search Gutenberg directly on www.gutenberg.org without Cloudflare blocks."""
+    url = f"{_GUTENBERG_SEARCH_URL}?query={urllib.parse.quote_plus(query)}"
+    books = []
+    with _make_client() as client:
+        try:
+            resp = _get_with_retry(client, url, retries=1)
+            if not resp:
+                return []
+            pattern = (
+                r'<li class="booklink">.*?href="/ebooks/(\d+)".*?'
+                r'<span class="title">(.*?)</span>.*?'
+                r'<span class="subtitle">(.*?)</span>'
+            )
+            items = re.findall(pattern, resp.text, re.DOTALL)
+            for book_id, raw_title, raw_author in items[:max_results]:
+                title = re.sub(r'<.*?>', '', raw_title).strip()
+                author = re.sub(r'<.*?>', '', raw_author).strip()
+                books.append({
+                    "title":        title[:80] or "نامشخص",
+                    "author":       author[:60] or "نامشخص",
+                    "year":         "—",
+                    "source":       SRC_GUTENBERG,
+                    "source_label": SOURCE_LABELS[SRC_GUTENBERG],
+                    "has_file":     True,
+                    "download_url": f"https://www.gutenberg.org/ebooks/{book_id}.epub3.images",
+                    "fallback_urls": [
+                        f"https://www.gutenberg.org/ebooks/{book_id}.epub.noimages",
+                        f"https://www.gutenberg.org/cache/epub/{book_id}/pg{book_id}.epub",
+                    ],
+                    "file_ext":     ".epub",
+                    "book_id":      book_id,
+                })
+        except Exception as e:
+            logger.warning("Gutenberg search error: %s", e)
+    return books
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SOURCE 3: Open Library
+# ──────────────────────────────────────────────────────────────────────────────
+_OL_SEARCH = "https://openlibrary.org/search.json"
+
+
+def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
+    """Lightweight search on Open Library for book catalog metadata."""
     with _make_client() as client:
         resp = _get_with_retry(
-            client, _GUTENDEX_URL,
-            params={"search": query},
+            client,
+            _OL_SEARCH,
+            params={
+                "q": query,
+                "fields": "key,title,author_name,first_publish_year,ia",
+                "limit": max_results,
+            },
+            retries=1,
         )
         if not resp:
             return []
@@ -135,140 +251,17 @@ def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
             return []
 
     books = []
-    for item in data.get("results", [])[:max_results * 2]:
-        formats = item.get("formats", {})
-        download_url, ext = _gutenberg_pick_url(formats)
-        authors = item.get("authors", [])
-        author_str = ", ".join(
-            # Gutenberg stores "Lastname, Firstname" — flip it
-            " ".join(reversed(a.get("name", "").split(", ", 1)))
-            for a in authors
-        )[:60] or "نامشخص"
-        books.append({
-            "title":        (item.get("title") or "نامشخص")[:80],
-            "author":       author_str,
-            "year":         str(authors[0].get("birth_year", "—")) if authors else "—",
-            "source":       SRC_GUTENBERG,
-            "source_label": SOURCE_LABELS[SRC_GUTENBERG],
-            "has_file":     bool(download_url),
-            "download_url": download_url,
-            "file_ext":     ext,
-            "book_id":      str(item.get("id", "")),
-        })
-        if len(books) >= max_results:
-            break
-    return books
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# SOURCE 2: Standard Ebooks (OPDS 2.0 JSON)
-# ──────────────────────────────────────────────────────────────────────────────
-_SE_OPDS_URL = "https://standardebooks.org/feeds/opds"
-_SE_BASE     = "https://standardebooks.org"
-
-
-def _search_standard_ebooks_sync(query: str, max_results: int) -> List[dict]:
-    """
-    Standard Ebooks OPDS 2.0 feed returns the full catalog (no search param).
-    We fetch the first page and filter by title/author matching query terms.
-    Rate limit: don't hammer this endpoint.
-    """
-    headers = {**_HEADERS, "Accept": "application/opds+json"}
-    with _make_client() as client:
-        try:
-            resp = client.get(_SE_OPDS_URL, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            logger.debug("Standard Ebooks OPDS unavailable: %s", e)
-            return []
-
-    query_words = set(query.lower().split())
-    books = []
-    for pub in data.get("publications", []):
-        title  = (pub.get("title") or "")
-        author = ""
-        contributors = pub.get("contributors", {})
-        if isinstance(contributors, dict):
-            authors_list = contributors.get("author", [])
-            if isinstance(authors_list, list):
-                author = ", ".join(
-                    a.get("name", "") for a in authors_list if isinstance(a, dict)
-                )
-            elif isinstance(authors_list, dict):
-                author = authors_list.get("name", "")
-        elif isinstance(contributors, list):
-            author = ", ".join(
-                c.get("name", "") for c in contributors if isinstance(c, dict)
-            )
-
-        haystack = (title + " " + author).lower()
-        if not any(w in haystack for w in query_words):
-            continue
-
-        # Find EPUB acquisition link
-        dl_url = None
-        for link in pub.get("links", []):
-            rel  = link.get("rel", "")
-            mime = link.get("type", "")
-            href = link.get("href", "")
-            if "acquisition" in rel and "epub" in mime and href:
-                dl_url = href if href.startswith("http") else _SE_BASE + href
-                break
-
-        books.append({
-            "title":        title[:80] or "نامشخص",
-            "author":       author[:60] or "نامشخص",
-            "year":         "—",
-            "source":       SRC_STANDARD,
-            "source_label": SOURCE_LABELS[SRC_STANDARD],
-            "has_file":     bool(dl_url),
-            "download_url": dl_url,
-            "file_ext":     ".epub",
-            "book_id":      pub.get("identifier", ""),
-        })
-        if len(books) >= max_results:
-            break
-
-    return books
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# SOURCE 3: Open Library
-# ──────────────────────────────────────────────────────────────────────────────
-_OL_SEARCH = "https://openlibrary.org/search.json"
-_OL_BASE   = "https://openlibrary.org"
-
-
-def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
-    with _make_client() as client:
-        resp = _get_with_retry(
-            client, _OL_SEARCH,
-            params={
-                "q": query,
-                "fields": "key,title,author_name,first_publish_year,lending_edition_s,cover_i,ia,public_scan_b,has_fulltext",
-                "limit": max_results * 2,
-            },
-        )
-        if not resp:
-            return []
-        data = resp.json()
-
-    books = []
     for doc in data.get("docs", []):
         raw_ia = doc.get("ia") or []
         ia_list = [item for item in raw_ia if item and isinstance(item, str)]
-
-        # Open Library direct PDF URLs (/books/OL...M.pdf) redirect to verify_human (bot protection HTML page).
-        # Direct file downloads are available via Internet Archive identifiers (ia).
+        dl_url = None
         if ia_list:
             dl_url = f"https://archive.org/download/{ia_list[0]}/{ia_list[0]}.pdf"
-        else:
-            dl_url = None
 
+        authors = doc.get("author_name") or []
         books.append({
             "title":        (doc.get("title") or "نامشخص")[:80],
-            "author":       ", ".join(doc.get("author_name") or [])[:60] or "نامشخص",
+            "author":       ", ".join(authors)[:60] or "نامشخص",
             "year":         str(doc.get("first_publish_year") or "—"),
             "source":       SRC_OL,
             "source_label": SOURCE_LABELS[SRC_OL],
@@ -285,103 +278,21 @@ def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SOURCE 4: DOAB (Directory of Open Access Books)
-# ──────────────────────────────────────────────────────────────────────────────
-_DOAB_SEARCH = "https://directory.doabooks.org/rest/search"
-_DOAB_CHECK  = "https://doab-check.ebookfoundation.org/api/doab/{doab_id}"
-
-
-def _search_doab_sync(query: str, max_results: int) -> List[dict]:
-    from concurrent.futures import ThreadPoolExecutor
-
-    with _make_client() as client:
-        resp = _get_with_retry(
-            client, _DOAB_SEARCH,
-            params={
-                "query": query,
-                "rpp":   max_results,
-                "start": 0,
-                "expand": "metadata",
-            },
-            retries=0,
-        )
-        if not resp:
-            return []
-        try:
-            items = resp.json()
-        except Exception:
-            return []
-
-        if not isinstance(items, list):
-            return []
-        items = items[:max_results]
-
-        def _build(item: dict) -> dict:
-            metadata = item.get("metadata", []) or []
-
-            def _meta(key: str) -> str:
-                for m in metadata:
-                    if m.get("key") == key:
-                        return (m.get("value") or "").strip()
-                return ""
-
-            title  = _meta("dc.title") or "نامشخص"
-            author = _meta("dc.contributor.author") or _meta("dc.creator") or "نامشخص"
-            year   = (_meta("dc.date.issued") or "—")[:4]
-            doab_id = item.get("handle", "").replace("20.500.12854/", "") if item.get("handle") else ""
-
-            dl_url = None
-            if doab_id:
-                try:
-                    with _make_client() as c2:
-                        check_resp = _get_with_retry(
-                            c2, _DOAB_CHECK.format(doab_id=doab_id), retries=0,
-                        )
-                    if check_resp:
-                        for link in check_resp.json().get("links", []):
-                            if link.get("content_type") == "pdf" and link.get("url"):
-                                dl_url = link["url"]
-                                break
-                except Exception as e:
-                    logger.debug("DOAB-Check failed for %s: %s", doab_id, e)
-
-            return {
-                "title":        title[:80],
-                "author":       author[:60],
-                "year":         year,
-                "source":       SRC_DOAB,
-                "source_label": SOURCE_LABELS[SRC_DOAB],
-                "has_file":     bool(dl_url),
-                "download_url": dl_url,
-                "file_ext":     ".pdf",
-                "book_id":      doab_id,
-            }
-
-        # Run DOAB-Check lookups in parallel instead of one-by-one
-        with ThreadPoolExecutor(max_workers=max(1, len(items))) as pool:
-            return list(pool.map(_build, items))
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Combined search (all sources in parallel)
 # ──────────────────────────────────────────────────────────────────────────────
 async def search_books(query: str, max_results: int = 8) -> List[dict]:
     """
-    Search all four sources concurrently and return a combined, de-duplicated list.
+    Search sources concurrently and return a combined, de-duplicated list.
     Books with downloadable files are sorted first.
     """
-    per_source = max(4, max_results)
+    per_source = max(4, max_results // 2 + 1)
 
     tasks = [
-        asyncio.create_task(asyncio.to_thread(fn, query, per_source))
-        for fn in (
-            _search_gutenberg_sync,
-            # Standard Ebooks only offers EPUB -> skipped (PDF only)
-            _search_openlibrary_sync,
-            _search_doab_sync,
-        )
+        asyncio.create_task(asyncio.to_thread(_search_internet_archive_sync, query, per_source)),
+        asyncio.create_task(asyncio.to_thread(_search_gutenberg_sync, query, per_source)),
+        asyncio.create_task(asyncio.to_thread(_search_openlibrary_sync, query, per_source)),
     ]
-    # Wait at most _SEARCH_DEADLINE seconds; use whatever sources answered in time.
+
     done, pending = await asyncio.wait(tasks, timeout=_SEARCH_DEADLINE)
     for t in pending:
         t.cancel()
@@ -403,8 +314,8 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
             seen.add(key)
             unique.append(book)
 
-    # Sort: downloadable first, then by source priority
-    source_order = {SRC_GUTENBERG: 0, SRC_STANDARD: 1, SRC_OL: 2, SRC_DOAB: 3}
+    # Sort: downloadable first, then by source priority (IA > Gutenberg > OL)
+    source_order = {SRC_IA: 0, SRC_GUTENBERG: 1, SRC_OL: 2}
     unique.sort(key=lambda b: (
         0 if b["has_file"] else 1,
         source_order.get(b["source"], 9),
@@ -460,7 +371,7 @@ def _download_url_sync(
 
                     content_type = stream.headers.get("content-type", "").lower()
                     if "text/html" in content_type or "application/xhtml+xml" in content_type:
-                        logger.warning("Download URL returned HTML content: %s (type: %s)", download_url, content_type)
+                        logger.warning("Download URL returned HTML content: %s", download_url)
                         _safe_unlink(dest_path)
                         return False
 
@@ -471,14 +382,12 @@ def _download_url_sync(
                             if first_chunk:
                                 first_chunk = False
                                 chunk_start = chunk[:512].lower()
-                                # Validate HTML / bot protection signature
                                 if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
                                     logger.warning("Downloaded payload is HTML page: %s", download_url)
                                     fh.close()
                                     _safe_unlink(dest_path)
                                     return False
 
-                                # Validate PDF / EPUB magic bytes
                                 if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
                                     logger.warning("File missing PDF magic bytes: %s", download_url)
                                     fh.close()
@@ -527,10 +436,15 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
     if download_url:
         urls_to_try.append((download_url, ext))
 
-    # For Open Library books with ia_list, add fallback candidate URLs (PDF & EPUB for top ia items)
+    # Add any fallback URLs provided by the source
+    for fallback in book.get("fallback_urls", []):
+        if (fallback, ext) not in urls_to_try:
+            urls_to_try.append((fallback, ext))
+
+    # For Open Library books with ia_list, try top candidates
     ia_list = book.get("ia_list") or []
     if book.get("source") == SRC_OL and ia_list:
-        for ia_id in ia_list[:3]:  # Try up to top 3 IA candidates
+        for ia_id in ia_list[:2]:
             pdf_url = f"https://archive.org/download/{ia_id}/{ia_id}.pdf"
             if (pdf_url, ".pdf") not in urls_to_try:
                 urls_to_try.append((pdf_url, ".pdf"))
@@ -539,13 +453,11 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
         logger.info("No download URLs available for book: %s", book.get("title"))
         return None
 
-    verify = book.get("source") != SRC_GUTENBERG
-
     for url, file_ext in urls_to_try:
         safe_name = _safe_filename(book.get("title", "book"), file_ext)
         dest_path = os.path.join(dest_dir, safe_name)
 
-        success = _download_url_sync(url, dest_path, verify=verify)
+        success = _download_url_sync(url, dest_path)
         if success and os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
             return dest_path
         _safe_unlink(dest_path)
@@ -563,10 +475,7 @@ async def download_book(book: dict, dest_dir: str) -> Optional[str]:
 # ──────────────────────────────────────────────────────────────────────────────
 def format_book_info(book: dict) -> str:
     """Return a compact Markdown summary for one book result."""
-    if book["has_file"]:
-        icon = "⬇️"
-    else:
-        icon = "🔒"
+    icon = "⬇️" if book["has_file"] else "🔒"
     ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
     return (
         f"{icon} *{book['title']}*\n"

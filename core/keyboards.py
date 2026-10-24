@@ -211,6 +211,7 @@ def get_google_search_menu_keyboard():
         [KeyboardButton(BTN_GOOGLE_SEARCH_LINK)],
         [KeyboardButton(BTN_BACK)],
     ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
 def get_image_processing_menu_keyboard():

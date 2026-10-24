@@ -84,6 +84,6 @@ async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     city_name = " ".join(context.args)
     await update.message.reply_text(f"⏳ در حال دریافت آب و هوای {city_name}...")
-    result = await asyncio.to_thread(get_weather_forecast, city_name)
-    await update.message.reply_text(result)
+    result = await get_weather_forecast(city_name)
+    await update.message.reply_text(result, parse_mode="Markdown")
     await log_upload_success("weather", str(update.effective_chat.id))
