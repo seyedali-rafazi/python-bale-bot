@@ -30,7 +30,8 @@ from services.zip_utils import build_zip_and_split, format_merge_instructions
 
 logger = logging.getLogger(__name__)
 
-MAX_BALE_BYTES = 45 * 1024 * 1024  # 45 MB (safety margin under 50 MB Bale limit)
+MAX_BALE_BYTES = 45 * 1024 * 1024   # 45 MB — حد split (ورودی به zip_utils)
+MAX_BALE_SEND_BYTES = 40 * 1024 * 1024  # 40 MB — حد واقعی ارسال مستقیم (margin بیشتر)
 MAX_ALLOWED_MB = MAX_ALLOWED_DOWNLOAD_BYTES // (1024 * 1024)  # 250 MB
 
 # Concurrency semaphore: max 3 parallel downloads to prevent saturating bandwidth/CPU
@@ -286,6 +287,32 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
             )
 
             total_parts = len(part_paths)
+
+            # ── بررسی مجدد حجم واقعی ZIP پس از ساخت ──────────────────────────
+            # APK‌ها قابل فشرده‌سازی نیستند؛ ZIP ممکنه از حد آستانه رد بشه.
+            # اگه تنها پارت داریم ولی حجمش از MAX_BALE_SEND_BYTES بیشتره،
+            # آن را دوباره به چند پارت تقسیم می‌کنیم.
+            if total_parts == 1 and os.path.getsize(part_paths[0]) > MAX_BALE_SEND_BYTES:
+                logger.info(
+                    "ZIP size (%d bytes) exceeds safe send limit (%d), re-splitting for chat %s",
+                    os.path.getsize(part_paths[0]), MAX_BALE_SEND_BYTES, chat_id
+                )
+                from services.zip_utils import split_file_concat_parts
+                part_paths = await asyncio.to_thread(
+                    split_file_concat_parts,
+                    part_paths[0],
+                    MAX_BALE_SEND_BYTES,
+                    archive_base,
+                )
+                split_method = "concat"
+                total_parts = len(part_paths)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"📦 حجم نهایی ZIP ({os.path.getsize(part_paths[0]) / (1024*1024):.1f} MB) بیشتر از حد مجاز بله بود.\n"
+                        f"⚙️ در حال تقسیم‌بندی مجدد به {total_parts} پارت..."
+                    ),
+                )
 
             if total_parts == 1:
                 zip_file = part_paths[0]
