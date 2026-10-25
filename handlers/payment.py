@@ -27,7 +27,7 @@ async def btn_buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 کاربر گرامی، با ارتقا به حساب ویژه، شما از امکانات زیر بهره‌مند می‌شوید:
 🚀 **صف دانلود جداگانه و اختصاصی** (بدون معطلی)
-☁️ **قابلیت آپلود مستقیم در سرور ابری**
+☁️ **قابلیت آپلود مستقیم در سرور ابری** (نیاز به تهیه جداگانه حجم ابری)
 📈 **افزایش چشمگیر محدودیت‌های روزانه** به شرح زیر:
 🎥 یوتیوب: $20$ درخواست در روز
 🔍 اکسپلور تیک‌تاک: $10$ درخواست در روز
@@ -128,8 +128,6 @@ async def successful_payment_callback(
             # ===== پرداخت VIP =====
             await add_vip_time(chat_id, VIP_LIMIT_VALUE)
 
-            await add_cloud_storage(chat_id, 5000)
-
             receipt_text = (
                 "✅ <b>پرداخت شما با موفقیت تایید و ثبت شد!</b>\n\n"
                 "🧾 <b>رسید تراکنش شما:</b>\n"
@@ -137,7 +135,6 @@ async def successful_payment_callback(
                 f"💰 مبلغ: $ {amount_toman} $ تومان\n"
                 f"🔖 کد پیگیری: <code>{provider_charge_id}</code>\n\n"
                 f"🌟 زمان اشتراک شما $ {VIP_LIMIT_VALUE} $ روز تمدید شد."
-                "☁️ <b>همچنین ۵۰۰۰ مگابایت (5GB) فضای ابری به حساب شما اضافه شد!</b>"
             )
 
         elif payload.startswith("cloud_charge_"):
