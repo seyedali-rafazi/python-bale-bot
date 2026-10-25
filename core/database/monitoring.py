@@ -26,6 +26,7 @@ SECTION_LABELS = {
     "image_processing": "🖼 پردازش تصویر",
     "kaggle":           "🗂 کاگل",
     "book":             "📖 کتاب",
+    "software":         "📦 نرم‌افزار",
 }
 
 ALL_SECTIONS = list(SECTION_LABELS.keys())

@@ -5,9 +5,17 @@ import re
 import uuid
 import asyncio
 
-from ddgs import DDGS
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        DDGS = None
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+
 
 from core.state_manager import clear_state
 from services.http_client import get_http_session

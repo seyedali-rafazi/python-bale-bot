@@ -78,6 +78,9 @@ from .menus import (
     btn_kaggle_dl_link_req,
     btn_book_menu,
     btn_book_search_req,
+    btn_software_menu,
+    btn_software_android_req,
+    btn_software_windows_req,
 )
 from .states import process_state_input, process_photo_input, process_media_input
 from core.admin import (
@@ -119,6 +122,7 @@ from handlers.states.state_github import github_callback_handler
 from handlers.states.state_web_search import web_search_callback
 from handlers.states.state_kaggle import kaggle_callback_handler
 from handlers.states.state_book import book_callback_handler
+from handlers.states.state_software import software_callback_handler
 
 from .menus.cloud import btn_cloud_storage_menu
 from handlers.states.state_cloud import (
@@ -535,6 +539,28 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(book_callback_handler, pattern=r"^bookdl_")
+    )
+
+    # ─── هندلرهای دانلود نرم‌افزار ───
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SOFTWARE)}$"), btn_software_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SOFTWARE_ANDROID)}$"),
+            btn_software_android_req,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(f"^{re.escape(BTN_SOFTWARE_WINDOWS)}$"),
+            btn_software_windows_req,
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(software_callback_handler, pattern=r"^dl_soft_")
     )
 
     # هندلر های پرداخت

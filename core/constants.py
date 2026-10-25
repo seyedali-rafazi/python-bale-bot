@@ -107,3 +107,9 @@ BTN_KAGGLE_POPULAR = "🔥 دیتاست‌های محبوب"
 BTN_KAGGLE_DL_LINK = "🔗 دانلود با لینک کاگل"
 BTN_BOOK_DOWNLOAD = "📖 دانلود کتاب"
 BTN_BOOK_SEARCH = "🔍 جستجوی کتاب"
+
+# منوی دانلود نرم‌افزار
+BTN_SOFTWARE = "📦 دانلود نرم‌افزار"
+BTN_SOFTWARE_ANDROID = "📱 دانلود نرم‌افزار اندروید"
+BTN_SOFTWARE_WINDOWS = "💻 دانلود نرم‌افزار ویندوز"
+

@@ -3,7 +3,11 @@
 import os
 import logging
 from dotenv import load_dotenv
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+try:
+    from deep_translator import GoogleTranslator, MyMemoryTranslator
+except ImportError:
+    GoogleTranslator = None
+    MyMemoryTranslator = None
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +17,16 @@ PROXY = os.getenv("PROXY")
 proxies = {"http": PROXY, "https": PROXY} if PROXY else {"http": "", "https": ""}
 
 # Cached translator instances
-cached_translators = {
-    ("fa", "en"): GoogleTranslator(source="fa", target="en", proxies=proxies),
-    ("en", "fa"): GoogleTranslator(source="en", target="fa", proxies=proxies),
-}
+cached_translators = {}
+if GoogleTranslator is not None:
+    try:
+        cached_translators = {
+            ("fa", "en"): GoogleTranslator(source="fa", target="en", proxies=proxies),
+            ("en", "fa"): GoogleTranslator(source="en", target="fa", proxies=proxies),
+        }
+    except Exception:
+        cached_translators = {}
+
 
 _MYMEMORY_LANG_MAP = {
     "fa": "fa-IR",

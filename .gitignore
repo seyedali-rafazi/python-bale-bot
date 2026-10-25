@@ -1,10 +1,36 @@
+# Environment & Config
 .env
-session_danny75479
+.env.*
+!.env.example
 login.py
-testMainPooling.py
-testMainWbhook.py
-.env.test
-.env.production
+
+# Sessions
+session_*
+*.session
+*.session-journal
 my-telegram-research.session
 my_bale1_bot_session.session
 ai-session-name.session
+
+# Tests
+test*.py
+test_*.py
+*test*.py
+tests/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Runtime & Downloads
+downloads/
+ig_downloads/
+kaggle_temp/
+*.tmp

@@ -105,3 +105,10 @@ from .research import (
     btn_book_menu,
     btn_book_search_req,
 )
+
+from .software import (
+    btn_software_menu,
+    btn_software_android_req,
+    btn_software_windows_req,
+)
+

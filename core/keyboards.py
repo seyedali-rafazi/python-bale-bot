@@ -20,6 +20,7 @@ def get_main_menu_keyboard():
             KeyboardButton(BTN_PROGRAMMING),
             KeyboardButton(BTN_GOOGLE_SEARCH),
         ],
+        [KeyboardButton(BTN_SOFTWARE)],
         [KeyboardButton(BTN_DL_YOUTUBE)],
         [KeyboardButton(BTN_DL_TIKTOK)],
         [KeyboardButton(BTN_RESEARCH), KeyboardButton(BTN_YT_MY_CACHE)],
@@ -33,6 +34,18 @@ def get_main_menu_keyboard():
         [KeyboardButton(BTN_SUPPORT)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def get_software_menu_keyboard():
+    keyboard = [
+        [
+            KeyboardButton(BTN_SOFTWARE_ANDROID),
+            KeyboardButton(BTN_SOFTWARE_WINDOWS),
+        ],
+        [KeyboardButton(BTN_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 
 
 def get_yt_format_keyboard():
