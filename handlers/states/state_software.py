@@ -1,13 +1,15 @@
 # handlers/states/state_software.py
 """
 Software download state handler and callback query processor.
-Manages:
-  - Text input in waiting_software_android and waiting_software_windows states
-  - Presenting 5 top results with inline buttons
-  - Downloading and sending the installer (APK / EXE / ZIP)
-  - Auto-splitting into ZIP parts if file exceeds 50 MB (Bale limit)
+High-concurrency optimized:
+  - Semaphore-controlled worker queue for heavy downloads to prevent server starvation.
+  - Offloading CPU-bound ZIP compression/splitting to worker threads (asyncio.to_thread)
+    so the asyncio event loop NEVER blocks.
+  - Generous I/O timeouts for Bale upload reliability.
+  - Instant button disabling on click to prevent duplicate download requests.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -19,12 +21,20 @@ from telegram.ext import ContextTypes
 
 from core.database.monitoring import log_upload_failed, log_upload_success
 from core.state_manager import clear_state, get_state, set_state
-from services.software_service import SoftwareService, sanitize_filename
+from services.software_service import (
+    MAX_ALLOWED_DOWNLOAD_BYTES,
+    SoftwareService,
+    sanitize_filename,
+)
 from services.zip_utils import build_zip_and_split, format_merge_instructions
 
 logger = logging.getLogger(__name__)
 
 MAX_BALE_BYTES = 49 * 1024 * 1024  # 49 MB (safety margin under 50 MB Bale limit)
+MAX_ALLOWED_MB = MAX_ALLOWED_DOWNLOAD_BYTES // (1024 * 1024)  # 250 MB
+
+# Concurrency semaphore: max 3 parallel downloads to prevent saturating bandwidth/CPU
+_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 
 
 async def handle_software_state(
@@ -169,140 +179,172 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
     download_url = app.get("download_url")
     updated = app.get("updated", "نامشخص")
     extension = app.get("extension", "bin")
+    estimated_size_mb = app.get("size_mb", 0)
 
     if not download_url:
         await query.message.reply_text("❌ متأسفانه لینک دانلود مستقیم برای این نرم‌افزار در دسترس نیست.")
         return
 
-    # Disable buttons to prevent duplicate downloads
+    # Guard against huge files exceeding max limit
+    if estimated_size_mb and estimated_size_mb > MAX_ALLOWED_MB:
+        await query.message.reply_text(
+            f"⚠️ حجم این نرم‌افزار ({estimated_size_mb} مگابایت) بیش از سقف مجاز دانلود ربات ({MAX_ALLOWED_MB} مگابایت) است.\n\n"
+            f"🔗 می‌توانید آن را مستقیماً از لینک زیر دانلود فرمایید:\n{download_url}",
+            disable_web_page_preview=True,
+        )
+        return
+
+    # Immediately disable inline buttons to prevent spam/double-tap
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     try:
         await query.message.edit_text(
-            f"⏳ در حال دانلود نرم‌افزار «{app_name}»...\n"
-            "لطفاً شکیبا باشید، پس از اتمام دانلود فایل ارسال خواهد شد."
+            f"⏳ در حال پردازش و دانلود نرم‌افزار «{app_name}»...\n"
+            "لطفاً شکیبا باشید."
         )
     except Exception:
         pass
 
     platform_fa = "اندروید (Android)" if platform_key == "android" else "ویندوز (Windows)"
 
-    # Download in temporary directory
-    with tempfile.TemporaryDirectory(prefix="soft_dl_") as tmp_dir:
-        safe_base = sanitize_filename(app_name)
-        file_name = f"{safe_base}_v{version}.{extension}"
-        file_name = sanitize_filename(file_name)
+    # Execute under concurrency semaphore to protect network/CPU
+    async with _DOWNLOAD_SEMAPHORE:
+        with tempfile.TemporaryDirectory(prefix="soft_dl_") as tmp_dir:
+            safe_base = sanitize_filename(app_name)
+            file_name = f"{safe_base}_v{version}.{extension}"
+            file_name = sanitize_filename(file_name)
 
-        try:
-            downloaded_path = await SoftwareService.download_file(
-                url=download_url,
-                dest_dir=tmp_dir,
-                filename=file_name,
-            )
-        except Exception as e:
-            logger.exception("Failed to download software '%s': %s", app_name, e)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ خطا در دانلود فایل از سرور منبع. لطفاً بعداً تلاش کنید یا نرم‌افزار دیگری را امتحان کنید.",
-            )
-            await log_upload_failed("software", chat_id)
-            return
-
-        if not os.path.isfile(downloaded_path):
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ فایل دانلود شده یافت نشد.",
-            )
-            await log_upload_failed("software", chat_id)
-            return
-
-        file_size = os.path.getsize(downloaded_path)
-        file_size_mb = file_size / (1024 * 1024)
-
-        # Check Bale 50 MB limit
-        if file_size <= MAX_BALE_BYTES:
-            caption = (
-                f"📦 **{app_name}**\n\n"
-                f"🔖 **نسخه:** `{version}`\n"
-                f"💾 **حجم:** `{file_size_mb:.1f} MB`\n"
-                f"📅 **تاریخ بروزرسانی:** `{updated}`\n"
-                f"💻 **سیستم‌عامل:** {platform_fa}"
-            )
             try:
-                with open(downloaded_path, "rb") as fh:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=fh,
-                        filename=os.path.basename(downloaded_path),
-                        caption=caption,
-                        parse_mode="Markdown",
-                    )
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="✅ نرم‌افزار با موفقیت ارسال شد!\nبرای جستجوی برنامه‌ای دیگر، مجدداً نام آن را بنویسید.",
+                downloaded_path = await SoftwareService.download_file(
+                    url=download_url,
+                    dest_dir=tmp_dir,
+                    filename=file_name,
                 )
-                await log_upload_success("software", chat_id)
-            except Exception as e:
-                logger.exception("Failed to send software document to chat %s: %s", chat_id, e)
+            except ValueError as ve:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text="❌ خطا در ارسال فایل به بله. لطفاً مجدداً امتحان کنید.",
+                    text=f"⚠️ {ve}\n🔗 لینک مستقیم: {download_url}",
+                    disable_web_page_preview=True,
                 )
                 await log_upload_failed("software", chat_id)
-        else:
-            # File > 50 MB: Zip & Split into parts
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف ۵۰ مگابایت پیام‌رسان بله است.\n"
-                    "⚙️ در حال فشرده‌سازی و پارت‌بندی خودکار فایل..."
-                ),
-            )
+                return
+            except Exception as e:
+                logger.exception("Failed to download software '%s': %s", app_name, e)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ خطا در دانلود فایل از سرور منبع. لطفاً بعداً تلاش کنید یا نرم‌افزار دیگری را امتحان کنید.",
+                )
+                await log_upload_failed("software", chat_id)
+                return
 
-            zips_dir = os.path.join(tmp_dir, "zips")
-            part_paths, archive_base, split_method = build_zip_and_split(
-                input_path=downloaded_path,
-                out_dir=zips_dir,
-                zip_basename=safe_base,
-                max_part_bytes=MAX_BALE_BYTES,
-            )
+            if not os.path.isfile(downloaded_path):
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ فایل دانلود شده یافت نشد.",
+                )
+                await log_upload_failed("software", chat_id)
+                return
 
-            total_parts = len(part_paths)
-            for part_idx, part_path in enumerate(part_paths, 1):
-                part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
-                part_caption = (
-                    f"📦 **{app_name}** (پارت {part_idx} از {total_parts})\n"
+            file_size = os.path.getsize(downloaded_path)
+            file_size_mb = file_size / (1024 * 1024)
+
+            # Check Bale 50 MB limit
+            if file_size <= MAX_BALE_BYTES:
+                caption = (
+                    f"📦 **{app_name}**\n\n"
                     f"🔖 **نسخه:** `{version}`\n"
-                    f"💾 **حجم این پارت:** `{part_size_mb:.1f} MB`\n"
+                    f"💾 **حجم:** `{file_size_mb:.1f} MB`\n"
+                    f"📅 **تاریخ بروزرسانی:** `{updated}`\n"
                     f"💻 **سیستم‌عامل:** {platform_fa}"
                 )
                 try:
-                    with open(part_path, "rb") as pf:
+                    with open(downloaded_path, "rb") as fh:
                         await context.bot.send_document(
                             chat_id=chat_id,
-                            document=pf,
-                            filename=os.path.basename(part_path),
-                            caption=part_caption,
+                            document=fh,
+                            filename=os.path.basename(downloaded_path),
+                            caption=caption,
                             parse_mode="Markdown",
+                            write_timeout=180,
+                            read_timeout=120,
+                            connect_timeout=60,
                         )
-                except Exception as e:
-                    logger.exception("Failed sending part %d of %s: %s", part_idx, app_name, e)
                     await context.bot.send_message(
                         chat_id=chat_id,
-                        text=f"❌ خطا در ارسال پارت {part_idx}. فرآیند متوقف شد.",
+                        text="✅ نرم‌افزار با موفقیت ارسال شد!\nبرای جستجوی برنامه‌ای دیگر، مجدداً نام آن را بنویسید.",
+                    )
+                    await log_upload_success("software", chat_id)
+                except Exception as e:
+                    logger.exception("Failed to send software document to chat %s: %s", chat_id, e)
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ خطا در ارسال فایل به بله. لطفاً مجدداً امتحان کنید.",
                     )
                     await log_upload_failed("software", chat_id)
-                    return
-
-            # Send merge instructions
-            instructions = format_merge_instructions(archive_base, total_parts, split_method)
-            if instructions:
+            else:
+                # File > 50 MB: Compress & Split in worker thread so event loop NEVER blocks
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=instructions,
-                    parse_mode="Markdown",
+                    text=(
+                        f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف ۵۰ مگابایت پیام‌رسان بله است.\n"
+                        "⚙️ در حال فشرده‌سازی و پارت‌بندی خودکار فایل در پس‌زمینه..."
+                    ),
                 )
 
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="✅ تمام پارت‌های نرم‌افزار با موفقیت ارسال شدند!",
-            )
-            await log_upload_success("software", chat_id)
+                zips_dir = os.path.join(tmp_dir, "zips")
+                # CRITICAL: offload CPU-bound compression to thread executor
+                part_paths, archive_base, split_method = await asyncio.to_thread(
+                    build_zip_and_split,
+                    input_path=downloaded_path,
+                    out_dir=zips_dir,
+                    zip_basename=safe_base,
+                    max_part_bytes=MAX_BALE_BYTES,
+                )
+
+                total_parts = len(part_paths)
+                for part_idx, part_path in enumerate(part_paths, 1):
+                    part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
+                    part_caption = (
+                        f"📦 **{app_name}** (پارت {part_idx} از {total_parts})\n"
+                        f"🔖 **نسخه:** `{version}`\n"
+                        f"💾 **حجم این پارت:** `{part_size_mb:.1f} MB`\n"
+                        f"💻 **سیستم‌عامل:** {platform_fa}"
+                    )
+                    try:
+                        with open(part_path, "rb") as pf:
+                            await context.bot.send_document(
+                                chat_id=chat_id,
+                                document=pf,
+                                filename=os.path.basename(part_path),
+                                caption=part_caption,
+                                parse_mode="Markdown",
+                                write_timeout=180,
+                                read_timeout=120,
+                                connect_timeout=60,
+                            )
+                    except Exception as e:
+                        logger.exception("Failed sending part %d of %s: %s", part_idx, app_name, e)
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"❌ خطا در ارسال پارت {part_idx}. فرآیند متوقف شد.",
+                        )
+                        await log_upload_failed("software", chat_id)
+                        return
+
+                # Send merge instructions
+                instructions = format_merge_instructions(archive_base, total_parts, split_method)
+                if instructions:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=instructions,
+                        parse_mode="Markdown",
+                    )
+
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="✅ تمام پارت‌های نرم‌افزار با موفقیت ارسال شدند!",
+                )
+                await log_upload_success("software", chat_id)
