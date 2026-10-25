@@ -251,21 +251,50 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
             file_size = os.path.getsize(downloaded_path)
             file_size_mb = file_size / (1024 * 1024)
 
-            # Check Bale 50 MB limit
-            if file_size <= MAX_BALE_BYTES:
+            # Inform user about preparation/zipping
+            if file_size > MAX_BALE_BYTES:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف ۵۰ مگابایت پیام‌رسان بله است.\n"
+                        "⚙️ در حال فشرده‌سازی و پارت‌بندی خودکار فایل در پس‌زمینه..."
+                    ),
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⚙️ در حال آماده‌سازی و ساخت فایل ZIP جهت ارسال بدون محدودیت به بله...",
+                )
+
+            zips_dir = os.path.join(tmp_dir, "zips")
+            # Always package as ZIP to bypass Bale's APK and executable blocking
+            part_paths, archive_base, split_method = await asyncio.to_thread(
+                build_zip_and_split,
+                input_path=downloaded_path,
+                out_dir=zips_dir,
+                zip_basename=safe_base,
+                max_part_bytes=MAX_BALE_BYTES,
+            )
+
+            total_parts = len(part_paths)
+
+            if total_parts == 1:
+                zip_file = part_paths[0]
+                zip_size_mb = os.path.getsize(zip_file) / (1024 * 1024)
                 caption = (
                     f"📦 **{app_name}**\n\n"
                     f"🔖 **نسخه:** `{version}`\n"
-                    f"💾 **حجم:** `{file_size_mb:.1f} MB`\n"
+                    f"💾 **حجم فایل (ZIP):** `{zip_size_mb:.1f} MB`\n"
                     f"📅 **تاریخ بروزرسانی:** `{updated}`\n"
-                    f"💻 **سیستم‌عامل:** {platform_fa}"
+                    f"💻 **سیستم‌عامل:** {platform_fa}\n\n"
+                    "📁 **راهنما:** نرم‌افزار به صورت فایل زیپ (ZIP) ارسال شد تا محدودیت امنیتی بله رفع شود. پس از دانلود، فایل را استخراج (Extract) فرمایید."
                 )
                 try:
-                    with open(downloaded_path, "rb") as fh:
+                    with open(zip_file, "rb") as fh:
                         await context.bot.send_document(
                             chat_id=chat_id,
                             document=fh,
-                            filename=os.path.basename(downloaded_path),
+                            filename=os.path.basename(zip_file),
                             caption=caption,
                             parse_mode="Markdown",
                             write_timeout=180,
@@ -285,26 +314,6 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     )
                     await log_upload_failed("software", chat_id)
             else:
-                # File > 50 MB: Compress & Split in worker thread so event loop NEVER blocks
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف ۵۰ مگابایت پیام‌رسان بله است.\n"
-                        "⚙️ در حال فشرده‌سازی و پارت‌بندی خودکار فایل در پس‌زمینه..."
-                    ),
-                )
-
-                zips_dir = os.path.join(tmp_dir, "zips")
-                # CRITICAL: offload CPU-bound compression to thread executor
-                part_paths, archive_base, split_method = await asyncio.to_thread(
-                    build_zip_and_split,
-                    input_path=downloaded_path,
-                    out_dir=zips_dir,
-                    zip_basename=safe_base,
-                    max_part_bytes=MAX_BALE_BYTES,
-                )
-
-                total_parts = len(part_paths)
                 for part_idx, part_path in enumerate(part_paths, 1):
                     part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
                     part_caption = (

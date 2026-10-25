@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +24,10 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
+
+# Scoop cloud catalog endpoints (Azure AI Search - cross-platform, works on Linux & Windows)
+SCOOP_SEARCH_URL = "https://scoopsearch.search.windows.net/indexes/apps/docs"
+SCOOP_API_KEY = "78CB5DCD0A7ABACE5B4DC3C34BC54C8F"
 
 # Limit concurrent winget operations to prevent process storms under heavy load
 _WINGET_SEMAPHORE = asyncio.Semaphore(2)
@@ -171,6 +176,136 @@ class SoftwareService:
             pass
         return 0.0
 
+    @staticmethod
+    def _extract_scoop_download_url(manifest: dict) -> Optional[str]:
+        arch = manifest.get("architecture", {})
+        if isinstance(arch, dict):
+            for arch_key in ("64bit", "32bit", "arm64"):
+                entry = arch.get(arch_key)
+                if isinstance(entry, dict) and "url" in entry:
+                    u = entry["url"]
+                    return u[0] if isinstance(u, list) else u
+                elif isinstance(entry, str):
+                    return entry
+
+        u = manifest.get("url")
+        if u:
+            return u[0] if isinstance(u, list) else u
+        return None
+
+    @staticmethod
+    def _detect_extension(url: str) -> str:
+        clean = url.split("#")[0].split("?")[0].lower()
+        if ".msi" in clean:
+            return "msi"
+        elif ".zip" in clean:
+            return "zip"
+        elif ".7z" in clean:
+            return "7z"
+        return "exe"
+
+    @classmethod
+    async def _search_windows_scoop(cls, norm_query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search Windows software via Scoop cloud index (Azure AI Search).
+        Fully cross-platform (Linux VPS, Windows, macOS, Docker) without needing local winget CLI.
+        """
+        headers = {
+            "api-key": SCOOP_API_KEY,
+            "User-Agent": USER_AGENT,
+        }
+        params = {
+            "api-version": "2020-06-30",
+            "search": norm_query,
+            "$top": str(limit * 3),
+        }
+
+        try:
+            async with httpx.AsyncClient(headers=headers, timeout=10.0) as client:
+                resp = await client.get(SCOOP_SEARCH_URL, params=params)
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                docs = data.get("value", [])
+
+            if not docs:
+                return []
+
+            candidates = []
+            seen_names = set()
+            for doc in docs:
+                meta = doc.get("Metadata") or {}
+                repo = meta.get("Repository", "")
+                branch = meta.get("BranchName", "master")
+                file_path = meta.get("FilePath", "")
+                if not repo or not file_path:
+                    continue
+
+                raw_repo = repo.replace("github.com", "raw.githubusercontent.com")
+                manifest_url = f"{raw_repo}/{branch}/{file_path}"
+                name = doc.get("Name", norm_query)
+
+                name_key = name.lower().strip()
+                if name_key in seen_names:
+                    continue
+                seen_names.add(name_key)
+
+                candidates.append({
+                    "name": name,
+                    "version": doc.get("Version", "نامشخص"),
+                    "manifest_url": manifest_url,
+                    "stars": meta.get("RepositoryStars", 0),
+                    "official": meta.get("OfficialRepository", False),
+                })
+
+            candidates.sort(key=lambda c: (c["official"], c["stars"]), reverse=True)
+
+            async def _fetch_manifest(client: httpx.AsyncClient, cand: dict) -> Optional[Dict[str, Any]]:
+                try:
+                    r = await client.get(cand["manifest_url"], timeout=6.0)
+                    if r.status_code == 200:
+                        m = r.json()
+                        dl_url = cls._extract_scoop_download_url(m)
+                        if dl_url:
+                            clean_dl = dl_url.split("#")[0]
+                            ext = cls._detect_extension(clean_dl)
+                            return {
+                                "name": cand["name"],
+                                "package": cand["name"],
+                                "version": cand["version"] or m.get("version", "نامشخص"),
+                                "download_url": clean_dl,
+                                "extension": ext,
+                                "platform": "windows",
+                                "size_mb": 0.0,
+                                "updated": "نامشخص",
+                            }
+                except Exception:
+                    pass
+                return None
+
+            results: List[Dict[str, Any]] = []
+            seen_urls = set()
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                tasks = [_fetch_manifest(client, c) for c in candidates[: limit + 3]]
+                fetched = await asyncio.gather(*tasks, return_exceptions=True)
+                for item in fetched:
+                    if isinstance(item, dict) and item.get("download_url"):
+                        dl = item["download_url"]
+                        if dl in seen_urls:
+                            continue
+                        seen_urls.add(dl)
+                        # Try getting remote size
+                        size_mb = await cls._get_remote_file_size_mb(dl)
+                        item["size_mb"] = size_mb
+                        results.append(item)
+                        if len(results) >= limit:
+                            break
+
+            return results
+        except Exception as e:
+            logger.warning("Scoop search failed for '%s': %s", norm_query, e)
+            return []
+
     @classmethod
     async def _winget_show(cls, package_id: str) -> Optional[Dict[str, Any]]:
         """Run `winget show` for a specific package ID under a concurrency semaphore."""
@@ -204,14 +339,7 @@ class SoftwareService:
             date_match = re.search(r"Release Date:\s*(\S+)", stdout)
             updated = date_match.group(1).strip() if date_match else "نامشخص"
 
-            # Detect extension
-            lower_url = installer_url.lower()
-            if ".msi" in lower_url:
-                ext = "msi"
-            elif ".zip" in lower_url:
-                ext = "zip"
-            else:
-                ext = "exe"
+            ext = cls._detect_extension(installer_url)
 
             return {
                 "download_url": installer_url,
@@ -224,16 +352,10 @@ class SoftwareService:
             return None
 
     @classmethod
-    async def search_windows(cls, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Search Windows software with caching and concurrency control.
-        """
-        norm_query = cls._normalize_query(query)
-        cache_key = f"windows:{norm_query}:{limit}"
-
-        cached = _get_from_cache(cache_key)
-        if cached is not None:
-            return cached
+    async def _search_windows_winget(cls, norm_query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Fallback Windows search using local winget CLI (only when winget exists on system)."""
+        if not shutil.which("winget"):
+            return []
 
         def _run_search():
             import subprocess
@@ -281,7 +403,6 @@ class SoftwareService:
                 if len(candidates) >= limit + 2:
                     break
 
-            # Fetch details in parallel with concurrency semaphore
             tasks = [cls._winget_show(c["id"]) for c in candidates[: limit + 2]]
             show_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -294,8 +415,6 @@ class SoftwareService:
                 version = show_res.get("version") or cand["version"] or "نامشخص"
                 ext = show_res.get("extension", "exe")
                 updated = show_res.get("updated", "نامشخص")
-
-                # Try getting remote size
                 size_mb = await cls._get_remote_file_size_mb(installer_url)
 
                 results.append(
@@ -314,11 +433,35 @@ class SoftwareService:
                 if len(results) >= limit:
                     break
 
-            _put_in_cache(cache_key, results)
             return results
         except Exception as e:
-            logger.exception("Error searching Windows software for '%s': %s", query, e)
+            logger.warning("winget search failed for '%s': %s", norm_query, e)
             return []
+
+    @classmethod
+    async def search_windows(cls, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search Windows software with caching and concurrency control.
+        Uses universal cloud catalog (cross-platform) with winget CLI fallback when available.
+        """
+        norm_query = cls._normalize_query(query)
+        cache_key = f"windows:{norm_query}:{limit}"
+
+        cached = _get_from_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        # 1. Primary: Cloud catalog search (works on Linux VPS, Docker, Windows)
+        results = await cls._search_windows_scoop(norm_query, limit=limit)
+
+        # 2. Fallback: If no results found and local winget CLI is installed
+        if not results and shutil.which("winget"):
+            results = await cls._search_windows_winget(norm_query, limit=limit)
+
+        if results:
+            _put_in_cache(cache_key, results)
+
+        return results
 
     @classmethod
     async def download_file(

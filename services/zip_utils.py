@@ -191,6 +191,14 @@ def build_zip_and_split(
     os.makedirs(out_dir, exist_ok=True)
     archive_basename = zip_basename
 
+    # If input is already a zip file, avoid double-zipping
+    if input_path.lower().endswith(".zip"):
+        file_size = os.path.getsize(input_path)
+        if file_size <= max_part_bytes:
+            return [input_path], archive_basename, "single"
+        parts = split_file_concat_parts(input_path, max_part_bytes, archive_basename)
+        return parts, archive_basename, "concat"
+
     spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
     if spanned:
         method = "single" if len(spanned) == 1 else "spanned"
