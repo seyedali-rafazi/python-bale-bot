@@ -25,6 +25,8 @@ async def set_vip(user_id, status: int):
         "UPDATE users SET is_vip = ? WHERE user_id = ?", (status, user_id)
     )
     await conn.commit()
+    from services.cache_service import cache_delete
+    await cache_delete(f"vip_status:{user_id}")
 
 
 async def get_user_info(user_id):
@@ -73,6 +75,8 @@ async def reset_user_limits(user_id):
         (user_id,),
     )
     await conn.commit()
+    from services.rate_limiter import invalidate_cached_usage
+    await invalidate_cached_usage(user_id)
 
 
 async def get_web_search_downloads(user_id):

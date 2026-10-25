@@ -184,6 +184,12 @@ async def init_db():
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
     """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)
+    """)
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS usage_stats (

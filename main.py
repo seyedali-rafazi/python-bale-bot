@@ -37,6 +37,11 @@ from services.ai import (
     init_ai_client,
     close_ai_client,
 )
+from services.redis_client import (
+    init_redis,
+    close_redis,
+)
+from services.rate_limiter import check_anti_flood
 
 load_dotenv()
 
@@ -57,7 +62,7 @@ _chromium_maintenance_task: asyncio.Task | None = None
 
 
 # =========================================================
-# ANTI-SPAM FILTER (نسخه پیشرفته ۲ لایه)
+# ANTI-SPAM FILTER (نسخه پیشرفته ۳ لایه با محافظت فلود)
 # =========================================================
 
 BOT_START_TIME_UTC = datetime.now(timezone.utc)
@@ -65,7 +70,7 @@ PROCESS_START_TIME = time.time()
 
 async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    فیلتر پیشرفته برای جلوگیری از اجرای پیام‌ها و کلیک‌های قدیمی بله
+    فیلتر پیشرفته برای جلوگیری از اجرای پیام‌ها و کلیک‌های قدیمی بله و محافظت در برابر اسپم
     """
     uptime = time.time() - PROCESS_START_TIME
 
@@ -91,6 +96,13 @@ async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # اگر تاریخ پیام متعلق به قبل از لحظه استارت ربات باشد، پردازش متوقف می‌شود
     if msg_date and msg_date < BOT_START_TIME_UTC:
         raise ApplicationHandlerStop()
+
+    # لایه ۳: ضداسپم و محافظت آنتی‌فلود ردیس (حداکثر ۱۰ درخواست در ۳ ثانیه)
+    user = update.effective_user
+    if user and not user.is_bot:
+        if not await check_anti_flood(user.id, max_messages=10, window_sec=3):
+            logger.warning("🚫 Anti-flood triggered for user %s, dropping update.", user.id)
+            raise ApplicationHandlerStop()
 
 
 # =========================================================
@@ -137,6 +149,8 @@ async def cleanup_old_downloads(
 async def on_startup(app):
     global _chromium_maintenance_task
 
+    await init_redis()
+
     await init_http_session()
 
     await init_db()
@@ -173,6 +187,11 @@ async def on_shutdown(app):
             await _chromium_maintenance_task
         except asyncio.CancelledError:
             pass
+
+    try:
+        await close_redis()
+    except Exception:
+        logger.exception("Redis cleanup on shutdown failed")
 
     try:
         await close_http_session()

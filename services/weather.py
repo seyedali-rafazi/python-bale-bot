@@ -28,6 +28,13 @@ async def get_weather_forecast(city_name: str) -> str:
         if not clean_name:
             return "❌ لطفاً نام شهر را وارد کنید."
 
+        # Check Cache (30 min)
+        from services.cache_service import cache_get, cache_set
+        cache_key = f"weather:{clean_name.lower()}"
+        cached_forecast = await cache_get(cache_key)
+        if cached_forecast:
+            return cached_forecast
+
         timeout = aiohttp.ClientTimeout(total=15)
         session = await get_http_session()
 
@@ -78,6 +85,7 @@ async def get_weather_forecast(city_name: str) -> str:
             result_text += f"دما: از {min_t}°C تا {max_t}°C\n"
             result_text += "➖➖➖➖➖➖➖\n"
 
+        await cache_set(cache_key, result_text, ttl_sec=1800)
         return result_text
 
     except asyncio.TimeoutError:

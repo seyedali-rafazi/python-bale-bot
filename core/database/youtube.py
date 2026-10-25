@@ -77,25 +77,36 @@ def _normalize_channel(channel: str | None) -> str | None:
 
 async def get_yt_downloads(user_id):
     today = get_tehran_today()
+    from services.rate_limiter import get_cached_daily_usage, set_cached_daily_usage
+    cached = await get_cached_daily_usage("youtube", user_id, today)
+    if cached is not None:
+        return cached
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
     ) as cursor:
         result = await cursor.fetchone()
         if result:
-            return 0 if result[1] != today else result[0]
+            actual = 0 if result[1] != today else (result[0] or 0)
+            await set_cached_daily_usage("youtube", user_id, today, actual)
+            return actual
+        await set_cached_daily_usage("youtube", user_id, today, 0)
         return 0
 
 
 async def increment_yt_downloads(user_id):
     today = get_tehran_today()
+    from services.rate_limiter import incr_cached_daily_usage
+    await incr_cached_daily_usage("youtube", user_id, today)
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
     ) as cursor:
         result = await cursor.fetchone()
     if result:
-        new_count = 1 if result[1] != today else result[0] + 1
+        new_count = 1 if result[1] != today else (result[0] or 0) + 1
         await conn.execute(
             "UPDATE users SET yt_count = ?, yt_date = ? WHERE user_id = ?",
             (new_count, today, user_id),
@@ -108,6 +119,9 @@ async def increment_yt_downloads(user_id):
 
 async def decrement_yt_downloads(user_id):
     today = get_tehran_today()
+    from services.rate_limiter import invalidate_cached_usage
+    await invalidate_cached_usage(user_id, "youtube")
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
@@ -123,13 +137,24 @@ async def decrement_yt_downloads(user_id):
 
 
 async def get_cached_video(video_id: str) -> list:
+    from services.cache_service import cache_get, cache_set
+    cache_key = f"yt_video:{video_id}"
+    cached = await cache_get(cache_key)
+    if cached is not None and isinstance(cached, list):
+        return cached
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT file_ids FROM youtube_cache WHERE video_id = ?", (video_id,)
     ) as cursor:
         result = await cursor.fetchone()
         if result and result[0]:
-            return json.loads(result[0])
+            try:
+                parsed = json.loads(result[0])
+                await cache_set(cache_key, parsed, ttl_sec=86400 * 7)
+                return parsed
+            except Exception:
+                return []
         return []
 
 
@@ -184,6 +209,8 @@ async def save_cached_video(
         ),
     )
     await conn.commit()
+    from services.cache_service import cache_set
+    await cache_set(f"yt_video:{cache_key}", file_ids, ttl_sec=86400 * 7)
 
 
 async def update_cache_metadata(

@@ -7,25 +7,36 @@ from .utils import get_tehran_today
 
 async def get_tt_downloads(user_id):
     today = get_tehran_today()
+    from services.rate_limiter import get_cached_daily_usage, set_cached_daily_usage
+    cached = await get_cached_daily_usage("tiktok", user_id, today)
+    if cached is not None:
+        return cached
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
     ) as cursor:
         result = await cursor.fetchone()
         if result:
-            return 0 if result[1] != today else result[0]
+            actual = 0 if result[1] != today else (result[0] or 0)
+            await set_cached_daily_usage("tiktok", user_id, today, actual)
+            return actual
+        await set_cached_daily_usage("tiktok", user_id, today, 0)
         return 0
 
 
 async def increment_tt_downloads(user_id):
     today = get_tehran_today()
+    from services.rate_limiter import incr_cached_daily_usage
+    await incr_cached_daily_usage("tiktok", user_id, today)
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT tt_dl_count, tt_dl_date FROM users WHERE user_id = ?", (user_id,)
     ) as cursor:
         result = await cursor.fetchone()
     if result:
-        new_count = 1 if result[1] != today else result[0] + 1
+        new_count = 1 if result[1] != today else (result[0] or 0) + 1
         await conn.execute(
             "UPDATE users SET tt_dl_count = ?, tt_dl_date = ? WHERE user_id = ?",
             (new_count, today, user_id),

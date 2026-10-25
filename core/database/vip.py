@@ -6,6 +6,12 @@ from .connection import get_db  # تغییر: به جای DB_NAME، از get_db 
 
 
 async def is_vip(user_id):
+    from services.cache_service import cache_get, cache_set
+    cache_key = f"vip_status:{user_id}"
+    cached_status = await cache_get(cache_key)
+    if cached_status is not None:
+        return bool(cached_status)
+
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     async with conn.execute(
         "SELECT is_vip, vip_expire_date FROM users WHERE user_id = ?", (user_id,)
@@ -13,6 +19,7 @@ async def is_vip(user_id):
         result = await cursor.fetchone()
 
     if not result:
+        await cache_set(cache_key, 0, ttl_sec=300)
         return False
 
     vip_status, expire_date_str = result
@@ -26,8 +33,12 @@ async def is_vip(user_id):
                     (user_id,),
                 )
                 await conn.commit()
+                await cache_set(cache_key, 0, ttl_sec=300)
                 return False
+        await cache_set(cache_key, 1, ttl_sec=300)
         return True
+
+    await cache_set(cache_key, 0, ttl_sec=300)
     return False
 
 
@@ -54,6 +65,8 @@ async def add_vip_time(user_id, days: int):
         (expire_date_str, user_id),
     )
     await conn.commit()
+    from services.cache_service import cache_delete
+    await cache_delete(f"vip_status:{user_id}")
 
 
 async def get_total_vip_users():
@@ -79,6 +92,8 @@ async def set_vip_expire_date(user_id, days: int):
             (expire_iso, user_id),
         )
         await conn.commit()
+        from services.cache_service import cache_delete
+        await cache_delete(f"vip_status:{user_id}")
         return True, expire_date
     except (ValueError, TypeError):
         return False, None
