@@ -131,6 +131,23 @@ async def init_db():
             "ALTER TABLE youtube_cache ADD COLUMN uploaded_at TEXT"
         )
 
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yt_cache_channel
+        ON youtube_cache(channel_name)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yt_cache_yt_id
+        ON youtube_cache(yt_video_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yt_cache_views
+        ON youtube_cache(view_count DESC)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yt_cache_uploaded
+        ON youtube_cache(uploaded_at DESC)
+    """)
+
     if "arc_fetch_count" not in columns:
         await conn.execute(
             "ALTER TABLE users ADD COLUMN arc_fetch_count INTEGER DEFAULT 0"

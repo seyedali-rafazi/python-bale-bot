@@ -1,6 +1,7 @@
 # core/database/__init__.py
 
 from .base import DB_NAME
+from .connection import get_db, close_db
 from .utils import get_tehran_today, get_tehran_now_full, get_tehran_archive_week_key
 from .init_db import init_db
 from .settings import get_setting, set_setting
@@ -12,6 +13,7 @@ from .users import (
     get_full_user_info,
     get_total_users,
     get_all_users,
+    get_users_batch,
     reset_user_limits,
     get_web_search_downloads,
     increment_web_search_downloads,

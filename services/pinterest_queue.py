@@ -90,14 +90,31 @@ async def pinterest_worker(worker_id: int):
                 await asyncio.sleep(PINTEREST_WORKER_DELAY_SEC)
 
 
+_worker_tasks: list[asyncio.Task] = []
+
+
 async def start_pinterest_workers():
-    for i in range(PINTEREST_SEARCH_WORKERS):
+    global _worker_tasks
+    _worker_tasks = [
         asyncio.create_task(pinterest_worker(i + 1))
+        for i in range(PINTEREST_SEARCH_WORKERS)
+    ]
 
     print(
         f"✅ Started {PINTEREST_SEARCH_WORKERS} Pinterest worker(s) "
         f"(queue={PINTEREST_QUEUE_MAXSIZE}, max_in_flight={PINTEREST_MAX_IN_FLIGHT})"
     )
+
+
+async def stop_pinterest_workers():
+    global _worker_tasks
+    for task in _worker_tasks:
+        if not task.done():
+            task.cancel()
+    if _worker_tasks:
+        await asyncio.gather(*_worker_tasks, return_exceptions=True)
+    _worker_tasks.clear()
+
 
 
 async def queued_pinterest_search(

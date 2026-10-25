@@ -14,9 +14,8 @@ from telegram.ext import (
     ApplicationHandlerStop,
 )
 
-from handlers import register_all_handlers
-
-from core.database import init_db
+from core.database import init_db, close_db
+from core.admin import stop_broadcast
 
 from services.http_client import (
     init_http_session,
@@ -25,6 +24,7 @@ from services.http_client import (
 
 from services.pinterest_queue import (
     start_pinterest_workers,
+    stop_pinterest_workers,
 )
 from services.playwright_browser_manager import get_browser_manager
 from services.chromium_maintenance import chromium_maintenance_loop
@@ -109,37 +109,68 @@ async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # CLEANUP
 # =========================================================
 
+DOWNLOAD_CLEANUP_DIRS = [
+    "downloads",
+    "ig_downloads",
+]
+
+
 async def cleanup_old_downloads(
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE = None,
+    directories: list[str] | None = None,
 ):
     now = time.time()
+    max_age_sec = 7200  # 2 hours
 
-    directories = [
-        "downloads",
-        "ig_downloads",
-    ]
+    target_dirs = directories or DOWNLOAD_CLEANUP_DIRS
 
-    for directory in directories:
+    total_scanned = 0
+    total_deleted = 0
+    total_errors = 0
+
+    for directory in target_dirs:
         if not os.path.exists(directory):
             continue
 
-        for f in os.listdir(directory):
-            file_path = os.path.join(
-                directory,
-                f,
-            )
+        try:
+            base_real = os.path.realpath(directory)
+        except Exception as e:
+            logger.warning("Could not resolve base path %s: %s", directory, e)
+            continue
 
-            if not os.path.isfile(file_path):
-                continue
+        for root, _dirs, files in os.walk(directory):
+            for f in files:
+                file_path = os.path.join(root, f)
+                total_scanned += 1
 
-            try:
-                if os.stat(file_path).st_mtime < now - 7200:
-                    os.remove(file_path)
+                try:
+                    # Guard against symlink path traversal outside allowed root
+                    file_real = os.path.realpath(file_path)
+                    if not (file_real == base_real or file_real.startswith(base_real + os.sep)):
+                        logger.warning("Skipping file outside allowed directory root: %s", file_path)
+                        continue
 
-                    logger.info(f"🗑️ deleted: {file_path}")
+                    # Protect newly created or active downloads
+                    st = os.stat(file_path, follow_symlinks=False)
+                    if st.st_mtime < now - max_age_sec:
+                        os.remove(file_path)
+                        total_deleted += 1
+                except FileNotFoundError:
+                    # Concurrently removed by another process or handler
+                    pass
+                except PermissionError:
+                    total_errors += 1
+                    logger.debug("Permission error when removing expired file: %s", file_path)
+                except Exception as e:
+                    total_errors += 1
+                    logger.debug("Failed to remove file %s: %s", file_path, e)
 
-            except Exception:
-                logger.exception("cleanup failed")
+    logger.info(
+        "🧹 Download cleanup finished: scanned=%d, deleted=%d, errors=%d",
+        total_scanned,
+        total_deleted,
+        total_errors,
+    )
 
 
 # =========================================================
@@ -181,35 +212,61 @@ async def on_startup(app):
 async def on_shutdown(app):
     global _chromium_maintenance_task
 
+    # 1. Stop background maintenance loop
     if _chromium_maintenance_task is not None and not _chromium_maintenance_task.done():
         _chromium_maintenance_task.cancel()
         try:
             await _chromium_maintenance_task
         except asyncio.CancelledError:
             pass
+        except Exception:
+            logger.exception("Error cancelling chromium maintenance task on shutdown")
 
+    # 2. Stop running broadcast tasks
     try:
-        await close_redis()
+        await stop_broadcast()
     except Exception:
-        logger.exception("Redis cleanup on shutdown failed")
+        logger.exception("Error stopping broadcast task on shutdown")
 
+    # 3. Stop Pinterest queue worker tasks
+    try:
+        await stop_pinterest_workers()
+        logger.info("✅ Pinterest workers stopped on shutdown")
+    except Exception:
+        logger.exception("Error stopping Pinterest workers on shutdown")
+
+    # 4. Clean up Playwright browser instances
+    try:
+        await get_browser_manager().cleanup()
+        logger.info("✅ Playwright browser cleaned up on shutdown")
+    except Exception:
+        logger.exception("Playwright cleanup on shutdown failed")
+
+    # 5. Close HTTP client sessions
     try:
         await close_http_session()
         logger.info("✅ HTTP session closed on shutdown")
     except Exception:
         logger.exception("HTTP session cleanup on shutdown failed")
 
+    # 6. Disconnect AI client
     try:
         await close_ai_client()
         logger.info("✅ AI client disconnected on shutdown")
     except Exception:
         logger.exception("AI client cleanup on shutdown failed")
 
+    # 7. Close SQLite database (after in-flight tasks and clients are done)
     try:
-        await get_browser_manager().cleanup()
-        logger.info("✅ Playwright browser cleaned up on shutdown")
+        await close_db()
     except Exception:
-        logger.exception("Playwright cleanup on shutdown failed")
+        logger.exception("SQLite close_db on shutdown failed")
+
+    # 8. Close Redis client
+    try:
+        await close_redis()
+    except Exception:
+        logger.exception("Redis cleanup on shutdown failed")
 
 
 # =========================================================
@@ -250,6 +307,7 @@ def main():
     # +++ اعمال فیلتر زمانی قبل از سایر هندلرها در گروه ۱- +++
     application.add_handler(TypeHandler(Update, ignore_old_updates), group=-1)
 
+    from handlers import register_all_handlers
     register_all_handlers(application)
 
     logger.info("✅ Bot Started")

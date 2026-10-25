@@ -7,8 +7,15 @@ Reuses a single browser instance across multiple searches.
 import asyncio
 import os
 import time
-from typing import Optional
-from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
+from typing import Optional, Any
+try:
+    from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
+except ImportError:
+    async_playwright = None
+    Browser = Any  # type: ignore
+    BrowserContext = Any  # type: ignore
+    Playwright = Any  # type: ignore
+
 
 
 class PlaywrightBrowserManager:

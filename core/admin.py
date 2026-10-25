@@ -4,9 +4,11 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.database import (
+    get_db,
     get_total_users,
     set_vip,
     get_all_users,
+    get_users_batch,
     get_total_vip_users,
     reset_user_limits,
     add_vip_time_to_all,
@@ -208,48 +210,136 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(info_text)
 
 
-async def cmd_messageuser(update, context):
+_broadcast_task: asyncio.Task | None = None
+_broadcast_lock = asyncio.Lock()
+
+
+def is_broadcast_running() -> bool:
+    return _broadcast_task is not None and not _broadcast_task.done()
+
+
+async def stop_broadcast():
+    global _broadcast_task
+    if _broadcast_task is not None and not _broadcast_task.done():
+        logger.info("Cancelling ongoing admin broadcast on shutdown...")
+        _broadcast_task.cancel()
+        try:
+            await _broadcast_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("Error awaiting broadcast cancellation: %s", e)
+    _broadcast_task = None
+
+
+async def _run_broadcast_job(bot, admin_chat_id: str, message_text: str, total_users: int):
+    success = 0
+    fail = 0
+    processed = 0
+    batch_size = 50
+    last_user_id: str | None = None
+
+    logger.info("Admin broadcast started for %s users", total_users)
+
+    try:
+        while True:
+            users_batch = await get_users_batch(after_user_id=last_user_id, limit=batch_size)
+            if not users_batch:
+                break
+
+            for user_id in users_batch:
+                last_user_id = user_id
+                processed += 1
+
+                try:
+                    await bot.send_message(chat_id=user_id, text=message_text)
+                    success += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    fail += 1
+                    logger.debug("Broadcast send error for user %s: %s", user_id, e)
+
+                # Rate limit protection: 0.05s interval keeps load well within limits
+                await asyncio.sleep(0.05)
+
+            if processed % 200 == 0 or processed == total_users:
+                logger.info("Broadcast progress: %d/%d (ok=%d, fail=%d)", processed, total_users, success, fail)
+
+        # Notify admin of completion
+        summary_text = (
+            f"✅ ارسال همگانی به پایان رسید!\n\n"
+            f"👥 کل مخاطبان: {total_users}\n"
+            f"📨 پردازش شده: {processed}\n"
+            f"✅ موفق: {success}\n"
+            f"❌ ناموفق: {fail}"
+        )
+        try:
+            await bot.send_message(chat_id=admin_chat_id, text=summary_text)
+        except Exception:
+            pass
+
+    except asyncio.CancelledError:
+        logger.info("Broadcast task cancelled: processed=%d, success=%d, fail=%d", processed, success, fail)
+        try:
+            await bot.send_message(
+                chat_id=admin_chat_id,
+                text=f"⚠️ ارسال همگانی متوقف شد.\nپردازش شده: {processed} (موفق: {success}، ناموفق: {fail})",
+            )
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        logger.exception("Unexpected error in broadcast task: %s", e)
+        try:
+            await bot.send_message(
+                chat_id=admin_chat_id,
+                text=f"❌ خطای غیرمنتظره در ارسال همگانی: {e}",
+            )
+        except Exception:
+            pass
+
+
+async def cmd_messageuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global _broadcast_task
     chat_id = str(update.effective_chat.id)
-    if (
-        chat_id != ADMIN_ID
-    ):  # فرض بر این است که ADMIN_ID در این فایل ایمپورت یا تعریف شده است
+    if chat_id != ADMIN_ID:
         return
 
-    # دریافت کل متن پیام ارسال شده توسط ادمین
     text = update.message.text
-
-    # جدا کردن دستور (/messageuser) از متن اصلی
     parts = text.split(maxsplit=1)
-
-    # بررسی اینکه آیا بعد از دستور، متنی هم نوشته شده است یا خیر
-    if len(parts) < 2:
+    if len(parts) < 2 or not parts[1].strip():
         await update.message.reply_text(
             "❌ متن پیام را وارد کنید.\nمثال:\n`/messageuser سلام کاربران عزیز`"
         )
         return
 
-    # قسمت دوم (ایندکس 1) شامل تمام متن همراه با اینترها است
     message_text = parts[1]
-    users = await get_all_users()
 
-    await update.message.reply_text(
-        f"⏳ در حال ارسال پیام به $ {len(users)} $ کاربر..."
-    )
+    async with _broadcast_lock:
+        if is_broadcast_running():
+            await update.message.reply_text(
+                "⚠️ یک ارسال همگانی در حال حاضر در حال اجرا است. لطفاً تا اتمام آن منتظر بمانید."
+            )
+            return
 
-    success = 0
-    fail = 0
+        total_users = await get_total_users()
+        if total_users == 0:
+            await update.message.reply_text("❌ هیچ کاربری در دیتابیس یافت نشد.")
+            return
 
-    for user_id in users:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=message_text)
-            success += 1
-        except Exception:
-            fail += 1
-        await asyncio.sleep(0.05)  # جلوگیری از اسپم
+        await update.message.reply_text(
+            f"⏳ ارسال همگانی در پس‌زمینه آغاز شد.\nتعداد کل کاربران: {total_users}\nگزارش پایان ارسال برای شما ارسال خواهد شد."
+        )
 
-    await update.message.reply_text(
-        f"✅ ارسال به پایان رسید!\nموفق: $ {success} $\nناموفق: $ {fail} $"
-    )
+        _broadcast_task = asyncio.create_task(
+            _run_broadcast_job(
+                bot=context.bot,
+                admin_chat_id=chat_id,
+                message_text=message_text,
+                total_users=total_users,
+            )
+        )
 
 
 async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -257,14 +347,12 @@ async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_ID:
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
-        # صفر کردن تعداد دفعات استفاده برای همه کاربران
-        await conn.execute(
-            "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
-        )
-        # در صورت نیاز به پاک کردن جدول لاگ مصرف روزانه
-        # await conn.execute("DELETE FROM usage_stats")
-        await conn.commit()
+    conn = await get_db()
+    # صفر کردن تعداد دفعات استفاده برای همه کاربران
+    await conn.execute(
+        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
+    )
+    await conn.commit()
 
     await update.message.reply_text("✅ محدودیت‌های تمامی کاربران با موفقیت ریست شد.")
 

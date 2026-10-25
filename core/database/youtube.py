@@ -54,9 +54,6 @@ _NEEDS_METADATA_SQL = """
 # Rows removed by cleanup (incomplete / ناشناس legacy data)
 _PURGE_INCOMPLETE_SQL = _NEEDS_METADATA_SQL
 
-# Rows removed by cleanup (incomplete / ناشناس legacy data)
-_PURGE_INCOMPLETE_SQL = _NEEDS_METADATA_SQL
-
 
 def extract_yt_id_from_cache_key(cache_key: str) -> str | None:
     match = re.match(r"^([0-9A-Za-z_-]{11})", cache_key or "")
@@ -238,47 +235,6 @@ async def update_cache_metadata(
             cache_key,
         ),
     )
-    await conn.commit()
-
-
-async def count_incomplete_cache_rows() -> int:
-    conn = await get_db()
-    async with conn.execute(
-        f"SELECT COUNT(*) FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}"
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-async def purge_incomplete_youtube_cache() -> int:
-    """Delete rows without real channel/title (ناشناس, empty, etc.)."""
-    conn = await get_db()
-    async with conn.execute(
-        f"SELECT COUNT(*) FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}"
-    ) as cursor:
-        row = await cursor.fetchone()
-        to_delete = row[0] if row else 0
-    if to_delete == 0:
-        return 0
-    await conn.execute(f"DELETE FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}")
-    await conn.commit()
-    return to_delete
-
-
-async def purge_all_youtube_cache() -> int:
-    """Wipe entire shared YouTube cache table."""
-    conn = await get_db()
-    async with conn.execute("SELECT COUNT(*) FROM youtube_cache") as cursor:
-        row = await cursor.fetchone()
-        total = row[0] if row else 0
-    await conn.execute("DELETE FROM youtube_cache")
-    await conn.commit()
-    return total
-
-
-async def drop_legacy_user_youtube_archive_table():
-    conn = await get_db()
-    await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")
     await conn.commit()
 
 

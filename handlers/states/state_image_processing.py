@@ -4,7 +4,13 @@ import os
 import io
 from telegram import Update
 from telegram.ext import ContextTypes
-from PIL import Image
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    Image = None
+    PIL_AVAILABLE = False
+
 import asyncio
 from core.state_manager import get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
@@ -18,7 +24,7 @@ try:
     REMBG_AVAILABLE = True
 except ImportError:
     REMBG_AVAILABLE = False
-    print("⚠️ rembg not available. Background removal feature will be disabled.")
+
 
 # Semaphore to limit concurrent heavy media operations (video-to-gif, audio extraction)
 MEDIA_MAX_CONCURRENT = 2

@@ -64,6 +64,19 @@ async def get_all_users():
         return [row[0] for row in await cursor.fetchall()]
 
 
+async def get_users_batch(after_user_id: str | None = None, limit: int = 100) -> list[str]:
+    """Fetch user IDs in indexed batches using keyset pagination (avoids loading all users into RAM)."""
+    conn = await get_db()
+    if after_user_id is None:
+        query = "SELECT user_id FROM users ORDER BY user_id ASC LIMIT ?"
+        params = (limit,)
+    else:
+        query = "SELECT user_id FROM users WHERE user_id > ? ORDER BY user_id ASC LIMIT ?"
+        params = (after_user_id, limit)
+    async with conn.execute(query, params) as cursor:
+        return [str(row[0]) for row in await cursor.fetchall()]
+
+
 async def reset_user_limits(user_id):
     conn = await get_db()  # تغییر: استفاده از اتصال واحد
     await conn.execute(

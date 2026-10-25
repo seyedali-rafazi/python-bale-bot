@@ -9,6 +9,7 @@ Periodic Chromium cleanup so you do not need manual `killall chrome`.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -76,17 +77,60 @@ def _parse_ps_linux() -> List[Tuple[int, int, str]]:
 
 
 def _parse_tasklist_windows() -> List[Tuple[int, int, str]]:
+    """
+    Return (pid, elapsed_seconds, cmdline) for Chrome processes on Windows.
+    Queries Win32_Process via PowerShell to accurately inspect process age and commandline.
+    If process age cannot be determined, it is set to -1 so it is never reaped blindly.
+    """
+    ps_cmd = (
+        "$now = [DateTime]::UtcNow; "
+        "Get-CimInstance Win32_Process -Filter \"Name like '%chrome%'\" | "
+        "ForEach-Object { "
+        "  $age = if ($_.CreationDate) { [int]($now - $_.CreationDate.ToUniversalTime()).TotalSeconds } else { -1 }; "
+        "  [PSCustomObject]@{ pid = [int]$_.ProcessId; age = $age; cmd = [string]$_.CommandLine } "
+        "} | ConvertTo-Json -Compress"
+    )
+
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=creationflags,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            raw_data = json.loads(res.stdout)
+            items = raw_data if isinstance(raw_data, list) else [raw_data]
+            rows: List[Tuple[int, int, str]] = []
+            for item in items:
+                try:
+                    pid = int(item.get("pid", 0))
+                    age = int(item.get("age", -1))
+                    cmd = str(item.get("cmd") or "")
+                    if pid > 0:
+                        rows.append((pid, age, cmd))
+                except (ValueError, TypeError):
+                    continue
+            return rows
+    except Exception as e:
+        logger.debug("PowerShell process query failed on Windows: %s", e)
+
+    # Safe fallback: tasklist does not provide creation times or command line,
+    # so we assign age=-1 and a generic name without headless markers to avoid accidental kills.
     try:
         out = subprocess.check_output(
             ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
             text=True,
             timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            creationflags=creationflags,
         )
     except (subprocess.SubprocessError, FileNotFoundError):
         return []
 
-    rows: List[Tuple[int, int, str]] = []
+    fallback_rows: List[Tuple[int, int, str]] = []
     for line in out.splitlines():
         if "chrome.exe" not in line.lower():
             continue
@@ -97,8 +141,8 @@ def _parse_tasklist_windows() -> List[Tuple[int, int, str]]:
             pid = int(parts[1])
         except ValueError:
             continue
-        rows.append((pid, 0, "chrome.exe headless"))
-    return rows
+        fallback_rows.append((pid, -1, "chrome.exe"))
+    return fallback_rows
 
 
 def reap_stale_headless_chromium(
@@ -120,7 +164,8 @@ def reap_stale_headless_chromium(
     for pid, etimes, cmd in processes:
         if pid == my_pid or pid <= 1:
             continue
-        if etimes < min_age_seconds:
+        # Unknown age (< 0) or process younger than minimum age threshold must never be reaped
+        if etimes < 0 or etimes < min_age_seconds:
             continue
         if not _is_headless_bot_process(cmd):
             continue

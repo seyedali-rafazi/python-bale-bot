@@ -6,8 +6,12 @@ import asyncio
 from typing import List, Optional, Dict
 from urllib.parse import quote, urlparse
 
-# استفاده از نسخه ناهمگام (Async) پلای‌رایت
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+except ImportError:
+    class PlaywrightTimeoutError(Exception):
+        pass
+
 
 from services.playwright_browser_manager import get_browser_manager
 
