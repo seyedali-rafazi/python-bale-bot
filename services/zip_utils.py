@@ -191,7 +191,7 @@ def build_zip_and_split(
     os.makedirs(out_dir, exist_ok=True)
     archive_basename = zip_basename
 
-    # If input is already a zip file, avoid double-zipping
+    # 1. If input is already a zip file, avoid double-zipping
     if input_path.lower().endswith(".zip"):
         file_size = os.path.getsize(input_path)
         if file_size <= max_part_bytes:
@@ -199,17 +199,19 @@ def build_zip_and_split(
         parts = split_file_concat_parts(input_path, max_part_bytes, archive_basename)
         return parts, archive_basename, "concat"
 
-    spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
-    if spanned:
-        method = "single" if len(spanned) == 1 else "spanned"
-        main_zip = os.path.join(out_dir, f"{archive_basename}.zip")
-        return spanned, archive_basename, method
-
+    # 2. For non-zip files: Always build a standard, valid single ZIP first
     zip_path = os.path.join(out_dir, f"{archive_basename}.zip")
     make_zip_single(input_path=input_path, zip_path=zip_path)
 
+    # If the clean ZIP fits in a single part, return it directly!
+    # (Do NOT call _try_spanned_zip for single files to avoid corrupt/spanned headers)
     if os.path.getsize(zip_path) <= max_part_bytes:
         return [zip_path], archive_basename, "single"
+
+    # 3. If file exceeds max_part_bytes, try spanned zip or fallback to concat parts
+    spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
+    if spanned and len(spanned) > 1:
+        return spanned, archive_basename, "spanned"
 
     parts = split_file_concat_parts(zip_path, max_part_bytes, archive_basename)
     return parts, archive_basename, "concat"

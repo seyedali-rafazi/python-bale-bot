@@ -30,7 +30,7 @@ from services.zip_utils import build_zip_and_split, format_merge_instructions
 
 logger = logging.getLogger(__name__)
 
-MAX_BALE_BYTES = 49 * 1024 * 1024  # 49 MB (safety margin under 50 MB Bale limit)
+MAX_BALE_BYTES = 45 * 1024 * 1024  # 45 MB (safety margin under 50 MB Bale limit)
 MAX_ALLOWED_MB = MAX_ALLOWED_DOWNLOAD_BYTES // (1024 * 1024)  # 250 MB
 
 # Concurrency semaphore: max 3 parallel downloads to prevent saturating bandwidth/CPU
@@ -213,9 +213,18 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
     # Execute under concurrency semaphore to protect network/CPU
     async with _DOWNLOAD_SEMAPHORE:
         with tempfile.TemporaryDirectory(prefix="soft_dl_") as tmp_dir:
-            safe_base = sanitize_filename(app_name)
-            file_name = f"{safe_base}_v{version}.{extension}"
-            file_name = sanitize_filename(file_name)
+            # Generate ASCII-safe filename for file system and Bale multipart form-data.
+            # Bale Bot API throws "Internal Error: failed to upload file bytes (500)" if filename has non-ASCII characters.
+            package = app.get("package", "")
+            raw_id = package or app_name
+            ascii_base = re.sub(r'[^a-zA-Z0-9_\-]', '_', raw_id).strip('_')
+            ascii_base = re.sub(r'_+', '_', ascii_base)
+            if not ascii_base or len(ascii_base) < 2:
+                ascii_base = f"software_{platform_key}_{item_index + 1}"
+
+            clean_ver = re.sub(r'[^a-zA-Z0-9_\-\.]', '', str(version)) or "1.0"
+            safe_base = f"{ascii_base}_v{clean_ver}"
+            file_name = f"{safe_base}.{extension}"
 
             try:
                 downloaded_path = await SoftwareService.download_file(
