@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS users (
     gh_date TEXT,
     citation_count INTEGER DEFAULT 0,
     book_download_count INTEGER DEFAULT 0,
-    cloud_total_mb INTEGER DEFAULT 0,
-    cloud_used_mb INTEGER DEFAULT 0,
+    cloud_total_mb DOUBLE PRECISION DEFAULT 0,
+    cloud_used_mb DOUBLE PRECISION DEFAULT 0,
     web_search_dl_count INTEGER DEFAULT 0,
     web_search_dl_date TEXT,
     tg_count INTEGER DEFAULT 0,
@@ -58,6 +58,9 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_yt_id ON youtube_cache(yt_video_id);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_views ON youtube_cache(view_count DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_uploaded ON youtube_cache(uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_id_desc ON youtube_cache(id DESC);
+CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
+    ON youtube_cache(channel_name, uploaded_at DESC, id DESC)
+    WHERE file_ids IS NOT NULL AND file_ids != '[]';
 
 -- 3. جدول اکسپلور اینستاگرام
 CREATE TABLE IF NOT EXISTS instagram_explore (
@@ -87,7 +90,7 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     id SERIAL PRIMARY KEY,
     user_id TEXT REFERENCES users(user_id) ON DELETE CASCADE,
     file_name TEXT,
-    file_size_mb INTEGER,
+    file_size_mb DOUBLE PRECISION,
     download_link TEXT,
     upload_date TEXT
 );

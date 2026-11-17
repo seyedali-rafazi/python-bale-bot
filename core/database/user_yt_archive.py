@@ -2,7 +2,7 @@
 # Per-user limits for fetching from the shared global YouTube cache.
 # Free: 2 per week (reset Saturday 00:00 Tehran). VIP: 20 per day.
 
-from .connection import get_db
+from .counters import get_period_usage, increment_period_usage
 from .utils import get_tehran_today, get_tehran_archive_week_key
 from .vip import is_vip
 from .youtube import (
@@ -24,8 +24,8 @@ ARCHIVE_LIMIT_FREE = 2
 ARCHIVE_LIMIT_VIP = 20
 
 
-def _archive_period_key(is_vip: int) -> str:
-    if is_vip == 1:
+def _archive_period_key(vip_status: int | bool) -> str:
+    if vip_status == 1:
         return get_tehran_today()
     return get_tehran_archive_week_key()
 
@@ -38,15 +38,12 @@ async def get_user_archive_limit(user_id: str) -> int:
 async def get_archive_fetches_used(user_id: str) -> int:
     vip = await is_vip(user_id)
     period = _archive_period_key(vip)
-    conn = await get_db()
-    async with conn.execute(
-        "SELECT arc_fetch_count, arc_fetch_date FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cursor:
-        row = await cursor.fetchone()
-        if row and row["arc_fetch_date"] == period:
-            return row["arc_fetch_count"] or 0
-        return 0
+    return await get_period_usage(
+        user_id,
+        "arc_fetch_count",
+        "arc_fetch_date",
+        period,
+    )
 
 
 async def get_archive_fetches_today(user_id: str) -> int:
@@ -64,26 +61,17 @@ async def can_user_fetch_from_archive(user_id: str) -> tuple[bool, int, int]:
 async def increment_archive_fetch(user_id: str):
     vip = await is_vip(user_id)
     period = _archive_period_key(vip)
-    conn = await get_db()
-    async with conn.execute(
-        "SELECT arc_fetch_count, arc_fetch_date FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cursor:
-        row = await cursor.fetchone()
-    if row:
-        count = 1 if row["arc_fetch_date"] != period else (row["arc_fetch_count"] or 0) + 1
-        await conn.execute(
-            "UPDATE users SET arc_fetch_count = ?, arc_fetch_date = ? WHERE user_id = ?",
-            (count, period, user_id),
-        )
-    await conn.commit()
-    from .monitoring import log_upload_success
-
-    await log_upload_success("yt_archive", user_id)
+    await increment_period_usage(
+        user_id,
+        "arc_fetch_count",
+        "arc_fetch_date",
+        period,
+        monitor_section="yt_archive",
+    )
 
 
-def archive_limit_period_label(is_vip: int) -> str:
-    if is_vip == 1:
+def archive_limit_period_label(vip_status: int | bool) -> str:
+    if vip_status == 1:
         return "روزانه (ریست نیمه‌شب تهران)"
     return "هفتگی (ریست شنبه نیمه‌شب تهران)"
 

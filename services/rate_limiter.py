@@ -139,14 +139,34 @@ async def incr_cached_daily_usage(service: str, user_id: str | int, today_str: s
     return -1
 
 
+async def _delete_by_scan(redis, pattern: str) -> None:
+    """Non-blocking key deletion using SCAN instead of O(N) KEYS."""
+    batch: list[str] = []
+    async for key in redis.scan_iter(match=pattern, count=500):
+        batch.append(key)
+        if len(batch) >= 500:
+            await redis.delete(*batch)
+            batch.clear()
+    if batch:
+        await redis.delete(*batch)
+
+
 async def invalidate_cached_usage(user_id: str | int, service: Optional[str] = None) -> None:
     """Clear cached usage for a user (e.g. upon admin reset)."""
     redis = get_async_redis()
     if redis is not None:
         try:
             pattern = f"bale:usage:{service or '*'}:{user_id}:*"
-            keys = await redis.keys(pattern)
-            if keys:
-                await redis.delete(*keys)
+            await _delete_by_scan(redis, pattern)
         except Exception as e:
             logger.debug("Redis invalidate_cached_usage error: %s", e)
+
+
+async def invalidate_all_cached_usage() -> None:
+    """Clear all cached daily usage keys (e.g. upon global admin reset)."""
+    redis = get_async_redis()
+    if redis is not None:
+        try:
+            await _delete_by_scan(redis, "bale:usage:*")
+        except Exception as e:
+            logger.debug("Redis invalidate_all_cached_usage error: %s", e)

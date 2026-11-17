@@ -1,142 +1,139 @@
 # core/database/users.py
 
-import aiosqlite  # این خط را نگه می‌داریم چون `aiosqlite.Row` نیاز به آن دارد
-from .connection import get_db  # تغییر: به جای DB_NAME، از get_db استفاده می‌کنیم
+from .connection import get_db
 from .utils import get_tehran_now_full, get_tehran_today
+from .web_scrapping import (
+    get_web_search_downloads,
+    increment_web_search_downloads,
+)
 
 
 async def add_user(user_id, username):
+    uid = str(user_id)
     join_date = get_tehran_now_full()
     today = get_tehran_today()
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    await conn.execute(
+    pool = await get_db()
+    await pool.execute(
         """
-        INSERT OR IGNORE INTO users (user_id, username, is_vip, join_date, yt_count, yt_date, pinterest_count, pinterest_date) 
-        VALUES (?, ?, 0, ?, 0, ?, 0, ?)
-    """,
-        (user_id, username, join_date, today, today),
+        INSERT INTO users (
+            user_id, username, is_vip, join_date,
+            yt_count, yt_date, pinterest_count, pinterest_date
+        )
+        VALUES ($1, $2, 0, $3, 0, $4, 0, $4)
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        uid,
+        username,
+        join_date,
+        today,
     )
-    await conn.commit()
 
 
 async def set_vip(user_id, status: int):
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    await conn.execute(
-        "UPDATE users SET is_vip = ? WHERE user_id = ?", (status, user_id)
+    uid = str(user_id)
+    pool = await get_db()
+    await pool.execute(
+        "UPDATE users SET is_vip = $1 WHERE user_id = $2",
+        int(status),
+        uid,
     )
-    await conn.commit()
     from services.cache_service import cache_delete
-    await cache_delete(f"vip_status:{user_id}")
+
+    await cache_delete(f"vip_status:{uid}")
 
 
 async def get_user_info(user_id):
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute(
-        "SELECT username, is_vip, join_date, vip_expire_date FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cursor:
-        return await cursor.fetchone()
+    uid = str(user_id)
+    pool = await get_db()
+    return await pool.fetchrow(
+        "SELECT username, is_vip, join_date, vip_expire_date FROM users WHERE user_id = $1",
+        uid,
+    )
 
 
 async def get_full_user_info(user_id):
-    """Get all user information for admin panel"""
-    conn = await get_db()
-    async with conn.execute(
-        """SELECT user_id, username, is_vip, join_date, vip_expire_date,
-                  yt_count, yt_date, music_count, music_date,
-                  pinterest_count, pinterest_date, tt_dl_count, tt_dl_date,
-                  gh_count, gh_date
-           FROM users WHERE user_id = ?""",
-        (user_id,),
-    ) as cursor:
-        return await cursor.fetchone()
+    """Get all user information for admin panel."""
+    uid = str(user_id)
+    pool = await get_db()
+    return await pool.fetchrow(
+        """
+        SELECT user_id, username, is_vip, join_date, vip_expire_date,
+               yt_count, yt_date, music_count, music_date,
+               pinterest_count, pinterest_date, tt_dl_count, tt_dl_date,
+               gh_count, gh_date
+        FROM users WHERE user_id = $1
+        """,
+        uid,
+    )
 
 
-async def get_total_users():
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute("SELECT COUNT(*) FROM users") as cursor:
-        return (await cursor.fetchone())[0]
+async def get_total_users() -> int:
+    pool = await get_db()
+    return int(await pool.fetchval("SELECT COUNT(*) FROM users") or 0)
 
 
-async def get_all_users():
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute("SELECT user_id FROM users") as cursor:
-        return [row[0] for row in await cursor.fetchall()]
+async def get_all_users() -> list[str]:
+    pool = await get_db()
+    rows = await pool.fetch("SELECT user_id FROM users")
+    return [row["user_id"] for row in rows]
 
 
-async def get_users_batch(after_user_id: str | None = None, limit: int = 100) -> list[str]:
-    """Fetch user IDs in indexed batches using keyset pagination (avoids loading all users into RAM)."""
-    conn = await get_db()
+async def get_users_batch(
+    after_user_id: str | None = None, limit: int = 100
+) -> list[str]:
+    """Fetch user IDs in indexed batches using keyset pagination."""
+    pool = await get_db()
     if after_user_id is None:
-        query = "SELECT user_id FROM users ORDER BY user_id ASC LIMIT ?"
-        params = (limit,)
+        rows = await pool.fetch(
+            "SELECT user_id FROM users ORDER BY user_id ASC LIMIT $1",
+            limit,
+        )
     else:
-        query = "SELECT user_id FROM users WHERE user_id > ? ORDER BY user_id ASC LIMIT ?"
-        params = (after_user_id, limit)
-    async with conn.execute(query, params) as cursor:
-        return [str(row[0]) for row in await cursor.fetchall()]
+        rows = await pool.fetch(
+            "SELECT user_id FROM users WHERE user_id > $1 ORDER BY user_id ASC LIMIT $2",
+            str(after_user_id),
+            limit,
+        )
+    return [str(row["user_id"]) for row in rows]
 
 
 async def reset_user_limits(user_id):
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    await conn.execute(
+    uid = str(user_id)
+    pool = await get_db()
+    await pool.execute(
         """
-        UPDATE users 
+        UPDATE users
         SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0
-        WHERE user_id = ?
-    """,
-        (user_id,),
+        WHERE user_id = $1
+        """,
+        uid,
     )
-    await conn.commit()
     from services.rate_limiter import invalidate_cached_usage
-    await invalidate_cached_usage(user_id)
+
+    await invalidate_cached_usage(uid)
 
 
-async def get_web_search_downloads(user_id):
-    """Get web search downloads count for today"""
-    today = get_tehran_today()
-    conn = await get_db()
-    async with conn.execute(
-        "SELECT web_search_dl_count, web_search_dl_date FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cursor:
-        result = await cursor.fetchone()
-        if result:
-            count, date = result
-            # If date doesn't match today, reset to 0
-            if date != today:
-                return 0
-            return count if count else 0
-        return 0
-
-
-async def increment_web_search_downloads(user_id):
-    """Increment web search downloads count and return new count"""
-    today = get_tehran_today()
-    conn = await get_db()
-    
-    # Get current count
-    async with conn.execute(
-        "SELECT web_search_dl_count, web_search_dl_date FROM users WHERE user_id = ?",
-        (user_id,),
-    ) as cursor:
-        result = await cursor.fetchone()
-    
-    if result:
-        current_count, date = result
-        # Reset if date changed
-        if date != today:
-            new_count = 1
-        else:
-            new_count = (current_count if current_count else 0) + 1
-    else:
-        new_count = 1
-    
-    # Update database
-    await conn.execute(
-        "UPDATE users SET web_search_dl_count = ?, web_search_dl_date = ? WHERE user_id = ?",
-        (new_count, today, user_id),
+async def reset_all_user_limits():
+    """Reset daily limits for all users (used by admin command)."""
+    pool = await get_db()
+    await pool.execute(
+        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
     )
-    await conn.commit()
-    
-    return new_count
+    from services.rate_limiter import invalidate_all_cached_usage
+
+    await invalidate_all_cached_usage()
+
+
+__all__ = [
+    "add_user",
+    "set_vip",
+    "get_user_info",
+    "get_full_user_info",
+    "get_total_users",
+    "get_all_users",
+    "get_users_batch",
+    "reset_user_limits",
+    "reset_all_user_limits",
+    "get_web_search_downloads",
+    "increment_web_search_downloads",
+]

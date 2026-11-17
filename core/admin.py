@@ -4,13 +4,13 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.database import (
-    get_db,
     get_total_users,
     set_vip,
     get_all_users,
     get_users_batch,
     get_total_vip_users,
     reset_user_limits,
+    reset_all_user_limits,
     add_vip_time_to_all,
     set_vip_expire_date,
     get_full_user_info,
@@ -22,8 +22,6 @@ import os
 import logging
 from dotenv import load_dotenv
 import asyncio
-import aiosqlite
-from core.database import DB_NAME
 from core.database import get_setting, set_setting
 from core.database.yt_blacklist import (
     add_channel_blacklist,
@@ -347,12 +345,7 @@ async def cmd_reset_limits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_ID:
         return
 
-    conn = await get_db()
-    # صفر کردن تعداد دفعات استفاده برای همه کاربران
-    await conn.execute(
-        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
-    )
-    await conn.commit()
+    await reset_all_user_limits()
 
     await update.message.reply_text("✅ محدودیت‌های تمامی کاربران با موفقیت ریست شد.")
 

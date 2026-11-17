@@ -197,6 +197,30 @@ async def execute_schema(pg_conn: asyncpg.Connection, schema_path: str):
         print(f"⚠️ فایل اسکیما در مسیر {schema_path} پیدا نشد؛ از جداول از پیش تعریف‌شده استفاده می‌شود.")
 
 
+def _build_safe_sqlite_query(
+    sqlite_conn: sqlite3.Connection, table_cfg: dict
+) -> str:
+    """Build SELECT matching expected columns, substituting NULL for any missing SQLite column."""
+    tbl_name = table_cfg["name"]
+    existing_cols = get_sqlite_columns(sqlite_conn, tbl_name)
+    raw_query = table_cfg["sqlite_query"]
+    # Extract column list between SELECT and FROM
+    upper = raw_query.upper()
+    sel_idx = upper.find("SELECT") + len("SELECT")
+    from_idx = upper.rfind("FROM")
+    col_part = raw_query[sel_idx:from_idx]
+    requested_cols = [c.strip() for c in col_part.split(",") if c.strip()]
+
+    selected = []
+    for col in requested_cols:
+        if col == "rowid" or col in existing_cols:
+            selected.append(col)
+        else:
+            print(f"   ⚠️ ستون [{col}] در جدول SQLite [{tbl_name}] نبود؛ مقدار NULL جایگزین شد.")
+            selected.append(f"NULL AS {col}")
+    return f"SELECT {', '.join(selected)} FROM {tbl_name}"
+
+
 async def migrate_table(
     sqlite_conn: sqlite3.Connection,
     pg_conn: asyncpg.Connection,
@@ -224,13 +248,8 @@ async def migrate_table(
 
     print(f"🚀 در حال انتقال جدول [{tbl_name}] - مجموع: {total_sqlite_count:,} رکورد...")
 
-    # خواندن با کوئری مشخص‌شده
-    try:
-        sqlite_cur.execute(table_cfg["sqlite_query"])
-    except sqlite3.OperationalError as e:
-        print(f"⚠️ خطای ساختار ستون در SQLite برای جدول {tbl_name}: {e}. کوئری ساده SELECT * اجرا می‌شود.")
-        # فال‌بک دینامیک در صورت تفاوت نام برخی ستون‌ها
-        sqlite_cur.execute(f"SELECT * FROM {tbl_name}")
+    safe_query = _build_safe_sqlite_query(sqlite_conn, table_cfg)
+    sqlite_cur.execute(safe_query)
 
     imported = 0
     while True:
@@ -240,6 +259,14 @@ async def migrate_table(
 
         # درج دسته‌ای در PostgreSQL درون یک تراکنش
         async with pg_conn.transaction():
+            # در SQLite ممکن است foreign_keys خاموش بوده باشد و cloud_files رکورد بی‌سرپرست داشته باشد
+            if tbl_name == "cloud_files":
+                orphan_uids = [(str(r[1]),) for r in rows if r[1] is not None]
+                if orphan_uids:
+                    await pg_conn.executemany(
+                        "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+                        orphan_uids,
+                    )
             await pg_conn.executemany(table_cfg["pg_insert"], rows)
 
         imported += len(rows)

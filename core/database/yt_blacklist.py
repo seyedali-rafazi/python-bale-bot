@@ -3,6 +3,9 @@
 from .connection import get_db
 from .utils import get_tehran_now_full
 
+_CHANNEL_BLACKLIST_CACHE_KEY = "yt_blacklist:channels"
+_BLOCKED_WORDS_CACHE_KEY = "yt_blacklist:words"
+
 
 def normalize_channel_key(name: str) -> str:
     if not name:
@@ -14,47 +17,61 @@ async def add_channel_blacklist(channel: str) -> bool:
     key = normalize_channel_key(channel)
     if not key or len(key) < 2:
         return False
-    conn = await get_db()
-    await conn.execute(
+    pool = await get_db()
+    await pool.execute(
         """
-        INSERT OR IGNORE INTO yt_channel_blacklist (channel_key, display_name, added_at)
-        VALUES (?, ?, ?)
+        INSERT INTO yt_channel_blacklist (channel_key, display_name, added_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (channel_key) DO NOTHING
         """,
-        (key, channel.strip()[:200], get_tehran_now_full()),
+        key,
+        channel.strip()[:200],
+        get_tehran_now_full(),
     )
-    await conn.commit()
+    from services.cache_service import cache_delete
+
+    await cache_delete(_CHANNEL_BLACKLIST_CACHE_KEY)
     return True
 
 
 async def remove_channel_blacklist(channel: str) -> bool:
     key = normalize_channel_key(channel)
-    conn = await get_db()
-    cursor = await conn.execute(
-        "DELETE FROM yt_channel_blacklist WHERE channel_key = ?", (key,)
+    pool = await get_db()
+    deleted = await pool.fetchval(
+        "DELETE FROM yt_channel_blacklist WHERE channel_key = $1 RETURNING channel_key",
+        key,
     )
-    await conn.commit()
-    return cursor.rowcount > 0
+    if deleted is not None:
+        from services.cache_service import cache_delete
+
+        await cache_delete(_CHANNEL_BLACKLIST_CACHE_KEY)
+        return True
+    return False
 
 
 async def list_channel_blacklist():
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetch(
         """
         SELECT channel_key, display_name, added_at
         FROM yt_channel_blacklist
         ORDER BY added_at DESC
         """
-    ) as cursor:
-        return await cursor.fetchall()
+    )
 
 
-async def get_all_channel_blacklist_keys():
-    conn = await get_db()
-    async with conn.execute(
-        "SELECT channel_key FROM yt_channel_blacklist"
-    ) as cursor:
-        rows = await cursor.fetchall()
-        return [row["channel_key"] for row in rows]
+async def get_all_channel_blacklist_keys() -> list[str]:
+    from services.cache_service import cache_get, cache_set
+
+    cached = await cache_get(_CHANNEL_BLACKLIST_CACHE_KEY)
+    if isinstance(cached, list):
+        return cached
+
+    pool = await get_db()
+    rows = await pool.fetch("SELECT channel_key FROM yt_channel_blacklist")
+    keys = [row["channel_key"] for row in rows]
+    await cache_set(_CHANNEL_BLACKLIST_CACHE_KEY, keys, ttl_sec=300)
+    return keys
 
 
 async def is_channel_blacklisted(*names: str) -> bool:
@@ -78,52 +95,73 @@ async def add_blocked_word(word: str) -> bool:
     w = word.strip().lower()
     if len(w) < 2:
         return False
-    conn = await get_db()
-    await conn.execute(
+    pool = await get_db()
+    await pool.execute(
         """
-        INSERT OR IGNORE INTO yt_blocked_words (word, added_at)
-        VALUES (?, ?)
+        INSERT INTO yt_blocked_words (word, added_at)
+        VALUES ($1, $2)
+        ON CONFLICT (word) DO NOTHING
         """,
-        (w, get_tehran_now_full()),
+        w,
+        get_tehran_now_full(),
     )
-    await conn.commit()
+    from services.cache_service import cache_delete
+
+    await cache_delete(_BLOCKED_WORDS_CACHE_KEY)
     return True
 
 
 async def remove_blocked_word(word: str) -> bool:
     w = word.strip().lower()
-    conn = await get_db()
-    cursor = await conn.execute(
-        "DELETE FROM yt_blocked_words WHERE word = ?", (w,)
+    pool = await get_db()
+    deleted = await pool.fetchval(
+        "DELETE FROM yt_blocked_words WHERE word = $1 RETURNING word",
+        w,
     )
-    await conn.commit()
-    return cursor.rowcount > 0
+    if deleted is not None:
+        from services.cache_service import cache_delete
+
+        await cache_delete(_BLOCKED_WORDS_CACHE_KEY)
+        return True
+    return False
 
 
 async def list_blocked_words():
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetch(
         "SELECT word, added_at FROM yt_blocked_words ORDER BY word ASC"
-    ) as cursor:
-        return await cursor.fetchall()
+    )
 
 
-async def get_all_blocked_words():
-    conn = await get_db()
-    async with conn.execute("SELECT word FROM yt_blocked_words") as cursor:
-        rows = await cursor.fetchall()
-        return [row["word"] for row in rows]
+async def get_all_blocked_words() -> list[str]:
+    from services.cache_service import cache_get, cache_set
+
+    cached = await cache_get(_BLOCKED_WORDS_CACHE_KEY)
+    if isinstance(cached, list):
+        return cached
+
+    pool = await get_db()
+    rows = await pool.fetch("SELECT word FROM yt_blocked_words")
+    words = [row["word"] for row in rows]
+    await cache_set(_BLOCKED_WORDS_CACHE_KEY, words, ttl_sec=300)
+    return words
 
 
 async def seed_default_blocked_words(default_words: list[str]):
-    conn = await get_db()
     now = get_tehran_now_full()
-    for word in default_words:
-        w = word.strip().lower()
-        if len(w) < 2:
-            continue
-        await conn.execute(
-            "INSERT OR IGNORE INTO yt_blocked_words (word, added_at) VALUES (?, ?)",
-            (w, now),
-        )
-    await conn.commit()
+    records = [
+        (word.strip().lower(), now)
+        for word in default_words
+        if len(word.strip()) >= 2
+    ]
+    if not records:
+        return
+    pool = await get_db()
+    await pool.executemany(
+        """
+        INSERT INTO yt_blocked_words (word, added_at)
+        VALUES ($1, $2)
+        ON CONFLICT (word) DO NOTHING
+        """,
+        records,
+    )

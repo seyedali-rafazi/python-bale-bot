@@ -256,11 +256,11 @@ async def on_shutdown(app):
     except Exception:
         logger.exception("AI client cleanup on shutdown failed")
 
-    # 7. Close SQLite database (after in-flight tasks and clients are done)
+    # 7. Close PostgreSQL pool (after in-flight tasks and clients are done)
     try:
         await close_db()
     except Exception:
-        logger.exception("SQLite close_db on shutdown failed")
+        logger.exception("PostgreSQL close_db on shutdown failed")
 
     # 8. Close Redis client
     try:

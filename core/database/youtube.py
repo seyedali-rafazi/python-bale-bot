@@ -3,10 +3,14 @@
 import asyncio
 import json
 import re
-import aiosqlite  # این خط را نگه می‌داریم چون `aiosqlite.Row` نیاز به آن دارد
-import sqlite3  # این خط را نگه می‌داریم فقط اگر لازم باشد، اما ترجیحا `aiosqlite.Row` استفاده شود
-from .connection import get_db  # تغییر: به جای DB_NAME، از get_db استفاده می‌کنیم
-from .utils import get_tehran_today, get_tehran_now_full
+
+from .connection import get_db
+from .counters import (
+    decrement_period_usage,
+    get_period_usage,
+    increment_period_usage,
+)
+from .utils import get_tehran_now_full, get_tehran_today
 
 CHANNELS_PAGE_SIZE = 5
 VIDEOS_PAGE_SIZE = 8
@@ -19,7 +23,7 @@ PLACEHOLDER_TITLES = ("بدون عنوان", "")
 _CHANNEL_VIDEOS_ORDER_SQL = """
     (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
     uploaded_at DESC,
-    rowid DESC
+    id DESC
 """
 
 _CACHE_NEEDS_UPLOAD_DATE_SQL = """
@@ -72,87 +76,66 @@ def _normalize_channel(channel: str | None) -> str | None:
     return channel.strip()[:200]
 
 
-async def get_yt_downloads(user_id):
-    today = get_tehran_today()
-    from services.rate_limiter import get_cached_daily_usage, set_cached_daily_usage
-    cached = await get_cached_daily_usage("youtube", user_id, today)
-    if cached is not None:
-        return cached
+async def _invalidate_archive_summary_cache() -> None:
+    from services.cache_service import cache_delete
 
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute(
-        "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
-    ) as cursor:
-        result = await cursor.fetchone()
-        if result:
-            actual = 0 if result[1] != today else (result[0] or 0)
-            await set_cached_daily_usage("youtube", user_id, today, actual)
-            return actual
-        await set_cached_daily_usage("youtube", user_id, today, 0)
-        return 0
+    await cache_delete("yt_archive:count_global")
+    await cache_delete("yt_archive:count_channels")
+    await cache_delete("yt_archive:channels_p0")
 
 
-async def increment_yt_downloads(user_id):
-    today = get_tehran_today()
-    from services.rate_limiter import incr_cached_daily_usage
-    await incr_cached_daily_usage("youtube", user_id, today)
-
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute(
-        "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
-    ) as cursor:
-        result = await cursor.fetchone()
-    if result:
-        new_count = 1 if result[1] != today else (result[0] or 0) + 1
-        await conn.execute(
-            "UPDATE users SET yt_count = ?, yt_date = ? WHERE user_id = ?",
-            (new_count, today, user_id),
-        )
-    await conn.commit()
-    from .monitoring import log_upload_success
-
-    await log_upload_success("youtube", user_id)
+async def get_yt_downloads(user_id) -> int:
+    return await get_period_usage(
+        user_id,
+        "yt_count",
+        "yt_date",
+        get_tehran_today(),
+        cache_service="youtube",
+    )
 
 
-async def decrement_yt_downloads(user_id):
-    today = get_tehran_today()
-    from services.rate_limiter import invalidate_cached_usage
-    await invalidate_cached_usage(user_id, "youtube")
+async def increment_yt_downloads(user_id) -> int:
+    return await increment_period_usage(
+        user_id,
+        "yt_count",
+        "yt_date",
+        get_tehran_today(),
+        monitor_section="youtube",
+        cache_service="youtube",
+    )
 
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute(
-        "SELECT yt_count, yt_date FROM users WHERE user_id = ?", (user_id,)
-    ) as cursor:
-        result = await cursor.fetchone()
-    if result:
-        if result[1] == today and result[0] > 0:
-            await conn.execute(
-                "UPDATE users SET yt_count = ? WHERE user_id = ?",
-                (result[0] - 1, user_id),
-            )
-    await conn.commit()
+
+async def decrement_yt_downloads(user_id) -> None:
+    await decrement_period_usage(
+        user_id,
+        "yt_count",
+        "yt_date",
+        get_tehran_today(),
+        cache_service="youtube",
+    )
 
 
 async def get_cached_video(video_id: str) -> list:
     from services.cache_service import cache_get, cache_set
+
     cache_key = f"yt_video:{video_id}"
     cached = await cache_get(cache_key)
     if cached is not None and isinstance(cached, list):
         return cached
 
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    async with conn.execute(
-        "SELECT file_ids FROM youtube_cache WHERE video_id = ?", (video_id,)
-    ) as cursor:
-        result = await cursor.fetchone()
-        if result and result[0]:
-            try:
-                parsed = json.loads(result[0])
-                await cache_set(cache_key, parsed, ttl_sec=86400 * 7)
-                return parsed
-            except Exception:
-                return []
-        return []
+    pool = await get_db()
+    raw_file_ids = await pool.fetchval(
+        "SELECT file_ids FROM youtube_cache WHERE video_id = $1",
+        video_id,
+    )
+    if raw_file_ids:
+        try:
+            parsed = json.loads(raw_file_ids)
+            await cache_set(cache_key, parsed, ttl_sec=86400 * 7)
+            return parsed
+        except Exception:
+            return []
+    return []
 
 
 async def save_cached_video(
@@ -167,47 +150,46 @@ async def save_cached_video(
 ):
     file_ids_json = json.dumps(file_ids)
     cached_at = get_tehran_now_full()
-    conn = await get_db()
-    await conn.execute(
+    pool = await get_db()
+    await pool.execute(
         """
         INSERT INTO youtube_cache (
             video_id, file_ids, title, channel_name, yt_video_id,
             format_type, quality, cached_at, uploaded_at, view_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)
         ON CONFLICT(video_id) DO UPDATE SET
-            file_ids = excluded.file_ids,
+            file_ids = EXCLUDED.file_ids,
             title = CASE
-                WHEN excluded.title IS NOT NULL AND TRIM(excluded.title) != ''
-                     AND excluded.title NOT IN ('بدون عنوان')
-                THEN excluded.title ELSE youtube_cache.title END,
+                WHEN EXCLUDED.title IS NOT NULL AND TRIM(EXCLUDED.title) != ''
+                     AND EXCLUDED.title NOT IN ('بدون عنوان')
+                THEN EXCLUDED.title ELSE youtube_cache.title END,
             channel_name = CASE
-                WHEN excluded.channel_name IS NOT NULL AND TRIM(excluded.channel_name) != ''
-                     AND excluded.channel_name NOT IN ('ناشناس', 'Unknown', 'unknown')
-                THEN excluded.channel_name ELSE youtube_cache.channel_name END,
-            yt_video_id = COALESCE(NULLIF(TRIM(excluded.yt_video_id), ''), youtube_cache.yt_video_id),
-            format_type = excluded.format_type,
-            quality = excluded.quality,
-            cached_at = excluded.cached_at,
+                WHEN EXCLUDED.channel_name IS NOT NULL AND TRIM(EXCLUDED.channel_name) != ''
+                     AND EXCLUDED.channel_name NOT IN ('ناشناس', 'Unknown', 'unknown')
+                THEN EXCLUDED.channel_name ELSE youtube_cache.channel_name END,
+            yt_video_id = COALESCE(NULLIF(TRIM(EXCLUDED.yt_video_id), ''), youtube_cache.yt_video_id),
+            format_type = EXCLUDED.format_type,
+            quality = EXCLUDED.quality,
+            cached_at = EXCLUDED.cached_at,
             uploaded_at = COALESCE(
-                NULLIF(TRIM(excluded.uploaded_at), ''),
+                NULLIF(TRIM(EXCLUDED.uploaded_at), ''),
                 youtube_cache.uploaded_at
             )
         """,
-        (
-            cache_key,
-            file_ids_json,
-            _normalize_title(title),
-            _normalize_channel(channel_name),
-            yt_video_id or extract_yt_id_from_cache_key(cache_key),
-            format_type,
-            quality,
-            cached_at,
-            (uploaded_at or "").strip()[:14] or None,
-        ),
+        cache_key,
+        file_ids_json,
+        _normalize_title(title),
+        _normalize_channel(channel_name),
+        yt_video_id or extract_yt_id_from_cache_key(cache_key),
+        format_type,
+        quality,
+        cached_at,
+        (uploaded_at or "").strip()[:14] or None,
     )
-    await conn.commit()
     from services.cache_service import cache_set
+
     await cache_set(f"yt_video:{cache_key}", file_ids, ttl_sec=86400 * 7)
+    await _invalidate_archive_summary_cache()
 
 
 async def update_cache_metadata(
@@ -217,83 +199,86 @@ async def update_cache_metadata(
     yt_video_id: str | None,
     uploaded_at: str | None = None,
 ):
-    conn = await get_db()
-    await conn.execute(
+    pool = await get_db()
+    await pool.execute(
         """
         UPDATE youtube_cache SET
-            title = COALESCE(?, title),
-            channel_name = COALESCE(?, channel_name),
-            yt_video_id = COALESCE(?, yt_video_id),
-            uploaded_at = COALESCE(NULLIF(TRIM(?), ''), uploaded_at)
-        WHERE video_id = ?
+            title = COALESCE($1, title),
+            channel_name = COALESCE($2, channel_name),
+            yt_video_id = COALESCE($3, yt_video_id),
+            uploaded_at = COALESCE(NULLIF(TRIM($4), ''), uploaded_at)
+        WHERE video_id = $5
         """,
-        (
-            _normalize_title(title),
-            _normalize_channel(channel_name),
-            yt_video_id,
-            (uploaded_at or "").strip()[:14] or None,
-            cache_key,
-        ),
+        _normalize_title(title),
+        _normalize_channel(channel_name),
+        yt_video_id,
+        (uploaded_at or "").strip()[:14] or None,
+        cache_key,
     )
-    await conn.commit()
 
 
 async def count_incomplete_cache_rows() -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         f"SELECT COUNT(*) FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}"
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    )
+    return int(val or 0)
 
 
 async def purge_incomplete_youtube_cache() -> int:
     """Delete rows without real channel/title (ناشناس, empty, etc.)."""
-    conn = await get_db()
-    async with conn.execute(
-        f"SELECT COUNT(*) FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}"
-    ) as cursor:
-        row = await cursor.fetchone()
-        to_delete = row[0] if row else 0
-    if to_delete == 0:
-        return 0
-    await conn.execute(f"DELETE FROM youtube_cache WHERE {_PURGE_INCOMPLETE_SQL}")
-    await conn.commit()
-    return to_delete
+    pool = await get_db()
+    deleted = await pool.fetchval(
+        f"""
+        WITH deleted AS (
+            DELETE FROM youtube_cache
+            WHERE {_PURGE_INCOMPLETE_SQL}
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM deleted
+        """
+    )
+    count = int(deleted or 0)
+    if count > 0:
+        await _invalidate_archive_summary_cache()
+    return count
 
 
 async def purge_all_youtube_cache() -> int:
     """Wipe entire shared YouTube cache table."""
-    conn = await get_db()
-    async with conn.execute("SELECT COUNT(*) FROM youtube_cache") as cursor:
-        row = await cursor.fetchone()
-        total = row[0] if row else 0
-    await conn.execute("DELETE FROM youtube_cache")
-    await conn.commit()
-    return total
+    pool = await get_db()
+    deleted = await pool.fetchval(
+        """
+        WITH deleted AS (
+            DELETE FROM youtube_cache
+            RETURNING 1
+        )
+        SELECT COUNT(*) FROM deleted
+        """
+    )
+    await _invalidate_archive_summary_cache()
+    return int(deleted or 0)
 
 
 async def drop_legacy_user_youtube_archive_table():
-    conn = await get_db()
-    await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")
-    await conn.commit()
+    pool = await get_db()
+    await pool.execute("DROP TABLE IF EXISTS user_youtube_archive")
 
 
 async def count_cache_needing_metadata() -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         f"""
         SELECT COUNT(*) FROM youtube_cache
         WHERE {_NEEDS_METADATA_SQL} OR ({_CACHE_NEEDS_UPLOAD_DATE_SQL})
         """
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    )
+    return int(val or 0)
 
 
 async def get_cache_rows_needing_metadata(limit: int = 50):
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetch(
         f"""
         SELECT video_id, yt_video_id, title, channel_name, uploaded_at
         FROM youtube_cache
@@ -301,12 +286,11 @@ async def get_cache_rows_needing_metadata(limit: int = 50):
         ORDER BY
             (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
             uploaded_at DESC,
-            rowid DESC
-        LIMIT ?
+            id DESC
+        LIMIT $1
         """,
-        (limit,),
-    ) as cursor:
-        return await cursor.fetchall()
+        limit,
+    )
 
 
 async def backfill_youtube_cache_metadata(
@@ -315,7 +299,7 @@ async def backfill_youtube_cache_metadata(
     delay_sec: float = 0.4,
 ) -> dict:
     """Fetch title/channel from YouTube for old cache rows missing metadata."""
-    from services.youtube import get_video_info
+    from services.youtube import get_video_info, uploaded_at_from_video_info
 
     fixed = 0
     failed = 0
@@ -346,8 +330,6 @@ async def backfill_youtube_cache_metadata(
             except Exception:
                 info = None
 
-            from services.youtube import uploaded_at_from_video_info
-
             uploaded = uploaded_at_from_video_info(info) if info else None
             has_title = bool(info and info.get("title"))
             has_upload_date = bool(uploaded)
@@ -374,32 +356,30 @@ async def backfill_youtube_cache_metadata(
 
 
 async def count_cache_missing_upload_date() -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         """
         SELECT COUNT(*) FROM youtube_cache
         WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
           AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
         """
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    )
+    return int(val or 0)
 
 
 async def get_cache_rows_missing_upload_date(limit: int = 50):
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetch(
         """
         SELECT video_id, yt_video_id
         FROM youtube_cache
         WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
           AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
-        ORDER BY rowid DESC
-        LIMIT ?
+        ORDER BY id DESC
+        LIMIT $1
         """,
-        (limit,),
-    ) as cursor:
-        return await cursor.fetchall()
+        limit,
+    )
 
 
 async def backfill_upload_dates_for_cache_rows(
@@ -502,17 +482,32 @@ async def backfill_cache_upload_dates(
 
 
 async def count_global_cache() -> int:
-    conn = await get_db()
-    async with conn.execute(
+    from services.cache_service import cache_get, cache_set
+
+    cached = await cache_get("yt_archive:count_global")
+    if isinstance(cached, int):
+        return cached
+
+    pool = await get_db()
+    val = await pool.fetchval(
         "SELECT COUNT(*) FROM youtube_cache WHERE file_ids IS NOT NULL AND file_ids != '[]'"
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    )
+    count = int(val or 0)
+    await cache_set("yt_archive:count_global", count, ttl_sec=60)
+    return count
 
 
 async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_SIZE):
-    conn = await get_db()
-    async with conn.execute(
+    from services.cache_service import cache_get, cache_set
+
+    cache_key = "yt_archive:channels_p0" if offset == 0 and limit == CHANNELS_PAGE_SIZE else None
+    if cache_key:
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list):
+            return cached
+
+    pool = await get_db()
+    rows = await pool.fetch(
         f"""
         SELECT channel_name, COUNT(DISTINCT {_YT_GROUP_KEY_SQL}) AS video_count
         FROM youtube_cache
@@ -520,93 +515,108 @@ async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_S
           AND {_CACHE_HAS_FILES_SQL}
         GROUP BY channel_name
         ORDER BY video_count DESC, channel_name ASC
-        LIMIT ? OFFSET ?
+        LIMIT $1 OFFSET $2
         """,
-        (limit, offset),
-    ) as cursor:
-        return await cursor.fetchall()
+        limit,
+        offset,
+    )
+    if cache_key:
+        serialized = [
+            {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
+            for r in rows
+        ]
+        await cache_set(cache_key, serialized, ttl_sec=60)
+        return serialized
+    return rows
 
 
 async def count_global_channels() -> int:
-    conn = await get_db()
-    async with conn.execute(
+    from services.cache_service import cache_get, cache_set
+
+    cached = await cache_get("yt_archive:count_channels")
+    if isinstance(cached, int):
+        return cached
+
+    pool = await get_db()
+    val = await pool.fetchval(
         f"""
         SELECT COUNT(DISTINCT channel_name)
         FROM youtube_cache
         WHERE {_CHANNEL_KNOWN_SQL}
         """
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+    )
+    count = int(val or 0)
+    await cache_set("yt_archive:count_channels", count, ttl_sec=60)
+    return count
 
 
 async def get_global_channel_videos_page(
     channel_name: str, offset: int = 0, limit: int = VIDEOS_PAGE_SIZE
 ):
     """One row per YouTube video (newest cache row per yt_video_id)."""
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetch(
         f"""
-        SELECT rowid AS id, video_id, yt_video_id, title, file_ids,
+        SELECT id, video_id, yt_video_id, title, file_ids,
                format_type, quality, cached_at, uploaded_at, channel_name
         FROM youtube_cache
-        WHERE channel_name = ?
+        WHERE channel_name = $1
           AND {_CACHE_HAS_FILES_SQL}
-          AND rowid IN (
-            SELECT MAX(rowid)
+          AND id IN (
+            SELECT MAX(id)
             FROM youtube_cache
-            WHERE channel_name = ?
+            WHERE channel_name = $1
               AND {_CACHE_HAS_FILES_SQL}
             GROUP BY {_YT_GROUP_KEY_SQL}
           )
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
-        LIMIT ? OFFSET ?
+        LIMIT $2 OFFSET $3
         """,
-        (channel_name, channel_name, limit, offset),
-    ) as cursor:
-        return await cursor.fetchall()
+        channel_name,
+        limit,
+        offset,
+    )
 
 
 async def count_global_channel_videos(channel_name: str) -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         f"""
         SELECT COUNT(*) FROM (
             SELECT 1
             FROM youtube_cache
-            WHERE channel_name = ?
+            WHERE channel_name = $1
               AND {_CACHE_HAS_FILES_SQL}
             GROUP BY {_YT_GROUP_KEY_SQL}
-        )
+        ) AS sub
         """,
-        (channel_name,),
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        channel_name,
+    )
+    return int(val or 0)
 
 
 async def get_cache_variants_for_video(
     channel_name: str, yt_video_id: str
 ) -> list:
     """All cached qualities/formats for the same YouTube video in a channel."""
-    conn = await get_db()
+    pool = await get_db()
     yt_video_id = (yt_video_id or "").strip()
-    async with conn.execute(
+    return await pool.fetch(
         f"""
-        SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
+        SELECT id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, quality, cached_at, uploaded_at
         FROM youtube_cache
-        WHERE channel_name = ?
-          AND {_YT_GROUP_KEY_SQL} = ?
+        WHERE channel_name = $1
+          AND {_YT_GROUP_KEY_SQL} = $2
           AND {_CACHE_HAS_FILES_SQL}
         ORDER BY
             CASE WHEN format_type LIKE '%audio%' THEN 1 ELSE 0 END,
-            CAST(COALESCE(NULLIF(quality, ''), '0') AS INTEGER) DESC,
-            rowid DESC
+            CASE WHEN quality ~ '^[0-9]+$' THEN quality::INTEGER ELSE 0 END DESC,
+            id DESC
         """,
-        (channel_name, yt_video_id),
-    ) as cursor:
-        return await cursor.fetchall()
+        channel_name,
+        yt_video_id,
+    )
 
 
 def archive_row_yt_id(row) -> str:
@@ -642,72 +652,62 @@ def dedupe_archive_rows(rows: list) -> list:
 
 
 async def get_cache_entry_by_rowid(rowid: int):
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    return await pool.fetchrow(
         """
-        SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
+        SELECT id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, quality, cached_at
-        FROM youtube_cache WHERE rowid = ?
+        FROM youtube_cache WHERE id = $1
         """,
-        (rowid,),
-    ) as cursor:
-        return await cursor.fetchone()
+        int(rowid),
+    )
 
 
 async def search_global_cache_by_title(query: str, limit: int = 15):
-    conn = await get_db()
+    pool = await get_db()
     pattern = f"%{query.strip()}%"
-    async with conn.execute(
+    return await pool.fetch(
         f"""
-        SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
+        SELECT id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, cached_at, uploaded_at
         FROM youtube_cache
-        WHERE title LIKE ?
+        WHERE title ILIKE $1
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
-        LIMIT ?
+        LIMIT $2
         """,
-        (pattern, limit),
-    ) as cursor:
-        return await cursor.fetchall()
+        pattern,
+        limit,
+    )
 
 
 async def search_global_cache_by_channel(query: str, limit: int = 15):
-    conn = await get_db()
+    pool = await get_db()
     pattern = f"%{query.strip()}%"
-    async with conn.execute(
+    return await pool.fetch(
         f"""
-        SELECT rowid AS id, video_id, yt_video_id, title, channel_name,
+        SELECT id, video_id, yt_video_id, title, channel_name,
                file_ids, format_type, cached_at, uploaded_at
         FROM youtube_cache
-        WHERE channel_name LIKE ?
+        WHERE channel_name ILIKE $1
         ORDER BY {_CHANNEL_VIDEOS_ORDER_SQL}
-        LIMIT ?
+        LIMIT $2
         """,
-        (pattern, limit),
-    ) as cursor:
-        return await cursor.fetchall()
+        pattern,
+        limit,
+    )
 
 
 async def increment_yt_video_view(video_id: str):
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    await conn.execute(
-        "UPDATE youtube_cache SET view_count = view_count + 1 WHERE video_id = ?",
-        (video_id,),
+    pool = await get_db()
+    await pool.execute(
+        "UPDATE youtube_cache SET view_count = view_count + 1 WHERE video_id = $1",
+        video_id,
     )
-    await conn.commit()
 
 
-async def get_top_cached_videos(limit=10):
-    conn = await get_db()  # تغییر: استفاده از اتصال واحد
-    # conn.row_factory = sqlite3.Row # این خط حذف شد. row_factory در get_db() تنظیم شده و باید کافی باشد.
-    async with conn.execute(
-        "SELECT video_id, file_ids, view_count FROM youtube_cache ORDER BY view_count DESC LIMIT ?",
-        (limit,),
-    ) as cursor:
-        # aiosqlite.Row به شما امکان دسترسی دیکشنری مانند می‌دهد، نیازی به dict(row) نیست
-        # مگر اینکه واقعا شی dict خالص مورد نیاز باشد.
-        # می‌توانید به جای dict(row) از row برای دسترسی به مقادیر استفاده کنید.
-        # اگر dict() ضروری است، ممکن است نیاز به تبدیل صریح داشته باشید:
-        # return [{col: row[col] for col in row.keys()} for row in await cursor.fetchall()]
-        # اما برای سادگی، فعلا row مستقیم را برمی‌گردانیم، چون رفتار آن مشابه dict است.
-        return await cursor.fetchall()
+async def get_top_cached_videos(limit: int = 10):
+    pool = await get_db()
+    return await pool.fetch(
+        "SELECT video_id, file_ids, view_count FROM youtube_cache ORDER BY view_count DESC LIMIT $1",
+        limit,
+    )

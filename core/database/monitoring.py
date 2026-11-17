@@ -32,10 +32,10 @@ SECTION_LABELS = {
 ALL_SECTIONS = list(SECTION_LABELS.keys())
 
 _TODAY_ACTIVITY_SQL = """
-    yt_date = ? OR music_date = ? OR pinterest_date = ?
-    OR tt_dl_date = ? OR ig_dl_date = ? OR ig_exp_date = ?
-    OR gh_date = ? OR web_search_dl_date = ? OR arc_fetch_date = ?
-    OR ai_chat_date = ? OR tg_date = ?
+    yt_date = $1 OR music_date = $1 OR pinterest_date = $1
+    OR tt_dl_date = $1 OR ig_dl_date = $1 OR ig_exp_date = $1
+    OR gh_date = $1 OR web_search_dl_date = $1 OR arc_fetch_date = $1
+    OR ai_chat_date = $1 OR tg_date = $1
 """
 
 
@@ -44,15 +44,18 @@ async def log_monitor_event(
     user_id: str | None = None,
     event_type: str = "upload_success",
 ) -> None:
-    conn = await get_db()
-    await conn.execute(
+    pool = await get_db()
+    uid = str(user_id) if user_id is not None else None
+    await pool.execute(
         """
         INSERT INTO monitoring_events (section, event_type, user_id, created_at)
-        VALUES (?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4)
         """,
-        (section, event_type, user_id, get_tehran_now_full()),
+        section,
+        event_type,
+        uid,
+        get_tehran_now_full(),
     )
-    await conn.commit()
 
 
 async def log_upload_success(section: str, user_id: str | None = None) -> None:
@@ -71,79 +74,79 @@ async def log_user_active(user_id: str) -> None:
 async def _section_counts_between(
     start: str, end: str, event_type: str = "upload_success"
 ) -> dict[str, int]:
-    conn = await get_db()
+    pool = await get_db()
     counts = {section: 0 for section in ALL_SECTIONS}
-    async with conn.execute(
+    rows = await pool.fetch(
         """
         SELECT section, COUNT(*) AS cnt
         FROM monitoring_events
-        WHERE event_type = ?
-          AND created_at >= ?
-          AND created_at < ?
+        WHERE event_type = $1
+          AND created_at >= $2
+          AND created_at < $3
         GROUP BY section
         """,
-        (event_type, start, end),
-    ) as cursor:
-        rows = await cursor.fetchall()
+        event_type,
+        start,
+        end,
+    )
     for row in rows:
-        section = row[0] if not isinstance(row, dict) else row["section"]
-        cnt = row[1] if not isinstance(row, dict) else row["cnt"]
+        section = row["section"]
         if section in counts:
-            counts[section] = cnt
+            counts[section] = int(row["cnt"])
     return counts
 
 
 async def _count_responses_between(
     start: str, end: str, event_type: str = "upload_success"
 ) -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         """
         SELECT COUNT(*) FROM monitoring_events
-        WHERE event_type = ?
-          AND created_at >= ?
-          AND created_at < ?
+        WHERE event_type = $1
+          AND created_at >= $2
+          AND created_at < $3
         """,
-        (event_type, start, end),
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        event_type,
+        start,
+        end,
+    )
+    return int(val or 0)
 
 
 async def _count_active_users_between(start: str, end: str) -> int:
-    conn = await get_db()
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         """
         SELECT COUNT(DISTINCT user_id) FROM monitoring_events
         WHERE user_id IS NOT NULL
-          AND created_at >= ?
-          AND created_at < ?
+          AND created_at >= $1
+          AND created_at < $2
         """,
-        (start, end),
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        start,
+        end,
+    )
+    return int(val or 0)
 
 
 async def count_active_users_today() -> int:
     today = get_tehran_today()
     today_start = f"{today} 00:00:00"
-    conn = await get_db()
-    params = (today,) * 11 + (today_start,)
-    async with conn.execute(
+    pool = await get_db()
+    val = await pool.fetchval(
         f"""
         SELECT COUNT(DISTINCT user_id) FROM (
             SELECT user_id FROM users
             WHERE user_id IS NOT NULL AND ({_TODAY_ACTIVITY_SQL})
             UNION
             SELECT user_id FROM monitoring_events
-            WHERE user_id IS NOT NULL AND created_at >= ?
-        )
+            WHERE user_id IS NOT NULL AND created_at >= $2
+        ) AS active_users
         """,
-        params,
-    ) as cursor:
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        today,
+        today_start,
+    )
+    return int(val or 0)
 
 
 def _last_completed_hour_range() -> tuple[str, str, str, str]:
@@ -168,34 +171,26 @@ async def get_monitoring_report_data() -> dict:
         + timedelta(days=1)
     ).strftime("%Y-%m-%d 00:00:00")
 
-    # Success counts
-    hour_ok  = await _section_counts_between(hour_start, hour_end, "upload_success")
+    hour_ok = await _section_counts_between(hour_start, hour_end, "upload_success")
     today_ok = await _section_counts_between(today_start, tomorrow, "upload_success")
 
-    # Failed counts
-    hour_fail  = await _section_counts_between(hour_start, hour_end, "upload_failed")
+    hour_fail = await _section_counts_between(hour_start, hour_end, "upload_failed")
     today_fail = await _section_counts_between(today_start, tomorrow, "upload_failed")
 
     return {
         "report_date": today,
-        "hour_label":  f"{label_start} – {label_end}",
-        "hour_start":  hour_start,
-        "hour_end":    hour_end,
-
-        # success
-        "hour_section_counts":  hour_ok,
+        "hour_label": f"{label_start} – {label_end}",
+        "hour_start": hour_start,
+        "hour_end": hour_end,
+        "hour_section_counts": hour_ok,
         "today_section_counts": today_ok,
-        "hour_responses":       await _count_responses_between(hour_start, hour_end, "upload_success"),
-        "today_responses":      await _count_responses_between(today_start, tomorrow, "upload_success"),
-
-        # failures
-        "hour_section_fails":   hour_fail,
-        "today_section_fails":  today_fail,
-        "hour_failures":        await _count_responses_between(hour_start, hour_end, "upload_failed"),
-        "today_failures":       await _count_responses_between(today_start, tomorrow, "upload_failed"),
-
-        # users
-        "hour_active_users":  await _count_active_users_between(hour_start, hour_end),
+        "hour_responses": await _count_responses_between(hour_start, hour_end, "upload_success"),
+        "today_responses": await _count_responses_between(today_start, tomorrow, "upload_success"),
+        "hour_section_fails": hour_fail,
+        "today_section_fails": today_fail,
+        "hour_failures": await _count_responses_between(hour_start, hour_end, "upload_failed"),
+        "today_failures": await _count_responses_between(today_start, tomorrow, "upload_failed"),
+        "hour_active_users": await _count_active_users_between(hour_start, hour_end),
         "today_active_users": await count_active_users_today(),
     }
 
@@ -204,17 +199,16 @@ async def purge_old_monitoring_events(days: int = 14) -> int:
     cutoff = (datetime.now(TEHRAN_TZ) - timedelta(days=days)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-    conn = await get_db()
-    async with conn.execute(
-        "SELECT COUNT(*) FROM monitoring_events WHERE created_at < ?",
-        (cutoff,),
-    ) as cursor:
-        row = await cursor.fetchone()
-        to_delete = row[0] if row else 0
-    if to_delete:
-        await conn.execute(
-            "DELETE FROM monitoring_events WHERE created_at < ?",
-            (cutoff,),
+    pool = await get_db()
+    deleted = await pool.fetchval(
+        """
+        WITH deleted AS (
+            DELETE FROM monitoring_events
+            WHERE created_at < $1
+            RETURNING 1
         )
-        await conn.commit()
-    return to_delete
+        SELECT COUNT(*) FROM deleted
+        """,
+        cutoff,
+    )
+    return int(deleted or 0)
