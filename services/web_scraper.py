@@ -8,15 +8,29 @@ import signal
 import sys
 import time
 from typing import List, Optional
+from urllib.parse import urljoin
 
+import aiohttp
+from bs4 import BeautifulSoup
 from ddgs import (
     DDGS,
 )  # در صورت خطا در ایمپورت، این خط جایگزین from ddgs شد
 
 from services.chromium_workload import heavy_chromium_semaphore
+from services.http_client import get_http_session
+from services.playwright_browser_manager import get_browser_manager
 
 # محدودکنندهٔ قبلی حذف شد؛ Pinterest و SingleFile همین سمافور را share می‌کنند.
 _SINGLEFILE_COMMUNICATE_TIMEOUT = 90.0
+_PLAYWRIGHT_PAGE_TIMEOUT_MS = 45_000
+_PLAYWRIGHT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+_MAX_INLINED_STYLESHEETS = 20
+_MAX_STYLESHEET_BYTES = 512 * 1024
+_MAX_TOTAL_CSS_BYTES = 4 * 1024 * 1024
 
 # آرگومان‌های مرورگر برای سرور لینوکس / Docker (کاهش خروج Chromium با کد ۲۱)
 _DEFAULT_BROWSER_ARGS: List[str] = [
@@ -35,6 +49,7 @@ _DEFAULT_BROWSER_ARGS: List[str] = [
 
 
 _BROWSER_MISSING_LOGGED = False
+_SINGLEFILE_MISSING_LOGGED = False
 
 
 def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
@@ -51,6 +66,33 @@ def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
             process.kill()
         except ProcessLookupError:
             pass
+
+
+def _get_singlefile_executable() -> Optional[str]:
+    """Locate the single-file CLI binary from env, PATH, or common npm paths."""
+    for key in ("SINGLEFILE_PATH", "SINGLEFILE_BIN", "SINGLEFILE_CLI_PATH"):
+        p = os.environ.get(key, "").strip()
+        if p and os.path.isfile(p) and (sys.platform == "win32" or os.access(p, os.X_OK)):
+            return p
+
+    for name in ("single-file", "single-file.cmd"):
+        p = shutil.which(name)
+        if p:
+            return p
+
+    candidates = [
+        os.path.join(os.getcwd(), "node_modules", ".bin", "single-file"),
+        os.path.join(os.getcwd(), "node_modules", ".bin", "single-file.cmd"),
+        "/usr/local/bin/single-file",
+        "/usr/bin/single-file",
+        os.path.expanduser("~/.npm-global/bin/single-file"),
+        os.path.expanduser("~/.local/bin/single-file"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and (sys.platform == "win32" or os.access(path, os.X_OK)):
+            return path
+
+    return None
 
 
 def _get_singlefile_browser_executable() -> Optional[str]:
@@ -110,9 +152,158 @@ def search_web(query, max_results=10, max_attempts=3):
     return []
 
 
-async def create_single_file(url, output_path, max_attempts=3):
-    """اجرای غیرهمزمان ابزار SingleFile CLI با تکرار در صورت شکست."""
-    global _BROWSER_MISSING_LOGGED
+def _remove_file_if_exists(path: str) -> None:
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+async def _fetch_stylesheet_text(
+    session: aiohttp.ClientSession, css_url: str
+) -> Optional[str]:
+    try:
+        timeout = aiohttp.ClientTimeout(total=8)
+        headers = {"User-Agent": _PLAYWRIGHT_USER_AGENT}
+        async with session.get(css_url, timeout=timeout, headers=headers) as resp:
+            if resp.status != 200:
+                return None
+            raw = await resp.content.read(_MAX_STYLESHEET_BYTES + 1)
+            if len(raw) > _MAX_STYLESHEET_BYTES:
+                return None
+            return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+async def _inline_stylesheets_and_prepare_html(
+    html_content: str, base_url: str
+) -> str:
+    """Prepare a standalone HTML snapshot by stripping scripts, setting <base>, and inlining CSS."""
+    soup = await asyncio.to_thread(BeautifulSoup, html_content, "html.parser")
+
+    for script_tag in soup.find_all("script"):
+        script_tag.decompose()
+
+    head = soup.head
+    if head is None:
+        head = soup.new_tag("head")
+        if soup.html:
+            soup.html.insert(0, head)
+        else:
+            soup.insert(0, head)
+
+    if head.find("base") is None:
+        base_tag = soup.new_tag("base", href=base_url)
+        head.insert(0, base_tag)
+
+    if head.find("meta", attrs={"charset": True}) is None:
+        head.insert(0, soup.new_tag("meta", charset="utf-8"))
+
+    css_links = []
+    for link in soup.find_all("link", href=True):
+        rel_values = [r.lower() for r in (link.get("rel") or [])]
+        if "stylesheet" in rel_values:
+            abs_href = urljoin(base_url, link["href"])
+            if abs_href.startswith(("http://", "https://")):
+                css_links.append((link, abs_href))
+            if len(css_links) >= _MAX_INLINED_STYLESHEETS:
+                break
+
+    if css_links:
+        session = await get_http_session()
+        fetched_styles = await asyncio.gather(
+            *(_fetch_stylesheet_text(session, href) for _, href in css_links),
+            return_exceptions=True,
+        )
+        total_css_bytes = 0
+        for (link_tag, href), css_text in zip(css_links, fetched_styles):
+            if not isinstance(css_text, str) or not css_text.strip():
+                continue
+            css_size = len(css_text.encode("utf-8", errors="replace"))
+            if total_css_bytes + css_size > _MAX_TOTAL_CSS_BYTES:
+                continue
+            total_css_bytes += css_size
+            safe_css = css_text.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE")
+            style_tag = soup.new_tag("style")
+            style_tag["data-source-href"] = href
+            style_tag.string = safe_css
+            link_tag.replace_with(style_tag)
+
+    return str(soup)
+
+
+async def _create_single_file_with_playwright(
+    url: str, output_path: str, max_attempts: int = 2
+) -> bool:
+    """Fallback webpage saver using the shared Playwright Chromium browser."""
+    manager = get_browser_manager()
+
+    for attempt in range(max_attempts):
+        try:
+            async with heavy_chromium_semaphore:
+                context = None
+                page = None
+                try:
+                    context = await manager.new_context(_PLAYWRIGHT_USER_AGENT)
+                    page = await context.new_page()
+                    await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=_PLAYWRIGHT_PAGE_TIMEOUT_MS,
+                    )
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        pass
+
+                    final_url = page.url or url
+                    html_content = await page.content()
+                finally:
+                    if page is not None:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+                    if context is not None:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
+
+            if not html_content or not html_content.strip():
+                raise ValueError("Empty HTML returned by Playwright")
+
+            standalone_html = await _inline_stylesheets_and_prepare_html(
+                html_content, final_url
+            )
+            parent_dir = os.path.dirname(output_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(standalone_html)
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return True
+        except Exception as e:
+            print(
+                f"Playwright SingleFile fallback failed "
+                f"(attempt {attempt + 1}/{max_attempts}) for {url}: {e}"
+            )
+            _remove_file_if_exists(output_path)
+
+        if attempt < max_attempts - 1:
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+    return False
+
+
+async def _run_singlefile_cli(
+    singlefile_exe: str, url: str, output_path: str, max_attempts: int
+) -> bool:
+    """Run the external single-file CLI with retries and timeout protection."""
+    global _BROWSER_MISSING_LOGGED, _SINGLEFILE_MISSING_LOGGED
     browser_exe = _get_singlefile_browser_executable()
     browser_args_json = json.dumps(_DEFAULT_BROWSER_ARGS, separators=(",", ":"))
 
@@ -127,7 +318,7 @@ async def create_single_file(url, output_path, max_attempts=3):
     for attempt in range(max_attempts):
         async with heavy_chromium_semaphore:
             command = [
-                "single-file",
+                singlefile_exe,
                 f"--browser-args={browser_args_json}",
                 url,
                 output_path,
@@ -135,21 +326,23 @@ async def create_single_file(url, output_path, max_attempts=3):
             if browser_exe:
                 command.insert(1, f"--browser-executable-path={browser_exe}")
 
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-
+            process = None
             try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=(sys.platform != "win32"),
+                )
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
                     timeout=_SINGLEFILE_COMMUNICATE_TIMEOUT,
                 )
                 if process.returncode == 0 and os.path.exists(output_path):
                     return True
-                err_msg = stderr.decode(errors="replace") if stderr else "Unknown Error"
+                err_msg = (
+                    stderr.decode(errors="replace") if stderr else "Unknown Error"
+                )
                 out_msg = stdout.decode(errors="replace") if stdout else ""
                 if out_msg.strip():
                     print(f"SingleFile stdout: {out_msg[:2000]}")
@@ -157,20 +350,45 @@ async def create_single_file(url, output_path, max_attempts=3):
                     f"SingleFile failed (attempt {attempt + 1}/{max_attempts}, "
                     f"browser={browser_exe or 'default bundled'}). Error: {err_msg}"
                 )
-
+            except FileNotFoundError:
+                if not _SINGLEFILE_MISSING_LOGGED:
+                    print(
+                        f"SingleFile binary not found at '{singlefile_exe}'. "
+                        "Falling back to Playwright."
+                    )
+                    _SINGLEFILE_MISSING_LOGGED = True
+                _remove_file_if_exists(output_path)
+                return False
             except asyncio.TimeoutError:
-                _terminate_process_tree(process)
+                if process is not None:
+                    _terminate_process_tree(process)
                 print(f"SingleFile timeout for URL: {url} (attempt {attempt + 1})")
             except Exception as e:
                 print(f"SingleFile error: {e}")
 
-            try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-            except OSError:
-                pass
+            _remove_file_if_exists(output_path)
 
         if attempt < max_attempts - 1:
             await asyncio.sleep(1.5 * (attempt + 1))
 
     return False
+
+
+async def create_single_file(url, output_path, max_attempts=3):
+    """اجرای غیرهمزمان ابزار SingleFile CLI با تکرار در صورت شکست و fallback به Playwright."""
+    global _SINGLEFILE_MISSING_LOGGED
+    singlefile_exe = _get_singlefile_executable()
+
+    if singlefile_exe:
+        if await _run_singlefile_cli(singlefile_exe, url, output_path, max_attempts):
+            return True
+    elif not _SINGLEFILE_MISSING_LOGGED:
+        print(
+            "SingleFile CLI ('single-file') در سرور یافت نشد؛ استفاده از Playwright fallback. "
+            "(برای نصب اختیاری CLI: npm install -g single-file-cli یا تنظیم SINGLEFILE_PATH)"
+        )
+        _SINGLEFILE_MISSING_LOGGED = True
+
+    return await _create_single_file_with_playwright(
+        url, output_path, max_attempts=min(max_attempts, 2)
+    )

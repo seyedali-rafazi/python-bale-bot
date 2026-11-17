@@ -18,6 +18,78 @@ from core.database import (
 from core.limits import get_limit
 
 
+async def _download_and_send_webpage(
+    message,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: str,
+    user_id: int,
+    target_url: str,
+    *,
+    filename: str,
+    caption_label: str,
+    wait_text: str,
+    fail_text: str,
+) -> bool:
+    """Check daily web-search limit, capture webpage as HTML, and send it to the user."""
+    vip = await is_vip(user_id)
+    daily_limit = get_limit("web_search", vip)
+    current_downloads = await get_web_search_downloads(user_id)
+
+    if current_downloads >= daily_limit:
+        await message.reply_text(
+            f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
+            f"📊 محدودیت روزانه: {daily_limit} بار\n"
+            f"🌟 برای افزایش حد، VIP شوید!"
+        )
+        return False
+
+    wait_msg = await message.reply_text(wait_text)
+    os.makedirs("downloads", exist_ok=True)
+    output_filename = (
+        f"downloads/page_{chat_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.html"
+    )
+
+    try:
+        success = await create_single_file(target_url, output_filename)
+        if not success:
+            await wait_msg.edit_text(fail_text)
+            return False
+
+        new_count = await increment_web_search_downloads(user_id)
+        await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
+        try:
+            with open(output_filename, "rb") as doc_file:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=doc_file,
+                    filename=filename,
+                    caption=f"{caption_label}: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
+                )
+            await log_upload_success("web_search", chat_id)
+            return True
+        except Exception as e:
+            print(f"Send Document Error: {e}")
+            await wait_msg.edit_text("❌ خطا در ارسال فایل.")
+            return False
+    except Exception as e:
+        print(f"Web Search Download Error: {e}")
+        try:
+            await wait_msg.edit_text(
+                "❌ خطایی در پردازش درخواست رخ داد. لطفاً دوباره تلاش کنید."
+            )
+        except Exception:
+            await message.reply_text(
+                "❌ خطایی در پردازش درخواست رخ داد. لطفاً دوباره تلاش کنید."
+            )
+        return False
+    finally:
+        if os.path.exists(output_filename):
+            try:
+                os.remove(output_filename)
+            except OSError:
+                pass
+
+
 async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -35,60 +107,18 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # بررسی حد روزانه دانلود
-    user_id = update.effective_user.id
-    vip = await is_vip(user_id)
-
-    # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
-    daily_limit = get_limit("web_search", vip)
-    current_downloads = await get_web_search_downloads(user_id)
-
-    if current_downloads >= daily_limit:
-        await query.message.reply_text(
-            f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
-            f"📊 محدودیت روزانه: {daily_limit} بار\n"
-            f"🌟 برای افزایش حد، VIP شوید!"
-        )
-        return
-
     target_url = urls[index]
-    wait_msg = await query.message.reply_text(
-        "⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)..."
+    await _download_and_send_webpage(
+        query.message,
+        context,
+        chat_id,
+        update.effective_user.id,
+        target_url,
+        filename=f"WebPage_{index + 1}.html",
+        caption_label="🔗 لینک اصلی",
+        wait_text="⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)...",
+        fail_text="❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد)",
     )
-
-    os.makedirs("downloads", exist_ok=True)
-    output_filename = f"downloads/page_{chat_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.html"
-
-    try:
-        success = await create_single_file(target_url, output_filename)
-
-        if success:
-            # افزایش تعداد دانلود پس از موفقیت
-            new_count = await increment_web_search_downloads(user_id)
-
-            await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
-            try:
-                with open(output_filename, "rb") as doc_file:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=doc_file,
-                        filename=f"WebPage_{index + 1}.html",
-                        caption=f"🔗 لینک اصلی: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
-                    )
-                await log_upload_success("web_search", chat_id)
-            except Exception as e:
-                print(f"Send Document Error: {e}")
-                await wait_msg.edit_text("❌ خطا در ارسال فایل.")
-        else:
-            await wait_msg.edit_text(
-                "❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد)"
-            )
-    finally:
-        if os.path.exists(output_filename):
-            try:
-                os.remove(output_filename)
-            except OSError:
-                pass
 
 
 async def handle_web_search_state(
@@ -149,63 +179,17 @@ async def handle_web_search_state(
             )
             return
 
-        # بررسی حد روزانه دانلود
-        user_id = update.effective_user.id
-        vip = await is_vip(user_id)
-
-        # حد روزانه: 1 برای کاربران عادی، 20 برای VIP
-        daily_limit = get_limit("web_search", vip)
-        current_downloads = await get_web_search_downloads(user_id)
-
-        if current_downloads >= daily_limit:
-            await update.message.reply_text(
-                f"❌ شما امروز به حد مجاز دانلود رسیده‌اید.\n\n"
-                f"📊 محدودیت روزانه: {daily_limit} بار\n"
-                f"🌟 برای افزایش حد، VIP شوید!"
-            )
-            clear_state(chat_id)
-            return
-
-        wait_msg = await update.message.reply_text(
-            "⏳ در حال پردازش و دریافت صفحه (ممکن است کمی طول بکشد)..."
-        )
-
-        os.makedirs("downloads", exist_ok=True)
-        output_filename = f"downloads/page_{chat_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.html"
-
         try:
-            success = await create_single_file(url, output_filename)
-
-            if success:
-                # افزایش تعداد دانلود پس از موفقیت
-                new_count = await increment_web_search_downloads(user_id)
-
-                await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
-                try:
-                    with open(output_filename, "rb") as f:
-                        await context.bot.send_document(
-                            chat_id=chat_id,
-                            document=f,
-                            filename="WebPage.html",
-                            caption=f"🔗 لینک: {url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
-                        )
-                        await log_upload_success("web_search", chat_id)
-                except Exception as e:
-                    print(f"Send Document Error: {e}")
-                    await wait_msg.edit_text("❌ خطا در ارسال فایل.")
-            else:
-                await wait_msg.edit_text(
-                    "❌ متاسفانه دریافت این صفحه با مشکل مواجه شد.\n\n(ممکن است سایت محافظت شده باشد یا لینک اشتباه باشد)"
-                )
-        except Exception as e:
-            print(f"Web Search Link Error: {e}")
-            await update.message.reply_text(
-                "❌ خطایی در پردازش درخواست رخ داد. لطفاً دوباره تلاش کنید."
+            await _download_and_send_webpage(
+                update.message,
+                context,
+                chat_id,
+                update.effective_user.id,
+                url,
+                filename="WebPage.html",
+                caption_label="🔗 لینک",
+                wait_text="⏳ در حال پردازش و دریافت صفحه (ممکن است کمی طول بکشد)...",
+                fail_text="❌ متاسفانه دریافت این صفحه با مشکل مواجه شد.\n\n(ممکن است سایت محافظت شده باشد یا لینک اشتباه باشد)",
             )
         finally:
-            if os.path.exists(output_filename):
-                try:
-                    os.remove(output_filename)
-                except OSError:
-                    pass
             clear_state(chat_id)
