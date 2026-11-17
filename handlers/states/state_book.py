@@ -21,11 +21,13 @@ import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from core.state_manager import clear_state
+from core.state_manager import StateCache, clear_state
 from core.database import log_upload_success, log_upload_failed
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 
 logger = logging.getLogger(__name__)
+
+_books_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -67,10 +69,8 @@ async def _handle_book_search(
         await msg.edit_text("❌ کتابی برای این جستجو یافت نشد. کلمات کلیدی دیگری امتحان کنید.")
         return
 
-    # Store books in bot_data so callback can retrieve them
-    if "books" not in context.bot_data:
-        context.bot_data["books"] = {}
-    context.bot_data["books"][chat_id] = books
+    # Store books in bounded TTL/LRU cache so callback can retrieve them without leaking RAM
+    _books_cache[str(chat_id)] = books
 
     # Build result text + inline keyboard
     result_text = f"📚 *نتایج جستجوی «{query}»:*\n\n"
@@ -140,8 +140,10 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text("❌ خطای داخلی. لطفاً دوباره جستجو کنید.")
         return
 
-    # Retrieve book dict from bot_data
-    books: list = (context.bot_data.get("books") or {}).get(stored_chat_id, [])
+    # Retrieve book dict from bounded cache (or legacy bot_data fallback)
+    books: list = _books_cache.get(str(stored_chat_id)) or (
+        (context.bot_data.get("books") or {}).get(stored_chat_id, [])
+    )
     if book_index >= len(books):
         await query.message.reply_text("❌ اطلاعات کتاب منقضی شده. لطفاً دوباره جستجو کنید.")
         return

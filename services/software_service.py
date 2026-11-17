@@ -32,6 +32,35 @@ SCOOP_API_KEY = "78CB5DCD0A7ABACE5B4DC3C34BC54C8F"
 # Limit concurrent winget operations to prevent process storms under heavy load
 _WINGET_SEMAPHORE = asyncio.Semaphore(2)
 
+_shared_httpx_client: Optional[httpx.AsyncClient] = None
+_httpx_lock = asyncio.Lock()
+
+
+async def get_software_httpx_client() -> httpx.AsyncClient:
+    """Return a shared httpx.AsyncClient with connection pooling."""
+    global _shared_httpx_client
+    if _shared_httpx_client is None or _shared_httpx_client.is_closed:
+        async with _httpx_lock:
+            if _shared_httpx_client is None or _shared_httpx_client.is_closed:
+                _shared_httpx_client = httpx.AsyncClient(
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=httpx.Timeout(connect=10.0, read=180.0, write=15.0, pool=10.0),
+                    limits=httpx.Limits(
+                        max_connections=50,
+                        max_keepalive_connections=20,
+                    ),
+                    follow_redirects=True,
+                )
+    return _shared_httpx_client
+
+
+async def close_software_httpx_client() -> None:
+    global _shared_httpx_client
+    async with _httpx_lock:
+        if _shared_httpx_client is not None and not _shared_httpx_client.is_closed:
+            await _shared_httpx_client.aclose()
+            _shared_httpx_client = None
+
 # In-memory search cache: key -> (timestamp, results)
 _CACHE_TTL_SECONDS = 1800  # 30 minutes
 _search_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
@@ -112,14 +141,13 @@ class SoftwareService:
             return cached
 
         url = "https://ws75.aptoide.com/api/7/apps/search"
-        headers = {"User-Agent": USER_AGENT}
         params = {"query": norm_query, "limit": limit}
 
         try:
-            async with httpx.AsyncClient(headers=headers, timeout=12.0, follow_redirects=True) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+            client = await get_software_httpx_client()
+            resp = await client.get(url, params=params, timeout=12.0)
+            resp.raise_for_status()
+            data = resp.json()
 
             items = data.get("datalist", {}).get("list", [])
             results: List[Dict[str, Any]] = []
@@ -166,12 +194,12 @@ class SoftwareService:
     async def _get_remote_file_size_mb(cls, url: str) -> float:
         """Quickly check Content-Length of a remote URL using HEAD request with strict timeout."""
         try:
-            async with httpx.AsyncClient(timeout=3.5, follow_redirects=True) as client:
-                resp = await client.head(url)
-                if resp.status_code == 200:
-                    cl = resp.headers.get("content-length")
-                    if cl and cl.isdigit():
-                        return round(int(cl) / (1024 * 1024), 1)
+            client = await get_software_httpx_client()
+            resp = await client.head(url, timeout=3.5)
+            if resp.status_code == 200:
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit():
+                    return round(int(cl) / (1024 * 1024), 1)
         except Exception:
             pass
         return 0.0
@@ -221,12 +249,12 @@ class SoftwareService:
         }
 
         try:
-            async with httpx.AsyncClient(headers=headers, timeout=10.0) as client:
-                resp = await client.get(SCOOP_SEARCH_URL, params=params)
-                if resp.status_code != 200:
-                    return []
-                data = resp.json()
-                docs = data.get("value", [])
+            client = await get_software_httpx_client()
+            resp = await client.get(SCOOP_SEARCH_URL, params=params, headers=headers, timeout=10.0)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            docs = data.get("value", [])
 
             if not docs:
                 return []
@@ -285,21 +313,29 @@ class SoftwareService:
 
             results: List[Dict[str, Any]] = []
             seen_urls = set()
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                tasks = [_fetch_manifest(client, c) for c in candidates[: limit + 3]]
-                fetched = await asyncio.gather(*tasks, return_exceptions=True)
-                for item in fetched:
-                    if isinstance(item, dict) and item.get("download_url"):
-                        dl = item["download_url"]
-                        if dl in seen_urls:
-                            continue
-                        seen_urls.add(dl)
-                        # Try getting remote size
-                        size_mb = await cls._get_remote_file_size_mb(dl)
-                        item["size_mb"] = size_mb
-                        results.append(item)
-                        if len(results) >= limit:
-                            break
+            client = await get_software_httpx_client()
+            tasks = [_fetch_manifest(client, c) for c in candidates[: limit + 3]]
+            fetched = await asyncio.gather(*tasks, return_exceptions=True)
+
+            valid_items: List[Dict[str, Any]] = []
+            for item in fetched:
+                if isinstance(item, dict) and item.get("download_url"):
+                    dl = item["download_url"]
+                    if dl in seen_urls:
+                        continue
+                    seen_urls.add(dl)
+                    valid_items.append(item)
+                    if len(valid_items) >= limit:
+                        break
+
+            if valid_items:
+                sizes = await asyncio.gather(
+                    *(cls._get_remote_file_size_mb(it["download_url"]) for it in valid_items),
+                    return_exceptions=True,
+                )
+                for it, sz in zip(valid_items, sizes):
+                    it["size_mb"] = sz if isinstance(sz, (int, float)) else 0.0
+                    results.append(it)
 
             return results
         except Exception as e:
@@ -490,20 +526,20 @@ class SoftwareService:
         total_downloaded = 0
 
         try:
-            async with httpx.AsyncClient(headers=headers, timeout=180.0, follow_redirects=True) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
+            client = await get_software_httpx_client()
+            async with client.stream("GET", url, timeout=180.0) as response:
+                response.raise_for_status()
 
-                    cl_header = response.headers.get("content-length")
-                    if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
-                        raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
+                cl_header = response.headers.get("content-length")
+                if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
+                    raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
 
-                    with open(dest_path, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
-                            total_downloaded += len(chunk)
-                            if total_downloaded > max_bytes:
-                                raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
-                            f.write(chunk)
+                with open(dest_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                        total_downloaded += len(chunk)
+                        if total_downloaded > max_bytes:
+                            raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
+                        f.write(chunk)
 
             return os.path.abspath(dest_path)
         except Exception:

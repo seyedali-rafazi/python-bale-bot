@@ -19,6 +19,7 @@ import os
 import re
 import time
 import urllib.parse
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
@@ -61,14 +62,36 @@ SOURCE_LABELS = {
 }
 
 
-def _make_client(verify: bool = True) -> httpx.Client:
-    return httpx.Client(
-        timeout=_TIMEOUT,
-        follow_redirects=True,
-        verify=verify,
-        headers=_HEADERS,
-        trust_env=False,
-    )
+_sync_clients: dict[bool, httpx.Client] = {}
+_sync_clients_lock = threading.Lock()
+
+
+def _get_shared_client(verify: bool = True) -> httpx.Client:
+    """Return a shared thread-safe httpx.Client with connection pooling."""
+    with _sync_clients_lock:
+        client = _sync_clients.get(verify)
+        if client is None or client.is_closed:
+            client = httpx.Client(
+                timeout=_TIMEOUT,
+                follow_redirects=True,
+                verify=verify,
+                headers=_HEADERS,
+                trust_env=False,
+                limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
+            )
+            _sync_clients[verify] = client
+        return client
+
+
+def close_book_clients() -> None:
+    with _sync_clients_lock:
+        for client in _sync_clients.values():
+            if not client.is_closed:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        _sync_clients.clear()
 
 
 def _get_with_retry(
@@ -121,63 +144,63 @@ def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
         "output": "json",
     }
 
-    with _make_client() as client:
-        try:
-            resp = _get_with_retry(client, _IA_SEARCH_URL, params=params, retries=1)
-            if not resp:
-                return []
-            docs = resp.json().get("response", {}).get("docs", [])
-        except Exception as e:
-            logger.warning("Internet Archive search failed: %s", e)
+    client = _get_shared_client()
+    try:
+        resp = _get_with_retry(client, _IA_SEARCH_URL, params=params, retries=1)
+        if not resp:
             return []
+        docs = resp.json().get("response", {}).get("docs", [])
+    except Exception as e:
+        logger.warning("Internet Archive search failed: %s", e)
+        return []
 
-        def _resolve_pdf(doc: dict) -> Optional[dict]:
-            ident = doc.get("identifier")
-            if not ident:
-                return None
-            try:
-                meta_resp = client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
-                if meta_resp.status_code != 200:
-                    return None
-                files = meta_resp.json().get("result", [])
-                best_pdf = None
-                best_size = 0
-                for f in files:
-                    name = f.get("name", "")
-                    size = int(f.get("size", 0) or 0)
-                    if name.lower().endswith(".pdf") and 50000 < size < MAX_BOOK_BYTES:
-                        if not best_pdf or (size > best_size and not name.endswith("_text.pdf")):
-                            best_pdf = name
-                            best_size = size
-
-                if best_pdf:
-                    creator = doc.get("creator")
-                    if isinstance(creator, list):
-                        creator = ", ".join(creator)
-                    dl_url = f"https://archive.org/download/{ident}/{urllib.parse.quote(best_pdf)}"
-                    return {
-                        "title":        (doc.get("title") or ident)[:80],
-                        "author":       (creator or "نامشخص")[:60],
-                        "year":         str(doc.get("year") or "—"),
-                        "source":       SRC_IA,
-                        "source_label": SOURCE_LABELS[SRC_IA],
-                        "has_file":     True,
-                        "download_url": dl_url,
-                        "file_ext":     ".pdf",
-                        "book_id":      ident,
-                    }
-            except Exception:
-                pass
+    def _resolve_pdf(doc: dict) -> Optional[dict]:
+        ident = doc.get("identifier")
+        if not ident:
             return None
+        try:
+            meta_resp = client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
+            if meta_resp.status_code != 200:
+                return None
+            files = meta_resp.json().get("result", [])
+            best_pdf = None
+            best_size = 0
+            for f in files:
+                name = f.get("name", "")
+                size = int(f.get("size", 0) or 0)
+                if name.lower().endswith(".pdf") and 50000 < size < MAX_BOOK_BYTES:
+                    if not best_pdf or (size > best_size and not name.endswith("_text.pdf")):
+                        best_pdf = name
+                        best_size = size
 
-        books: List[dict] = []
-        with ThreadPoolExecutor(max_workers=min(len(docs) or 1, 6)) as pool:
-            for item in pool.map(_resolve_pdf, docs):
-                if item:
-                    books.append(item)
-                if len(books) >= max_results:
-                    break
-        return books
+            if best_pdf:
+                creator = doc.get("creator")
+                if isinstance(creator, list):
+                    creator = ", ".join(creator)
+                dl_url = f"https://archive.org/download/{ident}/{urllib.parse.quote(best_pdf)}"
+                return {
+                    "title":        (doc.get("title") or ident)[:80],
+                    "author":       (creator or "نامشخص")[:60],
+                    "year":         str(doc.get("year") or "—"),
+                    "source":       SRC_IA,
+                    "source_label": SOURCE_LABELS[SRC_IA],
+                    "has_file":     True,
+                    "download_url": dl_url,
+                    "file_ext":     ".pdf",
+                    "book_id":      ident,
+                }
+        except Exception:
+            pass
+        return None
+
+    books: List[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(docs) or 1, 6)) as pool:
+        for item in pool.map(_resolve_pdf, docs):
+            if item:
+                books.append(item)
+            if len(books) >= max_results:
+                break
+    return books
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -190,37 +213,37 @@ def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
     """Search Gutenberg directly on www.gutenberg.org without Cloudflare blocks."""
     url = f"{_GUTENBERG_SEARCH_URL}?query={urllib.parse.quote_plus(query)}"
     books = []
-    with _make_client() as client:
-        try:
-            resp = _get_with_retry(client, url, retries=1)
-            if not resp:
-                return []
-            pattern = (
-                r'<li class="booklink">.*?href="/ebooks/(\d+)".*?'
-                r'<span class="title">(.*?)</span>.*?'
-                r'<span class="subtitle">(.*?)</span>'
-            )
-            items = re.findall(pattern, resp.text, re.DOTALL)
-            for book_id, raw_title, raw_author in items[:max_results]:
-                title = re.sub(r'<.*?>', '', raw_title).strip()
-                author = re.sub(r'<.*?>', '', raw_author).strip()
-                books.append({
-                    "title":        title[:80] or "نامشخص",
-                    "author":       author[:60] or "نامشخص",
-                    "year":         "—",
-                    "source":       SRC_GUTENBERG,
-                    "source_label": SOURCE_LABELS[SRC_GUTENBERG],
-                    "has_file":     True,
-                    "download_url": f"https://www.gutenberg.org/ebooks/{book_id}.epub3.images",
-                    "fallback_urls": [
-                        f"https://www.gutenberg.org/ebooks/{book_id}.epub.noimages",
-                        f"https://www.gutenberg.org/cache/epub/{book_id}/pg{book_id}.epub",
-                    ],
-                    "file_ext":     ".epub",
-                    "book_id":      book_id,
-                })
-        except Exception as e:
-            logger.warning("Gutenberg search error: %s", e)
+    client = _get_shared_client()
+    try:
+        resp = _get_with_retry(client, url, retries=1)
+        if not resp:
+            return []
+        pattern = (
+            r'<li class="booklink">.*?href="/ebooks/(\d+)".*?'
+            r'<span class="title">(.*?)</span>.*?'
+            r'<span class="subtitle">(.*?)</span>'
+        )
+        items = re.findall(pattern, resp.text, re.DOTALL)
+        for book_id, raw_title, raw_author in items[:max_results]:
+            title = re.sub(r'<.*?>', '', raw_title).strip()
+            author = re.sub(r'<.*?>', '', raw_author).strip()
+            books.append({
+                "title":        title[:80] or "نامشخص",
+                "author":       author[:60] or "نامشخص",
+                "year":         "—",
+                "source":       SRC_GUTENBERG,
+                "source_label": SOURCE_LABELS[SRC_GUTENBERG],
+                "has_file":     True,
+                "download_url": f"https://www.gutenberg.org/ebooks/{book_id}.epub3.images",
+                "fallback_urls": [
+                    f"https://www.gutenberg.org/ebooks/{book_id}.epub.noimages",
+                    f"https://www.gutenberg.org/cache/epub/{book_id}/pg{book_id}.epub",
+                ],
+                "file_ext":     ".epub",
+                "book_id":      book_id,
+            })
+    except Exception as e:
+        logger.warning("Gutenberg search error: %s", e)
     return books
 
 
@@ -232,23 +255,23 @@ _OL_SEARCH = "https://openlibrary.org/search.json"
 
 def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
     """Lightweight search on Open Library for book catalog metadata."""
-    with _make_client() as client:
-        resp = _get_with_retry(
-            client,
-            _OL_SEARCH,
-            params={
-                "q": query,
-                "fields": "key,title,author_name,first_publish_year,ia",
-                "limit": max_results,
-            },
-            retries=1,
-        )
-        if not resp:
-            return []
-        try:
-            data = resp.json()
-        except Exception:
-            return []
+    client = _get_shared_client()
+    resp = _get_with_retry(
+        client,
+        _OL_SEARCH,
+        params={
+            "q": query,
+            "fields": "key,title,author_name,first_publish_year,ia",
+            "limit": max_results,
+        },
+        retries=1,
+    )
+    if not resp:
+        return []
+    try:
+        data = resp.json()
+    except Exception:
+        return []
 
     books = []
     for doc in data.get("docs", []):
@@ -360,7 +383,8 @@ def _download_url_sync(
     verify: bool = True,
 ) -> bool:
     """Stream-download *download_url* to *dest_path*. Returns True on success."""
-    with _make_client(verify=verify) as client:
+    client = _get_shared_client(verify=verify)
+    if True:
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 with client.stream("GET", download_url) as stream:

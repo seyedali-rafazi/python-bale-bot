@@ -16,7 +16,7 @@ from telegram import (
 
 from telegram.ext import ContextTypes
 
-from core.state_manager import set_state
+from core.state_manager import StateCache, set_state
 
 from core.database import (
     get_pinterest_downloads,
@@ -44,6 +44,7 @@ DOWNLOAD_CONCURRENCY = 6
 SEND_BATCH_SIZE = 10
 
 download_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+_pin_pagination_cache = StateCache(max_capacity=3000, default_ttl=3600.0)
 
 # =========================
 
@@ -311,11 +312,11 @@ async def process_pinterest_search(
     await increment_pinterest_downloads(user_id)
     await log_upload_success("pinterest", user_id)
 
-    context.user_data["pin_images"] = image_urls
-
-    context.user_data["pin_index"] = SEND_BATCH_SIZE
-
     if SEND_BATCH_SIZE < len(image_urls):
+        _pin_pagination_cache[str(chat_id)] = {
+            "images": image_urls,
+            "index": SEND_BATCH_SIZE,
+        }
         await context.bot.send_message(
             chat_id=chat_id,
             text=("برای دریافت عکس‌های بیشتر روی دکمه زیر بزنید:"),
@@ -323,6 +324,7 @@ async def process_pinterest_search(
         )
 
     else:
+        _pin_pagination_cache.pop(str(chat_id), None)
         await context.bot.send_message(
             chat_id=chat_id,
             text="✅ همه تصاویر ارسال شدند.",
@@ -381,10 +383,10 @@ async def process_more_pins(
 ):
 
     query = update.callback_query
-
-    images = context.user_data.get("pin_images", [])
-
-    index = context.user_data.get("pin_index", 0)
+    pin_key = str(query.message.chat_id)
+    cached_pin = _pin_pagination_cache.get(pin_key)
+    images = (cached_pin or {}).get("images") or context.user_data.get("pin_images", [])
+    index = (cached_pin or {}).get("index") if cached_pin is not None else context.user_data.get("pin_index", 0)
 
     if not images:
         await context.bot.send_message(
@@ -428,9 +430,12 @@ async def process_more_pins(
 
         return
 
-    context.user_data["pin_index"] = index + SEND_BATCH_SIZE
-
-    if context.user_data["pin_index"] < len(images):
+    next_index = index + SEND_BATCH_SIZE
+    if next_index < len(images):
+        _pin_pagination_cache[pin_key] = {
+            "images": images,
+            "index": next_index,
+        }
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="برای تصاویر بیشتر روی دکمه زیر بزنید:",
@@ -438,6 +443,7 @@ async def process_more_pins(
         )
 
     else:
+        _pin_pagination_cache.pop(pin_key, None)
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="✅ همه تصاویر ارسال شدند",

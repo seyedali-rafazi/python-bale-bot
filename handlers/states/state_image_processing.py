@@ -12,7 +12,7 @@ except ImportError:
     PIL_AVAILABLE = False
 
 import asyncio
-from core.state_manager import get_state, clear_state
+from core.state_manager import StateCache, get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.database import log_upload_success
 import time
@@ -30,14 +30,15 @@ except ImportError:
 MEDIA_MAX_CONCURRENT = 2
 media_processing_semaphore = asyncio.Semaphore(MEDIA_MAX_CONCURRENT)
 
+# Bounded TTL caches for pending raw image bytes (prevents unbounded RAM growth if users abandon flow)
+_pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
+_convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
+_resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
+
 
 async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle PDF creation from images"""
     chat_id = str(update.effective_chat.id)
-
-    # Initialize user data if not exists
-    if "pdf_images" not in context.user_data:
-        context.user_data["pdf_images"] = []
 
     # Check if user sent "done" or "تمام"
     if update.message.text and update.message.text.lower() in [
@@ -45,17 +46,17 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         "تمام",
         "finish",
     ]:
-        if len(context.user_data["pdf_images"]) == 0:
+        pending_images = _pdf_images_cache.get(chat_id) or []
+        if len(pending_images) == 0:
             await update.message.reply_text("❌ هیچ عکسی ارسال نشده است!")
             return
 
         await update.message.reply_text("⏳ در حال ساخت PDF...")
 
+        pdf_path = None
         try:
             # Create PDF from images
-            pdf_path = await create_pdf_from_images(
-                context.user_data["pdf_images"], chat_id
-            )
+            pdf_path = await create_pdf_from_images(pending_images, chat_id)
 
             # Send PDF to user
             with open(pdf_path, "rb") as pdf_file:
@@ -66,9 +67,7 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             await log_upload_success("image_processing", chat_id)
 
-            # Cleanup
-            os.remove(pdf_path)
-            context.user_data["pdf_images"] = []
+            _pdf_images_cache.pop(chat_id, None)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -77,14 +76,23 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
 
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در ساخت PDF: {str(e)}")
-            context.user_data["pdf_images"] = []
+            _pdf_images_cache.pop(chat_id, None)
             clear_state(chat_id)
+        finally:
+            if pdf_path and os.path.exists(pdf_path):
+                try:
+                    os.remove(pdf_path)
+                except OSError:
+                    pass
 
         return
 
     # Handle image upload
     if update.message.photo:
-        if len(context.user_data["pdf_images"]) >= 20:
+        pending_images = _pdf_images_cache.get(chat_id)
+        if pending_images is None:
+            pending_images = []
+        if len(pending_images) >= 20:
             await update.message.reply_text("❌ حداکثر 20 عکس می‌توانید ارسال کنید!")
             return
 
@@ -93,10 +101,11 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         file = await context.bot.get_file(photo.file_id)
         image_bytes = await file.download_as_bytearray()
 
-        context.user_data["pdf_images"].append(image_bytes)
+        pending_images.append(image_bytes)
+        _pdf_images_cache[chat_id] = pending_images
 
         await update.message.reply_text(
-            f"✅ عکس {len(context.user_data['pdf_images'])} دریافت شد.\n"
+            f"✅ عکس {len(pending_images)} دریافت شد.\n"
             f"برای ادامه عکس بعدی را ارسال کنید یا 'تمام' را بنویسید."
         )
     else:
@@ -114,16 +123,18 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
         format_text = update.message.text.upper().strip()
 
         if format_text in ["PNG", "JPG", "JPEG", "WEBP", "BMP", "GIF"]:
-            if "convert_image" not in context.user_data:
+            raw_img = _convert_images_cache.get(chat_id)
+            if raw_img is None:
                 await update.message.reply_text("❌ ابتدا یک عکس ارسال کنید!")
                 return
 
             await update.message.reply_text(f"⏳ در حال تبدیل به {format_text}...")
 
+            converted_path = None
             try:
                 # Convert image
                 converted_path = await convert_image_format(
-                    context.user_data["convert_image"], format_text, chat_id
+                    raw_img, format_text, chat_id
                 )
 
                 # Send converted image
@@ -135,9 +146,7 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                     )
                 await log_upload_success("image_processing", chat_id)
 
-                # Cleanup
-                os.remove(converted_path)
-                del context.user_data["convert_image"]
+                _convert_images_cache.pop(chat_id, None)
                 clear_state(chat_id)
 
                 await update.message.reply_text(
@@ -147,7 +156,14 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
 
             except Exception as e:
                 await update.message.reply_text(f"❌ خطا در تبدیل فرمت: {str(e)}")
+                _convert_images_cache.pop(chat_id, None)
                 clear_state(chat_id)
+            finally:
+                if converted_path and os.path.exists(converted_path):
+                    try:
+                        os.remove(converted_path)
+                    except OSError:
+                        pass
 
             return
 
@@ -166,7 +182,7 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                 file = await context.bot.get_file(update.message.document.file_id)
 
             image_bytes = await file.download_as_bytearray()
-            context.user_data["convert_image"] = image_bytes
+            _convert_images_cache[chat_id] = image_bytes
 
             await update.message.reply_text(
                 "✅ عکس دریافت شد!\n\n"
@@ -188,17 +204,17 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text:
         size_text = update.message.text.strip()
 
-        if "resize_image" not in context.user_data:
+        raw_img = _resize_images_cache.get(chat_id)
+        if raw_img is None:
             await update.message.reply_text("❌ ابتدا یک عکس ارسال کنید!")
             return
 
         await update.message.reply_text("⏳ در حال تغییر اندازه...")
 
+        resized_path = None
         try:
             # Resize image
-            resized_path = await resize_image(
-                context.user_data["resize_image"], size_text, chat_id
-            )
+            resized_path = await resize_image(raw_img, size_text, chat_id)
 
             # Send resized image
             with open(resized_path, "rb") as img_file:
@@ -209,9 +225,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             await log_upload_success("image_processing", chat_id)
 
-            # Cleanup
-            os.remove(resized_path)
-            del context.user_data["resize_image"]
+            _resize_images_cache.pop(chat_id, None)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -222,6 +236,12 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ خطا در تغییر اندازه: {str(e)}\n\nفرمت صحیح: 800x600 یا 50%"
             )
+        finally:
+            if resized_path and os.path.exists(resized_path):
+                try:
+                    os.remove(resized_path)
+                except OSError:
+                    pass
 
         return
 
@@ -240,7 +260,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 file = await context.bot.get_file(update.message.document.file_id)
 
             image_bytes = await file.download_as_bytearray()
-            context.user_data["resize_image"] = image_bytes
+            _resize_images_cache[chat_id] = image_bytes
 
             await update.message.reply_text(
                 "✅ عکس دریافت شد!\n\n"

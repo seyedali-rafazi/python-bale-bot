@@ -9,12 +9,13 @@ import uuid
 import os
 
 # ==================== سیستم صف ====================
+GITHUB_WORKERS = max(1, int(os.getenv("GITHUB_WORKERS", "3")))
 download_queue = asyncio.Queue()
-worker_started = False
+_worker_tasks: list[asyncio.Task] = []
 
 
 async def download_worker():
-    """ورکری که درخواست‌های درون صف را یکی‌یکی پردازش می‌کند"""
+    """ورکری که درخواست‌های درون صف را پردازش می‌کند"""
     while True:
         func, args = await download_queue.get()
         try:
@@ -29,10 +30,9 @@ async def enqueue_download(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
     """اضافه کردن درخواست به صف"""
-    global worker_started
-    if not worker_started:
-        asyncio.create_task(download_worker())
-        worker_started = True
+    if not _worker_tasks:
+        for _ in range(GITHUB_WORKERS):
+            _worker_tasks.append(asyncio.create_task(download_worker()))
 
     position = download_queue.qsize()
     await context.bot.send_message(

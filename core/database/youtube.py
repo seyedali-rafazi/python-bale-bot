@@ -138,6 +138,28 @@ async def get_cached_video(video_id: str) -> list:
     return []
 
 
+async def get_cache_row_metadata(video_id: str) -> dict | None:
+    """Return cached metadata columns for video_id without spawning yt-dlp."""
+    pool = await get_db()
+    row = await pool.fetchrow(
+        """
+        SELECT title, channel_name, yt_video_id, uploaded_at
+        FROM youtube_cache
+        WHERE video_id = $1
+        """,
+        video_id,
+    )
+    if not row:
+        return None
+    return {
+        "title": row["title"],
+        "uploader": row["channel_name"],
+        "channel": row["channel_name"],
+        "yt_video_id": row["yt_video_id"],
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
 async def save_cached_video(
     cache_key: str,
     file_ids: list,

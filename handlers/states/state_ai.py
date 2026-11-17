@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import os
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -23,7 +24,9 @@ logger = logging.getLogger(__name__)
 # LIMITERS
 # =========================================================
 
-ai_chat_semaphore = asyncio.Semaphore(10)
+MAX_AI_CHAT_QUEUE = max(3, int(os.getenv("MAX_AI_CHAT_QUEUE", "8")))
+ai_chat_semaphore = asyncio.Semaphore(MAX_AI_CHAT_QUEUE)
+_ai_chat_in_flight = 0
 
 ai_media_semaphore = asyncio.Semaphore(5)
 
@@ -38,7 +41,7 @@ async def process_ai_chat(
     message_id: int,
     text: str,
 ):
-
+    global _ai_chat_in_flight
     try:
         async with ai_chat_semaphore:
             answer = await ask_chatbot(text)
@@ -62,6 +65,8 @@ async def process_ai_chat(
 
         except Exception:
             pass
+    finally:
+        _ai_chat_in_flight = max(0, _ai_chat_in_flight - 1)
 
 
 # =========================================================
@@ -200,7 +205,15 @@ async def handle_ai_state(
                 )
                 return
 
+            global _ai_chat_in_flight
+            if _ai_chat_in_flight >= MAX_AI_CHAT_QUEUE:
+                await update.message.reply_text(
+                    "⏳ صف دستیار هوشمند در حال حاضر شلوغ است. لطفاً چند ثانیه دیگر دوباره تلاش کنید."
+                )
+                return
+
             await increment_ai_question(chat_id)
+            _ai_chat_in_flight += 1
 
             msg = await update.message.reply_text(
                 "⏳ درخواست شما در صف پردازش قرار گرفت..."

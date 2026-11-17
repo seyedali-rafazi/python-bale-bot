@@ -3,7 +3,10 @@
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ChatAction
+import asyncio
 import os
+import re
+import tempfile
 from core.state_manager import set_state, clear_state
 from core.database import (
     get_available_cloud_mb,
@@ -100,47 +103,45 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
         # Show uploading progress
         progress_msg = await update.message.reply_text("⏳ در حال آپلود فایل به سرور ابری...")
         
-        # Download file from Telegram
+        # Download file from Telegram/Bale into a safe per-request temp dir
+        safe_name = os.path.basename(file_name)
+        safe_name = re.sub(r"[^\w.\-]", "_", safe_name) or "upload.bin"
         file = await context.bot.get_file(file_obj.file_id)
-        temp_file_path = f"/tmp/{user_id}_{file_name}"
-        
-        await file.download_to_drive(temp_file_path)
-        
-        # Upload to S3
-        download_link = upload_to_s3(temp_file_path, f"{user_id}/{file_name}")
-        
+
+        with tempfile.TemporaryDirectory(prefix="cloud_up_") as tmp_dir:
+            temp_file_path = os.path.join(tmp_dir, safe_name)
+            await file.download_to_drive(temp_file_path)
+
+            # Upload to S3 in worker thread so event loop never freezes
+            download_link = await asyncio.to_thread(
+                upload_to_s3, temp_file_path, f"{user_id}/{safe_name}"
+            )
+
         if download_link:
             # Save to database
             await reduce_cloud_storage(user_id, file_size_mb)
-            await add_cloud_file(user_id, file_name, file_size_mb, download_link)
-            
-            # Clean up temp file
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            
+            await add_cloud_file(user_id, safe_name, file_size_mb, download_link)
+
             # Get updated cloud stats
             cloud_stats = await get_cloud_usage_stats(user_id)
             available_gb = (cloud_stats["total_quota"] - cloud_stats["used_quota"]) / 1024
-            
+
             success_text = f"""
 ✅ **آپلود موفق**
 
-📄 نام فایل: **{file_name}**
+📄 نام فایل: **{safe_name}**
 💾 حجم: **{file_size_mb:.2f} MB**
-🔗 لینک دانلود: [دریافت](continue)
+🔗 لینک دانلود: [دریافت]({download_link})
 
 ⚡ فضای در دسترس: **{available_gb:.2f} GB**
 
 فایل شما در ابری ذخیره شد. می‌توانید این لینک را اشتراک‌گذاری کنید.
             """
-            
+
             await progress_msg.edit_text(success_text, parse_mode="Markdown")
             await log_upload_success("cloud", user_id)
         else:
             await progress_msg.edit_text("❌ خطایی در آپلود فایل رخ داد. دوباره تلاش کنید.")
-            # Clean up temp file
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
         
         clear_state(user_id)
         return ConversationHandler.END

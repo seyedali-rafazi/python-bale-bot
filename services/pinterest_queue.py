@@ -8,7 +8,7 @@ from services.chromium_workload import heavy_chromium_semaphore
 from services.pinterest import search_pinterest_images
 
 # ۲۰هزار کاربر: یک Chromium مشترک + صف؛ RAM ثابت می‌ماند، تعداد هم‌زمان جستجو محدود است.
-PINTEREST_SEARCH_WORKERS = max(1, int(os.getenv("PINTEREST_SEARCH_WORKERS", "1")))
+PINTEREST_SEARCH_WORKERS = max(1, int(os.getenv("PINTEREST_SEARCH_WORKERS", "2")))
 PINTEREST_QUEUE_MAXSIZE = max(20, int(os.getenv("PINTEREST_QUEUE_MAXSIZE", "250")))
 PINTEREST_WORKER_DELAY_SEC = max(
     0.0, float(os.getenv("PINTEREST_WORKER_DELAY_SEC", "1.0"))

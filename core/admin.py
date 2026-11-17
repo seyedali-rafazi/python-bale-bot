@@ -2,6 +2,7 @@
 
 
 from telegram import Update
+from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 from core.database import (
     get_total_users,
@@ -230,12 +231,38 @@ async def stop_broadcast():
     _broadcast_task = None
 
 
+async def _send_broadcast_one(bot, user_id: str, message_text: str, sem: asyncio.Semaphore) -> bool:
+    async with sem:
+        try:
+            await bot.send_message(chat_id=user_id, text=message_text)
+            return True
+        except RetryAfter as exc:
+            wait = max(1.0, float(exc.retry_after)) + 0.5
+            logger.warning("Broadcast RetryAfter %ss for user %s", wait, user_id)
+            await asyncio.sleep(wait)
+            try:
+                await bot.send_message(chat_id=user_id, text=message_text)
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("Broadcast retry failed for user %s: %s", user_id, e)
+                return False
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug("Broadcast send error for user %s: %s", user_id, e)
+            return False
+
+
 async def _run_broadcast_job(bot, admin_chat_id: str, message_text: str, total_users: int):
     success = 0
     fail = 0
     processed = 0
     batch_size = 50
+    mini_batch_size = 10
     last_user_id: str | None = None
+    sem = asyncio.Semaphore(mini_batch_size)
 
     logger.info("Admin broadcast started for %s users", total_users)
 
@@ -245,21 +272,24 @@ async def _run_broadcast_job(bot, admin_chat_id: str, message_text: str, total_u
             if not users_batch:
                 break
 
-            for user_id in users_batch:
-                last_user_id = user_id
-                processed += 1
+            last_user_id = users_batch[-1]
+            for i in range(0, len(users_batch), mini_batch_size):
+                chunk = users_batch[i : i + mini_batch_size]
+                results = await asyncio.gather(
+                    *(_send_broadcast_one(bot, uid, message_text, sem) for uid in chunk),
+                    return_exceptions=True,
+                )
+                for res in results:
+                    if isinstance(res, asyncio.CancelledError):
+                        raise res
+                    processed += 1
+                    if res is True:
+                        success += 1
+                    else:
+                        fail += 1
 
-                try:
-                    await bot.send_message(chat_id=user_id, text=message_text)
-                    success += 1
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    fail += 1
-                    logger.debug("Broadcast send error for user %s: %s", user_id, e)
-
-                # Rate limit protection: 0.05s interval keeps load well within limits
-                await asyncio.sleep(0.05)
+                # Gentle pacing (~25 msgs/sec ceiling) across concurrent mini-batches
+                await asyncio.sleep(0.4)
 
             if processed % 200 == 0 or processed == total_users:
                 logger.info("Broadcast progress: %d/%d (ok=%d, fail=%d)", processed, total_users, success, fail)

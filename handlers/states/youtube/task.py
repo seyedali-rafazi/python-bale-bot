@@ -6,6 +6,7 @@ from core.database import (
     is_vip,
     decrement_yt_downloads,
     get_cached_video,
+    get_cache_row_metadata,
     save_cached_video,
     increment_yt_video_view,
     reduce_cloud_storage,
@@ -18,9 +19,9 @@ from services.youtube import (
     download_youtube_video,
     download_youtube_audio,
     split_video_if_needed,
-    get_video_info,
+    get_video_info_cached,
     uploaded_at_from_video_info,
-    get_video_filesize,
+    get_video_filesize_cached,
 )
 from services.zip_utils import build_zip_and_split
 
@@ -94,7 +95,15 @@ async def background_yt_download(
         cached_files = await get_cached_video(cache_key)
 
         if cached_files:
-            info_cached = await asyncio.to_thread(get_video_info, url)
+            meta = await get_cache_row_metadata(cache_key)
+            has_meta = bool(
+                meta
+                and meta.get("title")
+                and meta.get("uploader")
+                and meta.get("uploaded_at")
+            )
+            info_cached = meta if has_meta else await get_video_info_cached(url)
+
             if not await check_video_info_allowed(info_cached):
                 await context.bot.send_message(
                     chat_id=chat_id, text=MSG_BLOCKED_CHANNEL
@@ -109,16 +118,17 @@ async def background_yt_download(
                 effective_format,
             )
             await log_upload_success("youtube", chat_id)
-
             await increment_yt_video_view(cache_key)
-            await save_to_global_cache(
-                cache_key,
-                video_id,
-                cached_files,
-                title=info_cached.get("title") if info_cached else None,
-                channel_name=info_cached.get("uploader") if info_cached else None,
-                uploaded_at=uploaded_at_from_video_info(info_cached),
-            )
+
+            if not has_meta and info_cached:
+                await save_to_global_cache(
+                    cache_key,
+                    video_id,
+                    cached_files,
+                    title=info_cached.get("title"),
+                    channel_name=info_cached.get("uploader"),
+                    uploaded_at=uploaded_at_from_video_info(info_cached),
+                )
 
             return
 
@@ -126,7 +136,7 @@ async def background_yt_download(
     # اطلاعات ویدیو
     # =========================================
 
-    info = await asyncio.to_thread(get_video_info, url)
+    info = await get_video_info_cached(url)
 
     if not await check_video_info_allowed(info):
         await context.bot.send_message(chat_id=chat_id, text=MSG_BLOCKED_CHANNEL)
@@ -139,16 +149,9 @@ async def background_yt_download(
 
     try:
         if format_type == "video":
-            format_selector = (
-                f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
-            )
-            estimated_size = await asyncio.to_thread(
-                get_video_filesize, url, format_selector
-            )
+            estimated_size = await get_video_filesize_cached(url, quality)
         else:
-            estimated_size = await asyncio.to_thread(
-                get_video_filesize, url, "bestaudio/best"
-            )
+            estimated_size = await get_video_filesize_cached(url, "bestaudio")
 
         limit = (
             1 * 1024 * 1024 * 1024

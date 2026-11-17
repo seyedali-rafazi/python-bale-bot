@@ -1,7 +1,7 @@
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import set_state, get_state, clear_state
+from core.state_manager import set_state, async_get_state, clear_state
 from core.keyboards import (
     get_yt_quality_telegram_keyboard,
     get_yt_quality_server_keyboard,
@@ -9,7 +9,7 @@ from core.keyboards import (
     get_main_menu_keyboard,
 )
 from core.database import is_vip, increment_yt_downloads
-from services.youtube import get_video_filesize
+from services.youtube import get_video_filesize_cached
 from .task import background_yt_download
 
 
@@ -35,7 +35,7 @@ async def youtube_destination_callback(
     if data not in ["ytdest_telegram", "ytdest_server"]:
         return
 
-    user_state = get_state(chat_id)
+    user_state = await async_get_state(chat_id)
     if not user_state or user_state.get("step") != "waiting_yt_destination":
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
@@ -109,7 +109,7 @@ async def youtube_delivery_callback(
     if data not in ["ytdel_zip", "ytdel_video"]:
         return
 
-    user_state = get_state(chat_id)
+    user_state = await async_get_state(chat_id)
     if not user_state or user_state.get("step") != "waiting_yt_delivery":
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
@@ -152,7 +152,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
     quality = data.split("_")[1]
 
-    user_state = get_state(chat_id)
+    user_state = await async_get_state(chat_id)
     if not user_state or user_state.get("step") not in [
         "waiting_yt_quality",
         "processing_yt_quality",
@@ -194,11 +194,9 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
     try:
         if format_type == "video":
-            estimated_size = await asyncio.to_thread(get_video_filesize, url, quality)
+            estimated_size = await get_video_filesize_cached(url, quality)
         else:
-            estimated_size = await asyncio.to_thread(
-                get_video_filesize, url, "bestaudio"
-            )
+            estimated_size = await get_video_filesize_cached(url, "bestaudio")
 
         limit = 1 * 1024 * 1024 * 1024
 

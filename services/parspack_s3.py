@@ -23,6 +23,28 @@ MAX_CONCURRENCY = 20
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 MULTIPART_CHUNKSIZE = 5 * 1024 * 1024  # 5 MB
 
+_s3_client = None
+_s3_client_lock = threading.Lock()
+
+
+def _get_s3_client():
+    """Return a shared, thread-safe boto3 S3 client reusing the connection pool."""
+    global _s3_client
+    if _s3_client is None:
+        with _s3_client_lock:
+            if _s3_client is None:
+                _s3_client = boto3.client(
+                    "s3",
+                    endpoint_url=ARVAN_ENDPOINT,
+                    aws_access_key_id=ARVAN_ACCESS_KEY,
+                    aws_secret_access_key=ARVAN_SECRET_KEY,
+                    config=Config(
+                        signature_version="s3v4",
+                        max_pool_connections=MAX_POOL_CONNECTIONS,
+                    ),
+                )
+    return _s3_client
+
 
 class ProgressPercentage(object):
     def __init__(self, filename, progress_dict=None):
@@ -59,13 +81,7 @@ def upload_to_s3(
     if object_name is None:
         object_name = os.path.basename(file_path)
 
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=ARVAN_ENDPOINT,
-        aws_access_key_id=ARVAN_ACCESS_KEY,
-        aws_secret_access_key=ARVAN_SECRET_KEY,
-        config=Config(signature_version="s3v4", max_pool_connections=MAX_POOL_CONNECTIONS),
-    )
+    s3 = _get_s3_client()
 
     transfer_config = TransferConfig(
         multipart_threshold=MULTIPART_THRESHOLD,

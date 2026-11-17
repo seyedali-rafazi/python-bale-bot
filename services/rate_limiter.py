@@ -6,6 +6,7 @@ anti-flood checks, and daily usage caching.
 """
 
 import time
+import uuid
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -13,9 +14,17 @@ from services.redis_client import get_async_redis
 
 logger = logging.getLogger(__name__)
 
-# Fallback locks in memory if Redis is absent
-_local_locks: set[str] = set()
+# Fallback locks in memory if Redis is absent: { lock_key: (token, expire_ts) }
+_local_locks: dict[str, tuple[str, float]] = {}
 _local_flood_tracker: dict[str, list[float]] = {}
+
+_RELEASE_LOCK_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
 
 
 @asynccontextmanager
@@ -23,27 +32,24 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
     """
     Distributed async lock to prevent race conditions and duplicate operations
     (e.g., user rapidly pressing download buttons).
-    
-    Usage:
-        async with user_action_lock(user_id, "yt_download", timeout_sec=60) as acquired:
-            if not acquired:
-                await send_message("عملیات قبلی هنوز در حال اجرا است...")
-                return
-            ...
+    Uses a unique owner token so expired locks never release another holder's lock.
     """
     lock_key = f"bale:lock:{action}:{user_id}"
+    lock_token = uuid.uuid4().hex
     redis = get_async_redis()
     acquired = False
 
     try:
         if redis is not None:
-            # Atomic SET NX EX in Redis
-            res = await redis.set(lock_key, "locked", nx=True, ex=timeout_sec)
+            # Atomic SET NX EX in Redis with unique owner token
+            res = await redis.set(lock_key, lock_token, nx=True, ex=timeout_sec)
             acquired = bool(res)
         else:
-            # In-memory lock fallback
-            if lock_key not in _local_locks:
-                _local_locks.add(lock_key)
+            # In-memory lock fallback with TTL expiration
+            now = time.monotonic()
+            existing = _local_locks.get(lock_key)
+            if existing is None or now >= existing[1]:
+                _local_locks[lock_key] = (lock_token, now + timeout_sec)
                 acquired = True
             else:
                 acquired = False
@@ -54,9 +60,11 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
         if acquired:
             try:
                 if redis is not None:
-                    await redis.delete(lock_key)
+                    await redis.eval(_RELEASE_LOCK_LUA, 1, lock_key, lock_token)
                 else:
-                    _local_locks.discard(lock_key)
+                    existing = _local_locks.get(lock_key)
+                    if existing and existing[0] == lock_token:
+                        _local_locks.pop(lock_key, None)
             except Exception as e:
                 logger.debug("Error releasing lock for %s: %s", lock_key, e)
 

@@ -32,6 +32,7 @@ from .youtube import (
     increment_yt_downloads,
     decrement_yt_downloads,
     get_cached_video,
+    get_cache_row_metadata,
     save_cached_video,
     increment_yt_video_view,
     get_top_cached_videos,

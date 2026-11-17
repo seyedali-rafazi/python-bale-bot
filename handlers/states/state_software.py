@@ -20,7 +20,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core.database.monitoring import log_upload_failed, log_upload_success
-from core.state_manager import clear_state, get_state, set_state
+from core.state_manager import StateCache, clear_state, async_get_state, set_state
 from services.software_service import (
     MAX_ALLOWED_DOWNLOAD_BYTES,
     SoftwareService,
@@ -36,6 +36,7 @@ MAX_ALLOWED_MB = MAX_ALLOWED_DOWNLOAD_BYTES // (1024 * 1024)  # 250 MB
 
 # Concurrency semaphore: max 3 parallel downloads to prevent saturating bandwidth/CPU
 _DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
+_software_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 
 
 async def handle_software_state(
@@ -78,10 +79,8 @@ async def handle_software_state(
         )
         return
 
-    # Cache results in context.bot_data and user_states
-    if "software" not in context.bot_data:
-        context.bot_data["software"] = {}
-    context.bot_data["software"][chat_id] = results
+    # Cache results in bounded TTL/LRU cache and user_states
+    _software_cache[str(chat_id)] = results
 
     set_state(
         chat_id,
@@ -163,8 +162,9 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     # Retrieve cached results
     results: List[Dict[str, Any]] = (
-        (context.bot_data.get("software") or {}).get(chat_id)
-        or get_state(chat_id).get("software_results")
+        _software_cache.get(str(chat_id))
+        or (context.bot_data.get("software") or {}).get(chat_id)
+        or (await async_get_state(chat_id)).get("software_results")
         or []
     )
 

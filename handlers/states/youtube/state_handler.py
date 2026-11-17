@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
-from services.youtube import search_yt_videos, get_video_info
+from services.youtube import search_yt_videos, get_video_info_cached
 from core.yt_moderation import (
     MSG_BLOCKED_CHANNEL,
     MSG_BLOCKED_SEARCH,
@@ -176,7 +176,7 @@ async def handle_youtube_state(
         status_msg = await update.message.reply_text("⏳ در حال بررسی لینک...")
 
         try:
-            info = await asyncio.to_thread(get_video_info, text)
+            info = await get_video_info_cached(text)
         except Exception as e:
             print(f"get_video_info error: {e}")
             try:

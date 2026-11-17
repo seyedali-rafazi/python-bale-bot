@@ -115,15 +115,11 @@ DOWNLOAD_CLEANUP_DIRS = [
 ]
 
 
-async def cleanup_old_downloads(
-    context: ContextTypes.DEFAULT_TYPE = None,
-    directories: list[str] | None = None,
-):
+def _cleanup_old_downloads_sync(
+    target_dirs: list[str],
+    max_age_sec: int = 7200,
+) -> tuple[int, int, int]:
     now = time.time()
-    max_age_sec = 7200  # 2 hours
-
-    target_dirs = directories or DOWNLOAD_CLEANUP_DIRS
-
     total_scanned = 0
     total_deleted = 0
     total_errors = 0
@@ -164,6 +160,18 @@ async def cleanup_old_downloads(
                 except Exception as e:
                     total_errors += 1
                     logger.debug("Failed to remove file %s: %s", file_path, e)
+
+    return total_scanned, total_deleted, total_errors
+
+
+async def cleanup_old_downloads(
+    context: ContextTypes.DEFAULT_TYPE = None,
+    directories: list[str] | None = None,
+):
+    target_dirs = directories or DOWNLOAD_CLEANUP_DIRS
+    total_scanned, total_deleted, total_errors = await asyncio.to_thread(
+        _cleanup_old_downloads_sync, target_dirs, 7200
+    )
 
     logger.info(
         "🧹 Download cleanup finished: scanned=%d, deleted=%d, errors=%d",
@@ -245,6 +253,11 @@ async def on_shutdown(app):
     # 5. Close HTTP client sessions
     try:
         await close_http_session()
+        from services.software_service import close_software_httpx_client
+        from services.book import close_book_clients
+
+        await close_software_httpx_client()
+        close_book_clients()
         logger.info("✅ HTTP session closed on shutdown")
     except Exception:
         logger.exception("HTTP session cleanup on shutdown failed")
@@ -284,6 +297,9 @@ def main():
         .token(BALE_TOKEN)
         .base_url("https://tapi.bale.ai/bot")
         .base_file_url("https://tapi.bale.ai/file/bot")
+        .connection_pool_size(int(os.getenv("BALE_HTTP_POOL_SIZE", "64")))
+        .get_updates_connection_pool_size(8)
+        .pool_timeout(30.0)
         .concurrent_updates(True)
         .post_init(on_startup)
         .post_shutdown(on_shutdown)

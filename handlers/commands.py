@@ -8,25 +8,11 @@ from core.keyboards import get_main_menu_keyboard
 from services.translator import translate_text
 from services.weather import get_weather_forecast
 from core.database import add_user, log_user_active, log_upload_success
-import os
-from dotenv import load_dotenv
-
-
-load_dotenv()
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-CHANNEL_URL = os.getenv("CHANNEL_URL")
+from handlers.ensure_membership import CHANNEL_URL, is_user_channel_member
 
 
 async def check_membership(bot, user_id):
-    if not CHANNEL_ID:
-        return True
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-        if member.status in ["member", "administrator", "creator"]:
-            return True
-    except Exception:
-        pass
-    return False
+    return await is_user_channel_member(bot, user_id)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):

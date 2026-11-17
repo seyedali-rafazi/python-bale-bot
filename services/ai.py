@@ -25,6 +25,7 @@ CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME" , "@UnlimitChatGPTbot")
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
 SESSION_NAME = os.getenv("AI_SESSION_NAME", "ai_session")
+AI_RESPONSE_TIMEOUT_SEC = max(10.0, float(os.getenv("AI_RESPONSE_TIMEOUT_SEC", "28")))
 
 # =========================================================
 # TELETHON
@@ -110,7 +111,7 @@ async def get_telethon_client() -> TelegramClient:
 
 
 async def ask_chatbot(text: str) -> str:
-    # فقط این قسمت queue میشه
+    # Serialize messages to the single Telegram bot chat so replies never mix across users
     async with _ai_chat_lock:
         try:
             client = await _ensure_ai_client()
@@ -122,60 +123,46 @@ async def ask_chatbot(text: str) -> str:
                 f"{text}"
             )
 
-            # آخرین پیام قبل از ارسال
-            before_messages = await client.get_messages(
-                CHATGPT_BOT_USERNAME,
-                limit=1,
-            )
-
-            before_id = before_messages[0].id if before_messages else 0
-
-            # ارسال پیام
-            await asyncio.wait_for(
-                client.send_message(
+            sent_msg = None
+            try:
+                async with client.conversation(
                     CHATGPT_BOT_USERNAME,
-                    prompt,
-                ),
-                timeout=15,
-            )
+                    timeout=AI_RESPONSE_TIMEOUT_SEC,
+                    total_timeout=AI_RESPONSE_TIMEOUT_SEC,
+                    exclusive=False,
+                ) as conv:
+                    sent_msg = await asyncio.wait_for(
+                        conv.send_message(prompt),
+                        timeout=15,
+                    )
 
-            # انتظار پاسخ (بدون نیاز به stable_count برای ربات جدید)
-            for _ in range(45):
-                await asyncio.sleep(1.5)  # زمان خواب را هم کمی کمتر کردیم
+                    while True:
+                        msg = await conv.get_response()
+                        if getattr(msg, "sticker", None):
+                            continue
+                        if not msg.text:
+                            continue
+                        current_text = msg.text.strip()
+                        if len(current_text) < 5:
+                            continue
+                        return current_text
 
-                messages = await client.get_messages(
-                    CHATGPT_BOT_USERNAME,
-                    limit=5,
-                )
-
-                if not messages:
-                    continue
-
-                for msg in messages:
-                    if msg.id <= before_id:
-                        continue
-
-                    if msg.out:
-                        continue
-
-                    if getattr(msg, "sticker", None):
-                        continue
-
-                    if not msg.text:
-                        continue
-
-                    current_text = msg.text.strip()
-
-                    if len(current_text) < 5:
-                        continue
-
-                    # به محض پیدا کردن پاسخ از ربات جدید، آن را برمی‌گرداند
-                    return current_text
-
-            return "❌ AI پاسخ کامل نداد."
-
-        except asyncio.TimeoutError:
-            return "⏳ زمان پاسخ AI تمام شد."
+            except asyncio.TimeoutError:
+                # Single fallback check in case update delivery lagged behind RPC
+                if sent_msg is not None:
+                    messages = await client.get_messages(
+                        CHATGPT_BOT_USERNAME,
+                        limit=5,
+                    )
+                    for msg in messages or []:
+                        if msg.id <= sent_msg.id or msg.out:
+                            continue
+                        if getattr(msg, "sticker", None) or not msg.text:
+                            continue
+                        current_text = msg.text.strip()
+                        if len(current_text) >= 5:
+                            return current_text
+                return "⏳ زمان پاسخ AI تمام شد."
 
         except FloodWaitError as e:
             return f"⛔ محدودیت تلگرام.\n{e.seconds} ثانیه بعد تلاش کنید."

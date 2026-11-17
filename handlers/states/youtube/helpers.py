@@ -65,10 +65,10 @@ async def save_to_global_cache(
     yt_id = video_id or extract_yt_id(cache_key)
     if not (uploaded_at or "").strip() and yt_id:
         try:
-            from services.youtube import get_video_info, uploaded_at_from_video_info
+            from services.youtube import get_video_info_cached, uploaded_at_from_video_info
 
-            info = await asyncio.to_thread(
-                get_video_info, f"https://www.youtube.com/watch?v={yt_id}"
+            info = await get_video_info_cached(
+                f"https://www.youtube.com/watch?v={yt_id}"
             )
             uploaded_at = uploaded_at_from_video_info(info)
             if not title and info:

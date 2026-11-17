@@ -10,6 +10,7 @@ from typing import Optional
 from telethon import TelegramClient
 from telethon.errors import (
     ChannelPrivateError,
+    FloodWaitError,
     RPCError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
@@ -22,12 +23,15 @@ from telethon.tl.types import (
     MessageMediaPhoto,
 )
 
+from core.state_manager import StateCache
 from services.ai import get_telethon_client
 from services.telegram_public import MAX_MEDIA_BYTES
 
 logger = logging.getLogger(__name__)
 
-_tg_fetch_lock = asyncio.Lock()
+_TG_FETCH_CONCURRENCY = max(1, int(os.getenv("TG_FETCH_CONCURRENCY", "3")))
+_tg_fetch_semaphore = asyncio.Semaphore(_TG_FETCH_CONCURRENCY)
+_channel_messages_cache = StateCache(max_capacity=150, default_ttl=90.0)
 TG_DOWNLOAD_DIR = "tg_downloads"
 
 _MESSAGE_LINK_RE = re.compile(
@@ -161,7 +165,7 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
     os.makedirs(TG_DOWNLOAD_DIR, exist_ok=True)
     temp_path = None
     try:
-        async with _tg_fetch_lock:
+        async with _tg_fetch_semaphore:
             client = await get_telethon_client()
             temp_path = await client.download_media(
                 message, file=os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
@@ -182,6 +186,13 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
         if sent and len(text) > 1024:
             await bot.send_message(chat_id=chat_id, text=text)
         return sent or bool(text and len(text) > 1024)
+    except FloodWaitError as e:
+        logger.warning("Telethon FloodWait during download_media: %ss", e.seconds)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"⛔ محدودیت موقت تلگرام. لطفاً {e.seconds} ثانیه بعد تلاش کنید.",
+        )
+        return False
     except Exception as e:
         logger.exception("telethon download/send failed: %s", e)
         if text:
@@ -191,7 +202,7 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
-                os.remove(temp_path)
+                await asyncio.to_thread(os.remove, temp_path)
             except OSError:
                 pass
 
@@ -203,15 +214,23 @@ async def fetch_channel_messages(
     if not channel_id:
         return []
 
-    async with _tg_fetch_lock:
+    cache_key = f"{channel_id.lower()}:{limit}"
+    cached = _channel_messages_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    async with _tg_fetch_semaphore:
         client = await get_telethon_client()
         logger.info("Telethon: resolving channel @%s", channel_id)
         entity = await client.get_entity(channel_id)
         messages = await client.get_messages(entity, limit=limit)
+        result = list(messages or [])
         logger.info(
-            "Telethon: got %s messages from @%s", len(messages or []), channel_id
+            "Telethon: got %s messages from @%s", len(result), channel_id
         )
-        return list(messages or [])
+        if result:
+            _channel_messages_cache[cache_key] = result
+        return result
 
 
 async def fetch_single_message(link: str):
@@ -219,7 +238,7 @@ async def fetch_single_message(link: str):
     if not parsed:
         return None
     channel, msg_id = parsed
-    async with _tg_fetch_lock:
+    async with _tg_fetch_semaphore:
         client = await get_telethon_client()
         logger.info("Telethon: fetch message %s/%s", channel, msg_id)
         entity = await client.get_entity(channel)
@@ -239,6 +258,8 @@ async def telethon_available() -> bool:
 
 
 def telethon_user_error(exc: Exception) -> str:
+    if isinstance(exc, FloodWaitError):
+        return f"⛔ محدودیت موقت تلگرام. لطفاً {exc.seconds} ثانیه بعد تلاش کنید."
     if isinstance(exc, (UsernameInvalidError, UsernameNotOccupiedError)):
         return "❌ آیدی کانال نامعتبر است."
     if isinstance(exc, ChannelPrivateError):

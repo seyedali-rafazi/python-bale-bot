@@ -3,9 +3,10 @@
 Persistent State Manager for Bale Downloader Bot.
 Provides dual-layer caching (L1 Memory with TTL & LRU eviction + L2 Redis).
 Maintains 100% backward compatibility with existing synchronous calls,
-while persisting states across bot restarts and preventing unbounded RAM growth.
+while never blocking the asyncio event loop on synchronous Redis I/O.
 """
 
+import asyncio
 from collections.abc import MutableMapping
 import json
 import logging
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 STATE_TTL_SECONDS = int(os.getenv("STATE_TTL_SECONDS", "7200"))  # 2 hours
 MAX_MEMORY_STATES = int(os.getenv("MAX_MEMORY_STATES", "10000"))
+
+_state_versions: dict[str, int] = {}
+_version_lock = threading.Lock()
+_pending_redis_tasks: set[asyncio.Task] = set()
 
 
 class StateCache(MutableMapping):
@@ -127,19 +132,76 @@ def _make_key(chat_id) -> str:
     return f"bale:state:{chat_id}"
 
 
+def _next_version(chat_id) -> int:
+    key = str(chat_id)
+    with _version_lock:
+        if len(_state_versions) > MAX_MEMORY_STATES * 2:
+            # Keep memory bounded; active keys will get new versions cleanly
+            _state_versions.clear()
+        ver = _state_versions.get(key, 0) + 1
+        _state_versions[key] = ver
+        return ver
+
+
+def _is_latest_version(chat_id, version: int) -> bool:
+    key = str(chat_id)
+    with _version_lock:
+        return _state_versions.get(key, version) == version
+
+
+def _get_running_loop_or_none():
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _schedule_async_task(loop, coro) -> None:
+    task = loop.create_task(coro)
+    _pending_redis_tasks.add(task)
+    task.add_done_callback(_pending_redis_tasks.discard)
+
+
+async def _persist_state_async(chat_id, serialized: str, version: int) -> None:
+    redis = get_async_redis()
+    if redis is None or not _is_latest_version(chat_id, version):
+        return
+    try:
+        await redis.set(_make_key(chat_id), serialized, ex=STATE_TTL_SECONDS)
+    except Exception as e:
+        logger.debug("Async Redis background set_state failed for %s: %s", chat_id, e)
+
+
+async def _delete_state_async(chat_id, version: int) -> None:
+    redis = get_async_redis()
+    if redis is None or not _is_latest_version(chat_id, version):
+        return
+    try:
+        await redis.delete(_make_key(chat_id))
+    except Exception as e:
+        logger.debug("Async Redis background clear_state failed for %s: %s", chat_id, e)
+
+
 def set_state(chat_id, step, **kwargs):
     """
-    Set user state in local memory (L1) and sync to Redis (L2) with TTL.
+    Set user state in local memory (L1) and persist to Redis (L2) with TTL.
+    Uses non-blocking async Redis when called inside a running asyncio event loop.
     """
     state_data = {"step": step}
     state_data.update(kwargs)
     user_states[chat_id] = state_data
+    version = _next_version(chat_id)
+    serialized = json.dumps(state_data, ensure_ascii=False, default=str)
 
-    # Persist to Redis (L2)
+    loop = _get_running_loop_or_none()
+    if loop is not None:
+        _schedule_async_task(loop, _persist_state_async(chat_id, serialized, version))
+        return
+
+    # Sync fallback only outside an active event loop (e.g., sync CLI/tests)
     sync_redis = get_sync_redis()
     if sync_redis is not None:
         try:
-            serialized = json.dumps(state_data, ensure_ascii=False, default=str)
             sync_redis.set(_make_key(chat_id), serialized, ex=STATE_TTL_SECONDS)
         except Exception as e:
             logger.debug("Failed to persist state to Redis for %s: %s", chat_id, e)
@@ -147,13 +209,19 @@ def set_state(chat_id, step, **kwargs):
 
 def get_state(chat_id) -> dict:
     """
-    Get user state. Checks L1 memory first; if expired or not found (e.g. after restart),
-    fetches from Redis, repopulates L1 memory, and returns state.
+    Get user state synchronously. Prefer async_get_state() in async handlers.
+    Checks L1 memory first; falls back to sync Redis only outside a running event loop.
     """
     if chat_id in user_states:
         return user_states[chat_id]
 
-    # Check Redis (L2)
+    try:
+        asyncio.get_running_loop()
+        # Never block a live event loop with sync Redis I/O
+        return {}
+    except RuntimeError:
+        pass
+
     sync_redis = get_sync_redis()
     if sync_redis is not None:
         try:
@@ -170,9 +238,15 @@ def get_state(chat_id) -> dict:
 
 def clear_state(chat_id):
     """
-    Clear user state from both local memory and Redis.
+    Clear user state from both local memory and Redis without blocking the event loop.
     """
     user_states.pop(chat_id, None)
+    version = _next_version(chat_id)
+
+    loop = _get_running_loop_or_none()
+    if loop is not None:
+        _schedule_async_task(loop, _delete_state_async(chat_id, version))
+        return
 
     sync_redis = get_sync_redis()
     if sync_redis is not None:
@@ -183,13 +257,14 @@ def clear_state(chat_id):
 
 
 # =========================================================
-# ASYNC API (For modern async handlers if needed)
+# ASYNC API
 # =========================================================
 
 async def async_set_state(chat_id, step, **kwargs):
     state_data = {"step": step}
     state_data.update(kwargs)
     user_states[chat_id] = state_data
+    _next_version(chat_id)
 
     redis = get_async_redis()
     if redis is not None:
@@ -220,6 +295,7 @@ async def async_get_state(chat_id) -> dict:
 
 async def async_clear_state(chat_id):
     user_states.pop(chat_id, None)
+    _next_version(chat_id)
 
     redis = get_async_redis()
     if redis is not None:
@@ -227,4 +303,3 @@ async def async_clear_state(chat_id):
             await redis.delete(_make_key(chat_id))
         except Exception as e:
             logger.debug("Async Redis clear_state failed for %s: %s", chat_id, e)
-

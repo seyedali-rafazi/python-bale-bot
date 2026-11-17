@@ -4,7 +4,7 @@ import time
 
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import get_state
+from core.state_manager import async_get_state
 from .state_programming import handle_programming_state
 from .youtube import handle_youtube_state
 from .state_insta import handle_insta_state
@@ -31,6 +31,7 @@ from .state_book import handle_book_state
 from .state_software import handle_software_state, software_callback_handler
 
 _MENU_HINT_COOLDOWN_SEC = 3.0
+_MAX_MENU_HINT_ENTRIES = 5000
 _last_menu_hint_at: dict[str, float] = {}
 
 _BOT_OWN_REPLIES = frozenset(
@@ -61,6 +62,13 @@ async def _reply_menu_hint(
     now = time.monotonic()
     if now - _last_menu_hint_at.get(chat_id, 0.0) < _MENU_HINT_COOLDOWN_SEC:
         return
+    if len(_last_menu_hint_at) >= _MAX_MENU_HINT_ENTRIES:
+        cutoff = now - _MENU_HINT_COOLDOWN_SEC
+        stale = [k for k, ts in _last_menu_hint_at.items() if ts < cutoff]
+        for k in stale:
+            _last_menu_hint_at.pop(k, None)
+        if len(_last_menu_hint_at) >= _MAX_MENU_HINT_ENTRIES:
+            _last_menu_hint_at.clear()
     _last_menu_hint_at[chat_id] = now
     await update.message.reply_text(text)
 
@@ -81,7 +89,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     chat_id = str(update.effective_chat.id)
-    state_data = get_state(chat_id)
+    state_data = await async_get_state(chat_id)
     step = state_data.get("step")
 
     # بازگشت سریع به منو
@@ -169,7 +177,7 @@ async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     chat_id = str(update.effective_chat.id)
-    state_data = get_state(chat_id)
+    state_data = await async_get_state(chat_id)
     step = state_data.get("step") if state_data else None
 
     if step == "waiting_ai_ocr":
@@ -196,7 +204,7 @@ async def process_media_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     chat_id = str(update.effective_chat.id)
-    state_data = get_state(chat_id)
+    state_data = await async_get_state(chat_id)
     step = state_data.get("step") if state_data else None
 
     if step == "waiting_music_identify":

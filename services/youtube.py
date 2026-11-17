@@ -137,6 +137,58 @@ def generate_progress_bar(percent: float, length: int = 10) -> str:
     return f"[{bar}] {percent:.1f}%"
 
 
+_YT_ID_RE = re.compile(
+    r"(?:v=|youtu\.be/|youtube\.com/(?:shorts|live|embed)/|^)([0-9A-Za-z_-]{11})(?:[?&/#]|$)"
+)
+
+
+def extract_yt_id_fast(url: str) -> str | None:
+    """Extract 11-character YouTube video ID from common URLs without spawning yt-dlp."""
+    if not url:
+        return None
+    m = _YT_ID_RE.search(url.strip())
+    return m.group(1) if m else None
+
+
+async def get_video_info_cached(url: str) -> dict | None:
+    """Fetch YouTube video info with 6-hour Redis/memory caching."""
+    from services.cache_service import cache_get, cache_set
+
+    vid = extract_yt_id_fast(url)
+    cache_key = f"yt_info:{vid}" if vid else None
+    if cache_key:
+        cached = await cache_get(cache_key)
+        if isinstance(cached, dict) and cached.get("title"):
+            return cached
+
+    info = await asyncio.to_thread(get_video_info, url)
+    if info and cache_key:
+        await cache_set(cache_key, info, ttl_sec=21600)
+    return info
+
+
+async def get_video_filesize_cached(
+    url: str,
+    format_selector: str = "best[height<=480][ext=mp4]/best[height<=480]/best",
+) -> int | None:
+    """Fetch estimated filesize with 1-hour Redis/memory caching."""
+    import hashlib
+    from services.cache_service import cache_get, cache_set
+
+    vid = extract_yt_id_fast(url)
+    sel_hash = hashlib.md5(str(format_selector).encode("utf-8")).hexdigest()[:12]
+    cache_key = f"yt_size:{vid}:{sel_hash}" if vid else None
+    if cache_key:
+        cached = await cache_get(cache_key)
+        if isinstance(cached, int) and cached > 0:
+            return cached
+
+    size = await asyncio.to_thread(get_video_filesize, url, format_selector)
+    if size and cache_key:
+        await cache_set(cache_key, int(size), ttl_sec=3600)
+    return size
+
+
 def get_video_info(url: str):
     cmd = _base_ytdlp_cmd()
     cmd.extend(["--dump-json", "--skip-download", url])
@@ -414,7 +466,7 @@ async def split_video_if_needed(original_file_path):
             final_valid_parts.append(current_file)
             continue
 
-        duration = get_video_duration(current_file)
+        duration = await asyncio.to_thread(get_video_duration, current_file)
 
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
@@ -466,7 +518,7 @@ async def split_video_if_needed(original_file_path):
                 files_to_process = new_parts + files_to_process
 
                 if current_file != original_file_path and os.path.exists(current_file):
-                    os.remove(current_file)
+                    await asyncio.to_thread(os.remove, current_file)
 
             else:
                 final_valid_parts.append(current_file)
@@ -478,7 +530,7 @@ async def split_video_if_needed(original_file_path):
     if original_file_path not in final_valid_parts and os.path.exists(
         original_file_path
     ):
-        os.remove(original_file_path)
+        await asyncio.to_thread(os.remove, original_file_path)
 
     return final_valid_parts
 
@@ -488,7 +540,7 @@ def download_youtube_video(
 ):
     req_id = uuid.uuid4().hex
 
-    video_id = _get_video_id_by_ytdlp(url)
+    video_id = extract_yt_id_fast(url) or _get_video_id_by_ytdlp(url)
 
     if not video_id:
         print("❌ Could not detect video id")
@@ -561,7 +613,7 @@ def download_youtube_audio(video_id_or_url: str, max_filesize=MAX_DOWNLOAD_SIZE)
 
     req_id = uuid.uuid4().hex
 
-    video_id = _get_video_id_by_ytdlp(url)
+    video_id = extract_yt_id_fast(url) or _get_video_id_by_ytdlp(url)
 
     if not video_id:
         print("❌ Could not detect video id")
