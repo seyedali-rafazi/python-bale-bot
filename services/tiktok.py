@@ -76,12 +76,17 @@ def _extract_json_data(text: str) -> dict | list | None:
     return None
 
 
-async def _download_stream_to_file(download_url: str, output_path: str, proxy: str | None = None) -> bool:
+async def _download_stream_to_file(
+    download_url: str,
+    output_path: str,
+    proxy: str | None = None,
+    referer: str = "https://www.tikwm.com/",
+) -> bool:
     """دانلود استریم فایل ویدیو از URL مستقیم روی دیسک با aiohttp"""
     session = await get_http_session()
     headers = {
         "User-Agent": DEFAULT_HEADERS["User-Agent"],
-        "Referer": "https://www.tikwm.com/",
+        "Referer": referer,
         "Accept": "*/*",
     }
 
@@ -116,7 +121,11 @@ async def _download_stream_to_file(download_url: str, output_path: str, proxy: s
         return False
 
 
-async def _fetch_tikwm_video_info(url: str, proxy: str | None = None) -> dict | None:
+async def _fetch_tikwm_video_info(
+    url: str,
+    proxy: str | None = None,
+    allow_solver: bool = True,
+) -> dict | None:
     """دریافت متادیتا و لینک‌های مستقیم دانلود از TikWM API"""
     clean_url = url.strip()
     session = await get_http_session()
@@ -162,25 +171,99 @@ async def _fetch_tikwm_video_info(url: str, proxy: str | None = None) -> dict | 
         except Exception as e:
             logger.warning("[TikTok] TikWM GET error on %s: %s", endpoint, e)
 
-    # روش سوم: دور زدن کلادفلر با FlareSolverr در صورت 403
-    if cf_blocked:
-        logger.info("[TikTok] TikWM blocked by Cloudflare (403), attempting FlareSolverr...")
+    # روش سوم: دور زدن کلادفلر با Byparr / FlareSolverr در صورت 403
+    if cf_blocked and allow_solver:
+        logger.info("[TikTok] TikWM blocked by Cloudflare (403), attempting Byparr/FlareSolverr...")
         try:
+            encoded_url = urllib.parse.quote(clean_url)
             solution = await flaresolverr_request(
-                url="https://www.tikwm.com/api/",
-                method="POST",
-                post_data=f"url={urllib.parse.quote(clean_url)}&hd=1",
-                headers={"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
-                timeout=45,
+                url=f"https://www.tikwm.com/api/?url={encoded_url}&hd=1",
+                method="GET",
+                timeout=60,
             )
+            if not solution:
+                solution = await flaresolverr_request(
+                    url="https://www.tikwm.com/api/",
+                    method="POST",
+                    post_data=f"url={encoded_url}&hd=1",
+                    timeout=60,
+                )
             if solution and solution.get("response"):
                 data = _extract_json_data(solution["response"])
                 if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
                     return data.get("data")
         except Exception as e:
-            logger.warning("[TikTok] FlareSolverr error: %s", e)
+            logger.warning("[TikTok] Byparr/FlareSolverr error: %s", e)
 
     return None
+
+
+def _parse_ajax_downloader_links(html_fragment: str) -> list[str]:
+    """Extract MP4 download links from SaveTik/TikVid HTML fragment, prioritizing HD."""
+    if not html_fragment:
+        return []
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html_fragment, "html.parser")
+    hd_links: list[str] = []
+    sd_links: list[str] = []
+
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"].strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        label = anchor.get_text(" ", strip=True).lower()
+        if "mp4" not in label:
+            continue
+        if "hd" in label:
+            hd_links.append(href)
+        else:
+            sd_links.append(href)
+
+    # Deduplicate while preserving HD-first priority
+    return list(dict.fromkeys(hd_links + sd_links))
+
+
+async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> list[tuple[str, str]]:
+    """Query SaveTik and TikVid via primp TLS impersonation to extract direct MP4 URLs."""
+    try:
+        import primp
+    except ImportError:
+        logger.warning("[TikTok] primp is not installed; skipping SaveTik/TikVid fallback.")
+        return []
+
+    providers = [
+        ("https://savetik.co/api/ajaxSearch", "https://savetik.co/"),
+        ("https://tikvid.io/api/ajaxSearch", "https://tikvid.io/"),
+    ]
+
+    def _query_sync() -> list[tuple[str, str]]:
+        client_kwargs = {"impersonate": "chrome_145"}
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+            client_kwargs["proxy"] = proxy
+        client = primp.Client(**client_kwargs)
+
+        collected: list[tuple[str, str]] = []
+        for endpoint, referer in providers:
+            try:
+                resp = client.post(endpoint, data={"q": url, "lang": "en"}, timeout=15)
+                if resp.status_code != 200:
+                    logger.warning("[TikTok] %s returned HTTP %s", endpoint, resp.status_code)
+                    continue
+                payload = resp.json()
+                html_fragment = payload.get("data") if isinstance(payload, dict) else None
+                if not html_fragment:
+                    continue
+                for dl_url in _parse_ajax_downloader_links(html_fragment):
+                    collected.append((dl_url, referer))
+                if collected:
+                    return collected
+            except Exception as exc:
+                logger.warning("[TikTok] %s error: %s", endpoint, exc)
+        return collected
+
+    return await asyncio.to_thread(_query_sync)
 
 
 async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None:
@@ -235,12 +318,46 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
         return None
 
 
+async def _try_tikwm_download(
+    clean_url: str,
+    output_path: str,
+    proxy: str | None,
+    allow_solver: bool,
+) -> bool:
+    """Attempt downloading a TikTok video via TikWM API (optionally via Byparr/FlareSolverr)."""
+    video_data = await _fetch_tikwm_video_info(clean_url, proxy=proxy, allow_solver=allow_solver)
+    if not video_data and proxy:
+        video_data = await _fetch_tikwm_video_info(clean_url, proxy=None, allow_solver=allow_solver)
+
+    if not video_data:
+        return False
+
+    video_url = (
+        video_data.get("hdplay")
+        or video_data.get("play")
+        or video_data.get("wmplay")
+    )
+    if not video_url:
+        return False
+
+    if video_url.startswith("/"):
+        video_url = f"https://www.tikwm.com{video_url}"
+
+    logger.info("[TikTok] Direct video URL extracted from TikWM API, downloading file...")
+    downloaded = await _download_stream_to_file(video_url, output_path, proxy=proxy)
+    if not downloaded and proxy:
+        downloaded = await _download_stream_to_file(video_url, output_path, proxy=None)
+
+    return bool(downloaded and os.path.exists(output_path))
+
+
 async def download_tiktok_video(url: str) -> str | None:
     """
     دانلود ویدیوی تیک‌تاک:
-    ۱. ابتدا دانلود مستقیم بدون واترمارک و سریع از TikWM API (بدون مسدودیت دیتاسنتر).
-    ۲. در صورت مسدودیت کلادفلر، بای‌پاس با FlareSolverr.
-    ۳. در صورت بروز هرگونه مشکل دیگر، فال‌بک به yt-dlp.
+    ۱. دانلود سریع از TikWM API (مستقیم).
+    ۲. در صورت خطای کلادفلر، دانلود از SaveTik / TikVid با primp (بدون نیاز به مرورگر).
+    ۳. بای‌پاس TikWM با Byparr / FlareSolverr.
+    ۴. فال‌بک نهایی به yt-dlp.
     """
     logger.info("[TikTok] Start downloading: %s", url)
     clean_url = url.strip()
@@ -249,35 +366,47 @@ async def download_tiktok_video(url: str) -> str | None:
 
     proxy = _get_proxy()
 
-    # ۱. روش مستقیم از TikWM API
+    # ۱. روش مستقیم از TikWM API (بدون معطلی سالور)
     try:
-        video_data = await _fetch_tikwm_video_info(clean_url, proxy=proxy)
-        if not video_data and proxy:
-            video_data = await _fetch_tikwm_video_info(clean_url, proxy=None)
-
-        if video_data:
-            video_url = (
-                video_data.get("hdplay")
-                or video_data.get("play")
-                or video_data.get("wmplay")
-            )
-            if video_url:
-                if video_url.startswith("/"):
-                    video_url = f"https://www.tikwm.com{video_url}"
-
-                logger.info("[TikTok] Direct video URL extracted from TikWM API, downloading file...")
-                downloaded = await _download_stream_to_file(video_url, output_path, proxy=proxy)
-                if not downloaded and proxy:
-                    downloaded = await _download_stream_to_file(video_url, output_path, proxy=None)
-
-                if downloaded and os.path.exists(output_path):
-                    logger.info("[TikTok] Download completed successfully via TikWM API (%s bytes)", os.path.getsize(output_path))
-                    return output_path
+        if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=False):
+            logger.info("[TikTok] Download completed successfully via TikWM API (%s bytes)", os.path.getsize(output_path))
+            return output_path
     except Exception as e:
-        logger.warning("[TikTok] TikWM download pipeline exception: %s", e)
+        logger.warning("[TikTok] TikWM direct download pipeline exception: %s", e)
 
-    # ۲. فال‌بک به yt-dlp
-    logger.info("[TikTok] TikWM API failed. Falling back to yt-dlp...")
+    # ۲. روش سریع جایگزین با SaveTik / TikVid (primp)
+    try:
+        ajax_links = await _fetch_ajax_downloader_urls(clean_url, proxy=proxy)
+        if not ajax_links and proxy:
+            ajax_links = await _fetch_ajax_downloader_urls(clean_url, proxy=None)
+
+        for dl_url, referer in ajax_links:
+            downloaded = await _download_stream_to_file(
+                dl_url, output_path, proxy=proxy, referer=referer
+            )
+            if not downloaded and proxy:
+                downloaded = await _download_stream_to_file(
+                    dl_url, output_path, proxy=None, referer=referer
+                )
+            if downloaded and os.path.exists(output_path):
+                logger.info(
+                    "[TikTok] Download completed successfully via SaveTik/TikVid (%s bytes)",
+                    os.path.getsize(output_path),
+                )
+                return output_path
+    except Exception as e:
+        logger.warning("[TikTok] SaveTik/TikVid download pipeline exception: %s", e)
+
+    # ۳. بای‌پاس TikWM با Byparr / FlareSolverr
+    try:
+        if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=True):
+            logger.info("[TikTok] Download completed via Byparr/FlareSolverr (%s bytes)", os.path.getsize(output_path))
+            return output_path
+    except Exception as e:
+        logger.warning("[TikTok] TikWM solver download pipeline exception: %s", e)
+
+    # ۴. فال‌بک به yt-dlp
+    logger.info("[TikTok] Falling back to yt-dlp...")
     if proxy:
         file_path = await _exec_ytdlp_download(clean_url, proxy=proxy)
         if file_path:
@@ -368,34 +497,29 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
             except Exception as e:
                 logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
 
-        # روش ۳: استفاده از FlareSolverr برای حل چالش کلادفلر در صورت 403
+        # روش ۳: استفاده از Byparr / FlareSolverr برای حل چالش کلادفلر در صورت 403
         if cf_blocked or not results:
-            logger.info("[TikTok] Attempting FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
-            
+            logger.info("[TikTok] Attempting Byparr/FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
+
             target_url = "https://www.tikwm.com/api/feed/search"
-            post_payload = f"keywords={urllib.parse.quote(clean_query)}&count={max_results}&cursor=0&web=1"
-            
-            headers_fs = {
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-            }
-            
-            # اول درخواست POST به FlareSolverr
+            encoded_query = urllib.parse.quote(clean_query)
+            target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+
+            # اول درخواست GET (سازگار با Byparr و بدون پارامتر منسوخ headers)
             solution = await flaresolverr_request(
-                url=target_url,
-                method="POST",
-                post_data=post_payload,
-                headers=headers_fs,
-                timeout=45,
+                url=target_get_url,
+                method="GET",
+                timeout=60,
             )
-            
-            # اگر POST پاسخ نداد، GET را هم امتحان میکنیم
+
+            # اگر GET پاسخ نداد، POST را بدون headers امتحان می‌کنیم
             if not solution:
-                encoded_query = urllib.parse.quote(clean_query)
-                target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+                post_payload = f"keywords={encoded_query}&count={max_results}&cursor=0&web=1"
                 solution = await flaresolverr_request(
-                    url=target_get_url,
-                    method="GET",
-                    timeout=45,
+                    url=target_url,
+                    method="POST",
+                    post_data=post_payload,
+                    timeout=60,
                 )
 
             if solution and solution.get("response"):
@@ -404,15 +528,15 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                 if data:
                     results = _parse_tikwm_search_response(data, max_results)
                     if results:
-                        logger.info("[TikTok] FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
+                        logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
                         return results
                 else:
-                    logger.error("[TikTok] FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
+                    logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
 
         if not results:
             logger.error(
-                "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and FlareSolverr did not return results. "
-                "Ensure FlareSolverr docker container is running (docker run -d -p 8191:8191 ghcr.io/flaresolverr/flaresolverr).",
+                "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and Byparr/FlareSolverr did not return results. "
+                "Ensure Byparr/FlareSolverr container is running on port 8191.",
                 clean_query,
             )
 
@@ -547,10 +671,10 @@ async def get_tiktok_trends(count: int = 10):
             except Exception as e:
                 logger.warning("[TikTok] Trends API Error for %s: %s", url, e)
 
-        # تلاش با FlareSolverr در صورت کلادفلر
+        # تلاش با Byparr / FlareSolverr در صورت کلادفلر
         if cf_blocked or not results:
             target_url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
-            solution = await flaresolverr_request(url=target_url, method="GET", timeout=45)
+            solution = await flaresolverr_request(url=target_url, method="GET", timeout=60)
 
             if solution and solution.get("response"):
                 raw_resp = solution["response"]
