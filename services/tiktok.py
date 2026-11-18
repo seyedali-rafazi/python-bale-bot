@@ -248,6 +248,8 @@ def _get_primp_client(primp_mod, proxy: str | None = None):
     with _primp_lock:
         client = _primp_clients.get(valid_proxy)
         if client is None:
+            if len(_primp_clients) >= 16:
+                _primp_clients.clear()
             client_kwargs = {"impersonate": "chrome_145"}
             if valid_proxy:
                 client_kwargs["proxy"] = valid_proxy
@@ -503,8 +505,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
-                                await cache_set(cache_key, results, ttl_sec=180)
-                                return results
+                                break
                     elif response.status == 403:
                         cf_blocked = True
                         logger.warning("[TikTok] POST search HTTP 403 (Cloudflare) from %s", endpoint)
@@ -526,8 +527,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
-                                await cache_set(cache_key, results, ttl_sec=180)
-                                return results
+                                break
                     elif response.status == 403:
                         cf_blocked = True
                         logger.warning("[TikTok] GET search HTTP 403 (Cloudflare) from %s", endpoint)
@@ -535,6 +535,10 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                         logger.warning("[TikTok] GET search HTTP %s from %s", response.status, endpoint)
             except Exception as e:
                 logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
+
+    if results:
+        await cache_set(cache_key, results, ttl_sec=180)
+        return results
 
     # روش ۳: استفاده از Byparr / FlareSolverr خارج از سمافور TikWM تا بقیه درخواست‌ها بلاک نشوند
     if cf_blocked or not results:

@@ -1,10 +1,11 @@
 # core/database/kaggle.py
 
+from core.limits import FREE_LIMITS, VIP_LIMITS
 from .counters import get_period_usage, increment_period_usage
 from .utils import get_tehran_today
 
-KAGGLE_LIMIT_FREE = 1
-KAGGLE_LIMIT_VIP = 5
+KAGGLE_LIMIT_FREE = FREE_LIMITS["kaggle_download"]
+KAGGLE_LIMIT_VIP = VIP_LIMITS["kaggle_download"]
 
 
 async def get_kaggle_downloads(user_id: str) -> int:

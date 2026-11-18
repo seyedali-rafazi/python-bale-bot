@@ -396,7 +396,7 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_artist":
-        results = search_artist(text)
+        results = await asyncio.to_thread(search_artist, text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return

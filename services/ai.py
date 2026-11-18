@@ -86,6 +86,10 @@ async def close_ai_client():
 
 
 async def _ensure_ai_client() -> TelegramClient:
+    global _ai_connected
+
+    if _ai_client is not None and _ai_connected and _ai_client.is_connected():
+        return _ai_client
 
     await init_ai_client()
 
@@ -96,6 +100,10 @@ async def _ensure_ai_client() -> TelegramClient:
         async with _ai_client_lock:
             if not _ai_client.is_connected():
                 await _ai_client.connect()
+                if not await _ai_client.is_user_authorized():
+                    _ai_connected = False
+                    raise RuntimeError("Telethon account is not authorized")
+                _ai_connected = True
 
     return _ai_client
 
@@ -206,6 +214,9 @@ async def perform_ocr(image_bytes: bytes) -> str:
             data=data,
             timeout=timeout,
         ) as response:
+            if response.status != 200:
+                logger.warning("OCR HTTP status %s", response.status)
+                return "❌ خطا در سرویس OCR."
             result = await response.json()
 
         if result.get("IsErroredOnProcessing"):
@@ -296,7 +307,19 @@ async def generate_image(prompt: str):
             if response.status != 200:
                 return None
 
-            image_bytes = await response.read()
+            max_image_bytes = 25 * 1024 * 1024
+            cl = response.headers.get("Content-Length")
+            if cl and cl.isdigit() and int(cl) > max_image_bytes:
+                logger.warning("generate_image response too large: %s bytes", cl)
+                return None
+
+            buf = bytearray()
+            async for chunk in response.content.iter_chunked(65536):
+                buf.extend(chunk)
+                if len(buf) > max_image_bytes:
+                    logger.warning("generate_image stream exceeded %s bytes", max_image_bytes)
+                    return None
+            image_bytes = bytes(buf)
 
         fp = io.BytesIO(image_bytes)
 

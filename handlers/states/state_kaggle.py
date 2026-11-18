@@ -67,10 +67,10 @@ async def _kaggle_worker():
 
 
 def _ensure_workers_started():
-    """Lazily start worker tasks the first time a job is enqueued."""
-    if not _worker_tasks:
-        for _ in range(_NUM_WORKERS):
-            _worker_tasks.append(asyncio.create_task(_kaggle_worker()))
+    """Lazily start worker tasks and replace any exited workers."""
+    _worker_tasks[:] = [t for t in _worker_tasks if not t.done()]
+    while len(_worker_tasks) < _NUM_WORKERS:
+        _worker_tasks.append(asyncio.create_task(_kaggle_worker()))
 
 
 async def stop_kaggle_workers() -> None:
@@ -243,20 +243,6 @@ async def handle_kaggle_state(
     state_data: dict,
 ):
     user_id = str(update.effective_user.id)
-    vip, used = await asyncio.gather(
-        is_vip(user_id),
-        get_kaggle_downloads(user_id),
-    )
-    limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-
-    if used >= limit:
-        await update.message.reply_text(
-            f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
-            f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
-            f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
-        )
-        clear_state(chat_id)
-        return
 
     if step == "waiting_kaggle_search":
         await update.message.reply_text(f"🔍 در حال جستجوی «{text}» در کاگل...")
@@ -296,6 +282,21 @@ async def handle_kaggle_state(
         clear_state(chat_id)
 
     elif step == "waiting_kaggle_dl_link":
+        vip, used = await asyncio.gather(
+            is_vip(user_id),
+            get_kaggle_downloads(user_id),
+        )
+        limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
+
+        if used >= limit:
+            await update.message.reply_text(
+                f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
+                f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
+                f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
+            )
+            clear_state(chat_id)
+            return
+
         # Parse URL or plain ref
         ref = _parse_kaggle_ref(text)
         if not ref:
@@ -338,9 +339,11 @@ async def kaggle_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     chat_id = str(query.message.chat_id)
     ref = query.data.replace("kgdl_", "", 1)
 
-    vip = await is_vip(user_id)
+    vip, used = await asyncio.gather(
+        is_vip(user_id),
+        get_kaggle_downloads(user_id),
+    )
     limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-    used = await get_kaggle_downloads(user_id)
 
     if used >= limit:
         await query.message.reply_text(

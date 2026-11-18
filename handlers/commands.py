@@ -30,9 +30,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(chat.id)
     username = chat.username
 
-    # ثبت کاربر در دیتابیس
-    await add_user(chat_id, username)
-    await log_user_active(chat_id)
+    # ثبت کاربر و لاگ فعالیت به صورت هم‌زمان
+    await asyncio.gather(
+        add_user(chat_id, username),
+        log_user_active(chat_id),
+    )
 
     # بررسی جوین اجباری
     is_member = await check_membership(context.bot, chat_id)

@@ -1,5 +1,6 @@
 # core/database/init_db.py
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -69,6 +70,9 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_id_desc ON youtube_cache(id DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
     ON youtube_cache(channel_name, uploaded_at DESC, id DESC)
     WHERE file_ids IS NOT NULL AND file_ids != '[]';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_group_has_files
+    ON youtube_cache(channel_name, (COALESCE(NULLIF(TRIM(yt_video_id), ''), substr(video_id, 1, 11))))
+    WHERE file_ids IS NOT NULL AND file_ids != '[]';
 CREATE TABLE IF NOT EXISTS instagram_explore (
     id SERIAL PRIMARY KEY,
     file_id TEXT UNIQUE
@@ -95,6 +99,7 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     upload_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_files_user_date ON cloud_files(user_id, upload_date DESC);
 CREATE TABLE IF NOT EXISTS usage_stats (
     user_id TEXT,
     action TEXT,
@@ -102,6 +107,7 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     count INTEGER DEFAULT 1,
     PRIMARY KEY (user_id, action, date)
 );
+CREATE INDEX IF NOT EXISTS idx_usage_stats_action_date ON usage_stats(action, date);
 CREATE TABLE IF NOT EXISTS monitoring_events (
     id SERIAL PRIMARY KEY,
     section TEXT NOT NULL,
@@ -162,8 +168,8 @@ async def _ensure_trigram_indexes(conn) -> None:
 
 async def init_db():
     pool = await get_db()
-    schema_sql = (
-        _SCHEMA_PATH.read_text(encoding="utf-8")
+    schema_sql = await asyncio.to_thread(
+        lambda: _SCHEMA_PATH.read_text(encoding="utf-8")
         if _SCHEMA_PATH.exists()
         else _FALLBACK_SCHEMA_SQL
     )

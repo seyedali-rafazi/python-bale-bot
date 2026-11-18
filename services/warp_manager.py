@@ -7,9 +7,17 @@ import threading
 _lock = threading.Lock()
 
 
-def run_cmd(args):
-    result = subprocess.run(args, capture_output=True, text=True)
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+def run_cmd(args, timeout_sec: int = 25):
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return -1, "", f"warp-cli command timed out after {timeout_sec}s"
 
 
 def wait_for_warp(timeout=20):

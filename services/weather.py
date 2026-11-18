@@ -38,21 +38,29 @@ async def get_weather_forecast(city_name: str) -> str:
         timeout = aiohttp.ClientTimeout(total=15)
         session = await get_http_session()
 
-        # بررسی زبان ورودی (فارسی یا انگلیسی)
+        # بررسی زبان ورودی (فارسی یا انگلیسی) به صورت هم‌زمان
         is_farsi = any(ord(c) > 127 for c in clean_name)
         langs = ["fa", "en"] if is_farsi else ["en", "fa"]
+        encoded_name = urllib.parse.quote(clean_name)
 
-        location = None
-        for lang in langs:
-            encoded_name = urllib.parse.quote(clean_name)
+        async def _geocode(lang: str):
             geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={encoded_name}&count=1&language={lang}&format=json"
             async with session.get(geo_url, timeout=timeout) as geo_resp:
                 if geo_resp.status == 200:
                     geo_data = await geo_resp.json()
                     results = geo_data.get("results")
                     if results:
-                        location = results[0]
-                        break
+                        return results[0]
+            return None
+
+        geo_results = await asyncio.gather(
+            *(_geocode(lang) for lang in langs),
+            return_exceptions=True,
+        )
+        location = next(
+            (r for r in geo_results if isinstance(r, dict)),
+            None,
+        )
 
         if not location:
             return f"❌ شهری با نام `{clean_name}` پیدا نشد."

@@ -1,10 +1,31 @@
 # core/database/yt_blacklist.py
 
+import time
 from .connection import get_db
 from .utils import get_tehran_now_full
 
 _CHANNEL_BLACKLIST_CACHE_KEY = "yt_blacklist:channels"
 _BLOCKED_WORDS_CACHE_KEY = "yt_blacklist:words"
+_L1_TTL_SEC = 60.0
+_l1_lists: dict[str, tuple[list[str], float]] = {}
+
+
+def _l1_get(key: str) -> list[str] | None:
+    entry = _l1_lists.get(key)
+    if entry is not None:
+        val, exp = entry
+        if time.monotonic() < exp:
+            return val
+        _l1_lists.pop(key, None)
+    return None
+
+
+def _l1_set(key: str, val: list[str]) -> None:
+    _l1_lists[key] = (val, time.monotonic() + _L1_TTL_SEC)
+
+
+def _l1_del(key: str) -> None:
+    _l1_lists.pop(key, None)
 
 
 def normalize_channel_key(name: str) -> str:
@@ -30,6 +51,7 @@ async def add_channel_blacklist(channel: str) -> bool:
     )
     from services.cache_service import cache_delete
 
+    _l1_del(_CHANNEL_BLACKLIST_CACHE_KEY)
     await cache_delete(_CHANNEL_BLACKLIST_CACHE_KEY)
     return True
 
@@ -44,6 +66,7 @@ async def remove_channel_blacklist(channel: str) -> bool:
     if deleted is not None:
         from services.cache_service import cache_delete
 
+        _l1_del(_CHANNEL_BLACKLIST_CACHE_KEY)
         await cache_delete(_CHANNEL_BLACKLIST_CACHE_KEY)
         return True
     return False
@@ -61,15 +84,21 @@ async def list_channel_blacklist():
 
 
 async def get_all_channel_blacklist_keys() -> list[str]:
+    local = _l1_get(_CHANNEL_BLACKLIST_CACHE_KEY)
+    if local is not None:
+        return local
+
     from services.cache_service import cache_get, cache_set
 
     cached = await cache_get(_CHANNEL_BLACKLIST_CACHE_KEY)
     if isinstance(cached, list):
+        _l1_set(_CHANNEL_BLACKLIST_CACHE_KEY, cached)
         return cached
 
     pool = await get_db()
     rows = await pool.fetch("SELECT channel_key FROM yt_channel_blacklist")
     keys = [row["channel_key"] for row in rows]
+    _l1_set(_CHANNEL_BLACKLIST_CACHE_KEY, keys)
     await cache_set(_CHANNEL_BLACKLIST_CACHE_KEY, keys, ttl_sec=300)
     return keys
 
@@ -84,9 +113,9 @@ async def is_channel_blacklisted(*names: str) -> bool:
         norm = normalize_channel_key(raw)
         compact = raw.strip().lower()
         for bl in keys:
-            if bl == norm or bl in norm or norm in bl:
+            if bl == norm or (norm and len(bl) >= 4 and bl in norm):
                 return True
-            if bl in compact or compact in bl:
+            if bl == compact or (compact and len(bl) >= 4 and bl in compact):
                 return True
     return False
 
@@ -107,6 +136,7 @@ async def add_blocked_word(word: str) -> bool:
     )
     from services.cache_service import cache_delete
 
+    _l1_del(_BLOCKED_WORDS_CACHE_KEY)
     await cache_delete(_BLOCKED_WORDS_CACHE_KEY)
     return True
 
@@ -121,6 +151,7 @@ async def remove_blocked_word(word: str) -> bool:
     if deleted is not None:
         from services.cache_service import cache_delete
 
+        _l1_del(_BLOCKED_WORDS_CACHE_KEY)
         await cache_delete(_BLOCKED_WORDS_CACHE_KEY)
         return True
     return False
@@ -134,15 +165,21 @@ async def list_blocked_words():
 
 
 async def get_all_blocked_words() -> list[str]:
+    local = _l1_get(_BLOCKED_WORDS_CACHE_KEY)
+    if local is not None:
+        return local
+
     from services.cache_service import cache_get, cache_set
 
     cached = await cache_get(_BLOCKED_WORDS_CACHE_KEY)
     if isinstance(cached, list):
+        _l1_set(_BLOCKED_WORDS_CACHE_KEY, cached)
         return cached
 
     pool = await get_db()
     rows = await pool.fetch("SELECT word FROM yt_blocked_words")
     words = [row["word"] for row in rows]
+    _l1_set(_BLOCKED_WORDS_CACHE_KEY, words)
     await cache_set(_BLOCKED_WORDS_CACHE_KEY, words, ttl_sec=300)
     return words
 
@@ -165,3 +202,7 @@ async def seed_default_blocked_words(default_words: list[str]):
         """,
         records,
     )
+    from services.cache_service import cache_delete
+
+    _l1_del(_BLOCKED_WORDS_CACHE_KEY)
+    await cache_delete(_BLOCKED_WORDS_CACHE_KEY)

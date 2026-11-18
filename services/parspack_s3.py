@@ -41,6 +41,8 @@ def _get_s3_client():
                     config=Config(
                         signature_version="s3v4",
                         max_pool_connections=MAX_POOL_CONNECTIONS,
+                        connect_timeout=15,
+                        read_timeout=120,
                     ),
                 )
     return _s3_client

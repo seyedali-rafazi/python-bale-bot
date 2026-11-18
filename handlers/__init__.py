@@ -107,6 +107,7 @@ from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
 from .states.state_insta import handle_insta_callback
 from .payment import (
+    accept_cloud_purchase_tos,
     btn_buy_vip,
     precheckout_callback,
     successful_payment_callback,
@@ -124,20 +125,17 @@ from handlers.states.state_kaggle import kaggle_callback_handler
 from handlers.states.state_book import book_callback_handler
 from handlers.states.state_software import software_callback_handler
 
-from .menus.cloud import btn_cloud_storage_menu
+from .menus.cloud import (
+    btn_buy_cloud_menu,
+    btn_buy_cloud_size,
+    btn_cloud_files,
+    btn_cloud_storage_menu,
+)
 from handlers.states.state_cloud import (
     start_cloud_upload,
     handle_cloud_file_upload,
     cancel_cloud_upload,
     WAIT_FOR_FILE,
-)
-from .menus.cloud import (
-    btn_buy_cloud_menu,
-    btn_cloud_files,
-    btn_buy_cloud_size,
-)
-from .payment import (
-    accept_cloud_purchase_tos,
 )
 
 
@@ -356,30 +354,15 @@ def register_all_handlers(application):
         CallbackQueryHandler(handle_cloud_back, pattern="^cloud_back$")
     )
 
-    # Cloud purchase size handlers
-    async def handle_cloud_buy_5gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await btn_buy_cloud_size(update, context, 5)
-
-    async def handle_cloud_buy_10gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await btn_buy_cloud_size(update, context, 10)
-
-    async def handle_cloud_buy_20gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await btn_buy_cloud_size(update, context, 20)
-
-    async def handle_cloud_buy_50gb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await btn_buy_cloud_size(update, context, 50)
+    # Cloud purchase size handler (5/10/20/50 GB)
+    async def handle_cloud_buy_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        match = re.match(r"^cloud_buy_(5|10|20|50)gb$", query.data or "")
+        if match:
+            await btn_buy_cloud_size(update, context, int(match.group(1)))
 
     application.add_handler(
-        CallbackQueryHandler(handle_cloud_buy_5gb, pattern="^cloud_buy_5gb$")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_cloud_buy_10gb, pattern="^cloud_buy_10gb$")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_cloud_buy_20gb, pattern="^cloud_buy_20gb$")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_cloud_buy_50gb, pattern="^cloud_buy_50gb$")
+        CallbackQueryHandler(handle_cloud_buy_size, pattern=r"^cloud_buy_(5|10|20|50)gb$")
     )
 
     # Cloud purchase TOS acceptance

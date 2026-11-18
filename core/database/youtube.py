@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import time
 
 from .connection import get_db
 from .counters import (
@@ -77,7 +78,7 @@ def _normalize_channel(channel: str | None) -> str | None:
 
 
 async def _invalidate_archive_summary_cache() -> None:
-    from services.cache_service import cache_delete_many
+    from services.cache_service import cache_delete_many, cache_set
 
     await cache_delete_many(
         [
@@ -88,6 +89,7 @@ async def _invalidate_archive_summary_cache() -> None:
             "yt_archive:top:10",
         ]
     )
+    await cache_set("yt_archive:channels_ver", str(int(time.time() * 1000)), ttl_sec=86400)
 
 
 async def get_yt_downloads(user_id) -> int:
@@ -141,6 +143,8 @@ async def get_cached_video(video_id: str) -> list:
             return parsed
         except Exception:
             return []
+    # Short negative cache avoids repeated DB misses for uncached videos (overwritten on save_cached_video)
+    await cache_set(cache_key, [], ttl_sec=60)
     return []
 
 
@@ -227,6 +231,8 @@ async def update_cache_metadata(
     channel_name: str | None,
     yt_video_id: str | None,
     uploaded_at: str | None = None,
+    *,
+    invalidate_summary: bool = True,
 ):
     norm_title = _normalize_title(title)
     norm_channel = _normalize_channel(channel_name)
@@ -249,7 +255,7 @@ async def update_cache_metadata(
     from services.cache_service import cache_delete
 
     await cache_delete(f"yt_video:{cache_key}")
-    if norm_title or norm_channel:
+    if invalidate_summary and (norm_title or norm_channel):
         await _invalidate_archive_summary_cache()
 
 
@@ -312,11 +318,72 @@ async def count_cache_needing_metadata() -> int:
     return int(val or 0)
 
 
-async def get_cache_rows_needing_metadata(limit: int = 50):
+async def _batch_update_cache_metadata(
+    updates: list[tuple[str, str | None, str | None, str | None, str | None]],
+    *,
+    invalidate_summary: bool = True,
+) -> None:
+    """Batch-update youtube_cache metadata rows in a single DB transaction + Redis pipeline."""
+    if not updates:
+        return
+    records = []
+    cache_keys = []
+    has_summary_change = False
+    for cache_key, title, channel_name, yt_video_id, uploaded_at in updates:
+        norm_title = _normalize_title(title)
+        norm_channel = _normalize_channel(channel_name)
+        norm_uploaded = (uploaded_at or "").strip()[:14] or None
+        if norm_title or norm_channel:
+            has_summary_change = True
+        records.append((norm_title, norm_channel, yt_video_id, norm_uploaded, cache_key))
+        cache_keys.append(f"yt_video:{cache_key}")
+
     pool = await get_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                """
+                UPDATE youtube_cache SET
+                    title = COALESCE($1, title),
+                    channel_name = COALESCE($2, channel_name),
+                    yt_video_id = COALESCE($3, yt_video_id),
+                    uploaded_at = COALESCE(NULLIF(TRIM($4), ''), uploaded_at)
+                WHERE video_id = $5
+                """,
+                records,
+            )
+
+    from services.cache_service import cache_delete_many
+
+    await cache_delete_many(cache_keys)
+    if invalidate_summary and has_summary_change:
+        await _invalidate_archive_summary_cache()
+
+
+async def get_cache_rows_needing_metadata(
+    limit: int = 50,
+    exclude_video_ids: list[str] | None = None,
+):
+    pool = await get_db()
+    if exclude_video_ids:
+        return await pool.fetch(
+            f"""
+            SELECT id, video_id, yt_video_id, title, channel_name, uploaded_at
+            FROM youtube_cache
+            WHERE ({_NEEDS_METADATA_SQL} OR ({_CACHE_NEEDS_UPLOAD_DATE_SQL}))
+              AND NOT (video_id = ANY($2::text[]))
+            ORDER BY
+                (CASE WHEN uploaded_at IS NOT NULL AND TRIM(uploaded_at) != '' THEN 0 ELSE 1 END),
+                uploaded_at DESC,
+                id DESC
+            LIMIT $1
+            """,
+            limit,
+            exclude_video_ids,
+        )
     return await pool.fetch(
         f"""
-        SELECT video_id, yt_video_id, title, channel_name, uploaded_at
+        SELECT id, video_id, yt_video_id, title, channel_name, uploaded_at
         FROM youtube_cache
         WHERE {_NEEDS_METADATA_SQL} OR ({_CACHE_NEEDS_UPLOAD_DATE_SQL})
         ORDER BY
@@ -340,15 +407,17 @@ async def backfill_youtube_cache_metadata(
     fixed = 0
     failed = 0
     processed = 0
+    attempted_ids: list[str] = []
+    attempted_set: set[str] = set()
     sem = asyncio.Semaphore(3)
 
-    async def _process_row(row) -> bool:
+    async def _process_row(row):
         cache_key = row["video_id"]
         yt_id = (row["yt_video_id"] or "").strip() or extract_yt_id_from_cache_key(
             cache_key
         )
         if not yt_id:
-            return False
+            return None
 
         url = f"https://www.youtube.com/watch?v={yt_id}"
         async with sem:
@@ -356,25 +425,28 @@ async def backfill_youtube_cache_metadata(
                 info = await get_video_info_cached(url)
             except Exception:
                 info = None
-            if delay_sec > 0:
-                await asyncio.sleep(delay_sec)
+        if delay_sec > 0:
+            await asyncio.sleep(delay_sec)
 
         uploaded = uploaded_at_from_video_info(info) if info else None
         has_title = bool(info and info.get("title"))
         has_upload_date = bool(uploaded)
         if has_title or has_upload_date:
-            await update_cache_metadata(
+            return (
                 cache_key,
                 info.get("title") if has_title else None,
                 info.get("uploader") if has_title else None,
                 yt_id,
-                uploaded_at=uploaded,
+                uploaded,
             )
-            return True
-        return False
+        return None
 
+    any_summary_updated = False
     while True:
-        rows = await get_cache_rows_needing_metadata(batch_size)
+        rows = await get_cache_rows_needing_metadata(
+            batch_size,
+            exclude_video_ids=attempted_ids if attempted_ids else None,
+        )
         if not rows:
             break
 
@@ -384,16 +456,32 @@ async def backfill_youtube_cache_metadata(
                 break
             rows = rows[:remaining]
 
+        for r in rows:
+            vid = r["video_id"]
+            if vid not in attempted_set:
+                attempted_set.add(vid)
+                attempted_ids.append(vid)
+
         processed += len(rows)
         results = await asyncio.gather(*(_process_row(r) for r in rows), return_exceptions=True)
-        for ok in results:
-            if ok is True:
+        batch_updates = []
+        for res in results:
+            if isinstance(res, tuple):
+                batch_updates.append(res)
+                if res[1] or res[2]:
+                    any_summary_updated = True
                 fixed += 1
             else:
                 failed += 1
 
+        if batch_updates:
+            await _batch_update_cache_metadata(batch_updates, invalidate_summary=False)
+
         if (max_total is not None and processed >= max_total) or len(rows) < batch_size:
             break
+
+    if any_summary_updated:
+        await _invalidate_archive_summary_cache()
 
     return {"fixed": fixed, "failed": failed, "processed": processed}
 
@@ -410,11 +498,28 @@ async def count_cache_missing_upload_date() -> int:
     return int(val or 0)
 
 
-async def get_cache_rows_missing_upload_date(limit: int = 50):
+async def get_cache_rows_missing_upload_date(
+    limit: int = 50,
+    before_id: int | None = None,
+):
     pool = await get_db()
+    if before_id is not None:
+        return await pool.fetch(
+            """
+            SELECT id, video_id, yt_video_id
+            FROM youtube_cache
+            WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
+              AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
+              AND id < $2
+            ORDER BY id DESC
+            LIMIT $1
+            """,
+            limit,
+            before_id,
+        )
     return await pool.fetch(
         """
-        SELECT video_id, yt_video_id
+        SELECT id, video_id, yt_video_id
         FROM youtube_cache
         WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
           AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != ''
@@ -433,13 +538,13 @@ async def backfill_upload_dates_for_cache_rows(
 
     sem = asyncio.Semaphore(3)
 
-    async def _fill_one(row) -> int:
+    async def _fill_one(row):
         try:
             existing = row["uploaded_at"]
         except (KeyError, IndexError, TypeError):
             existing = None
         if existing and str(existing).strip():
-            return 0
+            return None
 
         cache_key = row["video_id"]
         try:
@@ -450,7 +555,7 @@ async def backfill_upload_dates_for_cache_rows(
             yt_id = extract_yt_id_from_cache_key(cache_key)
 
         if not yt_id:
-            return 0
+            return None
 
         url = f"https://www.youtube.com/watch?v={yt_id}"
         async with sem:
@@ -458,20 +563,20 @@ async def backfill_upload_dates_for_cache_rows(
                 info = await get_video_info_cached(url)
             except Exception:
                 info = None
-            if delay_sec > 0:
-                await asyncio.sleep(delay_sec)
+        if delay_sec > 0:
+            await asyncio.sleep(delay_sec)
 
         uploaded = uploaded_at_from_video_info(info) if info else None
         if not uploaded:
-            return 0
+            return None
 
-        await update_cache_metadata(
-            cache_key, None, None, yt_id, uploaded_at=uploaded
-        )
-        return 1
+        return (cache_key, None, None, yt_id, uploaded)
 
     results = await asyncio.gather(*(_fill_one(r) for r in rows), return_exceptions=True)
-    return sum(r for r in results if isinstance(r, int))
+    updates = [r for r in results if isinstance(r, tuple)]
+    if updates:
+        await _batch_update_cache_metadata(updates, invalidate_summary=False)
+    return len(updates)
 
 
 async def backfill_cache_upload_dates(
@@ -484,15 +589,16 @@ async def backfill_cache_upload_dates(
     fixed = 0
     failed = 0
     processed = 0
+    before_id: int | None = None
     sem = asyncio.Semaphore(3)
 
-    async def _process_row(row) -> bool:
+    async def _process_row(row):
         cache_key = row["video_id"]
         yt_id = (row["yt_video_id"] or "").strip() or extract_yt_id_from_cache_key(
             cache_key
         )
         if not yt_id:
-            return False
+            return None
 
         url = f"https://www.youtube.com/watch?v={yt_id}"
         async with sem:
@@ -500,19 +606,16 @@ async def backfill_cache_upload_dates(
                 info = await get_video_info_cached(url)
             except Exception:
                 info = None
-            if delay_sec > 0:
-                await asyncio.sleep(delay_sec)
+        if delay_sec > 0:
+            await asyncio.sleep(delay_sec)
 
         uploaded = uploaded_at_from_video_info(info)
         if uploaded:
-            await update_cache_metadata(
-                cache_key, None, None, yt_id, uploaded_at=uploaded
-            )
-            return True
-        return False
+            return (cache_key, None, None, yt_id, uploaded)
+        return None
 
     while True:
-        rows = await get_cache_rows_missing_upload_date(batch_size)
+        rows = await get_cache_rows_missing_upload_date(batch_size, before_id=before_id)
         if not rows:
             break
 
@@ -522,13 +625,23 @@ async def backfill_cache_upload_dates(
                 break
             rows = rows[:remaining]
 
+        try:
+            before_id = rows[-1]["id"]
+        except (KeyError, IndexError, TypeError):
+            before_id = None
+
         processed += len(rows)
         results = await asyncio.gather(*(_process_row(r) for r in rows), return_exceptions=True)
-        for ok in results:
-            if ok is True:
+        batch_updates = []
+        for res in results:
+            if isinstance(res, tuple):
+                batch_updates.append(res)
                 fixed += 1
             else:
                 failed += 1
+
+        if batch_updates:
+            await _batch_update_cache_metadata(batch_updates, invalidate_summary=False)
 
         if (max_total is not None and processed >= max_total) or len(rows) < batch_size:
             break
@@ -555,11 +668,15 @@ async def count_global_cache() -> int:
 async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_SIZE):
     from services.cache_service import cache_get, cache_set
 
-    cache_key = "yt_archive:channels_p0" if offset == 0 and limit == CHANNELS_PAGE_SIZE else None
-    if cache_key:
-        cached = await cache_get(cache_key)
-        if isinstance(cached, list):
-            return cached
+    if offset == 0 and limit == CHANNELS_PAGE_SIZE:
+        cache_key = "yt_archive:channels_p0"
+    else:
+        ver = await cache_get("yt_archive:channels_ver") or "1"
+        cache_key = f"yt_archive:channels_v{ver}:{offset}:{limit}"
+
+    cached = await cache_get(cache_key)
+    if isinstance(cached, list):
+        return cached
 
     pool = await get_db()
     rows = await pool.fetch(
@@ -575,14 +692,12 @@ async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_S
         limit,
         offset,
     )
-    if cache_key:
-        serialized = [
-            {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
-            for r in rows
-        ]
-        await cache_set(cache_key, serialized, ttl_sec=60)
-        return serialized
-    return rows
+    serialized = [
+        {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
+        for r in rows
+    ]
+    await cache_set(cache_key, serialized, ttl_sec=60)
+    return serialized
 
 
 async def count_global_channels() -> int:
@@ -620,7 +735,7 @@ async def get_global_channel_videos_page(
               AND {_CACHE_HAS_FILES_SQL}
             GROUP BY {_YT_GROUP_KEY_SQL}
         )
-        SELECT c.id, c.video_id, c.yt_video_id, c.title, c.file_ids,
+        SELECT c.id, c.video_id, c.yt_video_id, c.title,
                c.format_type, c.quality, c.cached_at, c.uploaded_at, c.channel_name
         FROM youtube_cache c
         JOIN latest l ON c.id = l.latest_id
@@ -724,7 +839,7 @@ async def search_global_cache_by_title(query: str, limit: int = 15):
     return await pool.fetch(
         f"""
         SELECT id, video_id, yt_video_id, title, channel_name,
-               file_ids, format_type, cached_at, uploaded_at
+               format_type, cached_at, uploaded_at
         FROM youtube_cache
         WHERE title ILIKE $1
           AND {_CACHE_HAS_FILES_SQL}
@@ -742,7 +857,7 @@ async def search_global_cache_by_channel(query: str, limit: int = 15):
     return await pool.fetch(
         f"""
         SELECT id, video_id, yt_video_id, title, channel_name,
-               file_ids, format_type, cached_at, uploaded_at
+               format_type, cached_at, uploaded_at
         FROM youtube_cache
         WHERE channel_name ILIKE $1
           AND {_CACHE_HAS_FILES_SQL}

@@ -67,12 +67,17 @@ async def pinterest_worker(worker_id: int):
         job: PinterestJob = await search_queue.get()
 
         try:
+            if job.future.done():
+                continue
+
             print(
                 f"[Pinterest Worker {worker_id}] searching: {job.query} "
                 f"(queue_remaining≈{search_queue.qsize()})"
             )
 
             async with heavy_chromium_semaphore:
+                if job.future.done():
+                    continue
                 data = await search_pinterest_images(job.query, job.max_results)
 
             if not job.future.done():
@@ -95,6 +100,8 @@ _worker_tasks: list[asyncio.Task] = []
 
 async def start_pinterest_workers():
     global _worker_tasks
+    if any(not t.done() for t in _worker_tasks):
+        return
     _worker_tasks = [
         asyncio.create_task(pinterest_worker(i + 1))
         for i in range(PINTEREST_SEARCH_WORKERS)

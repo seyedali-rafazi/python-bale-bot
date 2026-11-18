@@ -1,4 +1,5 @@
 import asyncio
+import re
 from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from services.http_client import get_http_session
@@ -56,13 +57,29 @@ async def stop_github_workers() -> None:
     _worker_tasks.clear()
 
 
+def _normalize_github_repo(raw: str) -> str | None:
+    s = (raw or "").strip()
+    m = re.match(r"^(?:https?://)?(?:www\.)?github\.com/([^/\s]+/[^/\s?#]+)", s, re.IGNORECASE)
+    repo = m.group(1) if m else s
+    repo = repo.strip("/")
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    parts = [p for p in repo.split("/") if p]
+    if len(parts) < 2:
+        return None
+    owner, name = parts[0], parts[1]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", owner) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        return None
+    return f"{owner}/{name}"
+
+
 async def enqueue_download(
     update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
     """اضافه کردن درخواست به صف"""
-    if not _worker_tasks:
-        for _ in range(GITHUB_WORKERS):
-            _worker_tasks.append(asyncio.create_task(download_worker()))
+    _worker_tasks[:] = [t for t in _worker_tasks if not t.done()]
+    while len(_worker_tasks) < GITHUB_WORKERS:
+        _worker_tasks.append(asyncio.create_task(download_worker()))
 
     if download_queue.full():
         await context.bot.send_message(
@@ -78,7 +95,7 @@ async def enqueue_download(
 
     try:
         download_queue.put_nowait(
-            (process_github_download, (update, context, chat_id, repo_path, user_id))
+            (process_github_download, (context, chat_id, repo_path, user_id))
         )
     except asyncio.QueueFull:
         await context.bot.send_message(
@@ -100,21 +117,27 @@ async def handle_github_state(
 ):
 
     user_id = str(update.effective_user.id)
-    vip_status, downloads_count = await asyncio.gather(
-        is_vip(user_id),
-        get_gh_downloads(user_id),
-    )
-    max_dl = get_limit("github_download", vip_status)
-
-    if downloads_count >= max_dl:
-        await update.message.reply_text(
-            "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
-        )
-        clear_state(chat_id)
-        return
 
     if step == "waiting_gh_dl":
-        repo_path = text.replace("https://github.com/", "").strip()
+        vip_status, downloads_count = await asyncio.gather(
+            is_vip(user_id),
+            get_gh_downloads(user_id),
+        )
+        max_dl = get_limit("github_download", vip_status)
+
+        if downloads_count >= max_dl:
+            await update.message.reply_text(
+                "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+            )
+            clear_state(chat_id)
+            return
+
+        repo_path = _normalize_github_repo(text)
+        if not repo_path:
+            await update.message.reply_text(
+                "❌ فرمت ریپازیتوری نامعتبر است. مثال:\n`owner/repo` یا `https://github.com/owner/repo`"
+            )
+            return
         # به جای پردازش مستقیم، به صف اضافه می‌کنیم
         await enqueue_download(update, context, chat_id, repo_path, user_id)
 
@@ -122,68 +145,84 @@ async def handle_github_state(
         await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
         session = await get_http_session()
         encoded_user = quote(text.strip().lstrip("@"), safe="")
-        async with session.get(
-            f"https://api.github.com/users/{encoded_user}/repos?sort=updated&per_page=10",
-            timeout=60,
-        ) as resp:
-            if resp.status == 200:
-                repos = await resp.json()
-                msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
-                keyboard = []
-                for i, repo in enumerate(repos):
-                    msg += f"{i + 1}. {repo['name']}\n"
-                    keyboard.append(
-                        [
-                            InlineKeyboardButton(
-                                f"📥 دانلود {repo['name']}",
-                                callback_data=_gh_callback_data(repo["full_name"]),
-                            )
-                        ]
-                    )
+        try:
+            async with session.get(
+                f"https://api.github.com/users/{encoded_user}/repos?sort=updated&per_page=10",
+                timeout=30,
+            ) as resp:
+                if resp.status == 200:
+                    repos = await resp.json()
+                    msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
+                    keyboard = []
+                    for i, repo in enumerate(repos):
+                        msg += f"{i + 1}. {repo['name']}\n"
+                        keyboard.append(
+                            [
+                                InlineKeyboardButton(
+                                    f"📥 دانلود {repo['name']}",
+                                    callback_data=_gh_callback_data(repo["full_name"]),
+                                )
+                            ]
+                        )
 
-                await update.message.reply_text(
-                    msg, reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            else:
-                await update.message.reply_text("❌ کاربر یافت نشد.")
+                    await update.message.reply_text(
+                        msg, reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                    await update.message.reply_text("❌ کاربر یافت نشد.")
+        except Exception:
+            await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
 
     elif step == "waiting_gh_search":
         await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
         session = await get_http_session()
-        async with session.get(
-            f"https://api.github.com/search/repositories?q={quote(text.strip(), safe='')}&per_page=10",
-            timeout=60,
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                repos = data.get("items", [])
-                if not repos:
-                    await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
-                    return
+        try:
+            async with session.get(
+                f"https://api.github.com/search/repositories?q={quote(text.strip(), safe='')}&per_page=10",
+                timeout=30,
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    repos = data.get("items", [])
+                    if not repos:
+                        await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
+                        return
 
-                msg = f"🔍 ۱۰ نتیجه برتر برای «{text}»:\n\n"
-                keyboard = []
-                for i, repo in enumerate(repos):
-                    msg += f"{i + 1}. {repo['full_name']} (⭐ {repo['stargazers_count']})\n"
-                    keyboard.append(
-                        [
-                            InlineKeyboardButton(
-                                f"📥 دانلود {repo['name']}",
-                                callback_data=_gh_callback_data(repo["full_name"]),
-                            )
-                        ]
+                    msg = f"🔍 ۱۰ نتیجه برتر برای «{text}»:\n\n"
+                    keyboard = []
+                    for i, repo in enumerate(repos):
+                        msg += f"{i + 1}. {repo['full_name']} (⭐ {repo['stargazers_count']})\n"
+                        keyboard.append(
+                            [
+                                InlineKeyboardButton(
+                                    f"📥 دانلود {repo['name']}",
+                                    callback_data=_gh_callback_data(repo["full_name"]),
+                                )
+                            ]
+                        )
+
+                    await update.message.reply_text(
+                        msg, reply_markup=InlineKeyboardMarkup(keyboard)
                     )
-
-                await update.message.reply_text(
-                    msg, reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            else:
-                await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
+                else:
+                    await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
+        except Exception:
+            await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
 
 
 async def process_github_download(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
+    context: ContextTypes.DEFAULT_TYPE, chat_id, repo_path, user_id
 ):
+    vip_status, downloads_count = await asyncio.gather(
+        is_vip(user_id),
+        get_gh_downloads(user_id),
+    )
+    if downloads_count >= get_limit("github_download", vip_status):
+        await context.bot.send_message(
+            chat_id, "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+        )
+        return
+
     await context.bot.send_message(
         chat_id, "⏳ نوبت شما رسید! در حال آماده‌سازی فایل..."
     )

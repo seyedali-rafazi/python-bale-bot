@@ -19,7 +19,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from core.database.monitoring import log_upload_failed, log_upload_success
-from core.state_manager import StateCache, clear_state, async_get_state, set_state
+from core.state_manager import StateCache, async_clear_state, async_get_state, async_set_state, clear_state, set_state
 from core.task_utils import async_temp_dir, get_file_size_async, load_input_file, track_task
 from services.rate_limiter import user_action_lock
 from services.software_service import (
@@ -49,6 +49,12 @@ async def handle_software_state(
     state_data: Dict[str, Any],
 ):
     """Called from states/__init__.py when user enters software query."""
+    if step == "waiting_software_choice":
+        await update.message.reply_text(
+            "👇 لطفاً یکی از نرم‌افزارهای لیست بالا را انتخاب کنید یا دکمه «❌ لغو / جستجوی جدید» را بزنید."
+        )
+        return
+
     query = text.strip()
     if not query:
         await update.message.reply_text("❌ لطفاً نام برنامه مورد نظر خود را وارد کنید.")
@@ -139,10 +145,11 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     # Handle Cancel button
     if data == "dl_soft_cancel":
+        await async_clear_state(chat_id)
         try:
             await query.message.edit_text(
                 "❌ جستجو لغو شد.\n"
-                "برای جستجوی جدید، نام نرم‌افزار مورد نظر را ارسال کنید یا از منوی پایین استفاده نمایید."
+                "برای جستجوی جدید، نام نرم‌افزار مورد نظر را از منو انتخاب کنید."
             )
         except Exception:
             pass
@@ -216,6 +223,7 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
         except Exception:
             pass
 
+    await async_clear_state(chat_id)
     track_task(
         _process_software_download(
             context=context,

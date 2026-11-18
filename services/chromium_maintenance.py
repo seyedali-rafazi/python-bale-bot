@@ -17,7 +17,10 @@ import subprocess
 import sys
 from typing import List, Tuple
 
-from services.chromium_workload import heavy_chromium_semaphore
+from services.chromium_workload import (
+    _max as _HEAVY_CHROMIUM_MAX,
+    heavy_chromium_semaphore,
+)
 from services.playwright_browser_manager import get_browser_manager
 
 logger = logging.getLogger(__name__)
@@ -196,13 +199,22 @@ def reap_stale_headless_chromium(
 
 
 async def run_chromium_maintenance_once() -> None:
-    """Restart Playwright browser and reap orphans (serialized with other Chromium work)."""
+    """Restart Playwright browser and reap orphans (serialized with all Chromium work)."""
+    acquired = 0
+    deadline = asyncio.get_running_loop().time() + _SEMAPHORE_WAIT_SEC
     try:
-        await asyncio.wait_for(
-            heavy_chromium_semaphore.acquire(),
-            timeout=_SEMAPHORE_WAIT_SEC,
-        )
+        for _ in range(_HEAVY_CHROMIUM_MAX):
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            await asyncio.wait_for(
+                heavy_chromium_semaphore.acquire(),
+                timeout=remaining,
+            )
+            acquired += 1
     except asyncio.TimeoutError:
+        for _ in range(acquired):
+            heavy_chromium_semaphore.release()
         logger.warning(
             "Chromium maintenance skipped: heavy workload busy for %ss",
             _SEMAPHORE_WAIT_SEC,
@@ -210,14 +222,16 @@ async def run_chromium_maintenance_once() -> None:
         return
 
     try:
+        mgr = get_browser_manager()
         logger.info("Chromium maintenance: restarting Playwright browser")
-        await get_browser_manager().force_restart()
+        await mgr.force_restart()
+        if not mgr._active_context_ids and not mgr._is_browser_alive():
+            reaped = await asyncio.to_thread(reap_stale_headless_chromium, 120)
+            if reaped:
+                logger.info("Chromium maintenance: reaped %s stale process(es)", reaped)
     finally:
-        heavy_chromium_semaphore.release()
-
-    reaped = await asyncio.to_thread(reap_stale_headless_chromium, 90)
-    if reaped:
-        logger.info("Chromium maintenance: reaped %s stale process(es)", reaped)
+        for _ in range(acquired):
+            heavy_chromium_semaphore.release()
 
 
 async def chromium_maintenance_loop() -> None:

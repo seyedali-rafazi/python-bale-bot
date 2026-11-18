@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _TG_FETCH_CONCURRENCY = max(1, int(os.getenv("TG_FETCH_CONCURRENCY", "3")))
 _tg_fetch_semaphore = asyncio.Semaphore(_TG_FETCH_CONCURRENCY)
+_tg_download_semaphore = asyncio.Semaphore(_TG_FETCH_CONCURRENCY)
 _channel_messages_cache = StateCache(max_capacity=150, default_ttl=90.0)
 TG_DOWNLOAD_DIR = "tg_downloads"
 
@@ -166,10 +167,13 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
     await asyncio.to_thread(os.makedirs, TG_DOWNLOAD_DIR, exist_ok=True)
     temp_path = None
     try:
-        async with _tg_fetch_semaphore:
+        async with _tg_download_semaphore:
             client = await get_telethon_client()
-            temp_path = await client.download_media(
-                message, file=os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
+            temp_path = await asyncio.wait_for(
+                client.download_media(
+                    message, file=os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
+                ),
+                timeout=180.0,
             )
         if not temp_path or not await asyncio.to_thread(os.path.exists, temp_path):
             return False
@@ -201,9 +205,12 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
             return True
         return False
     finally:
-        if temp_path and os.path.exists(temp_path):
+        if temp_path:
+            def _cleanup_temp(p: str):
+                if os.path.exists(p):
+                    os.remove(p)
             try:
-                await asyncio.to_thread(os.remove, temp_path)
+                await asyncio.to_thread(_cleanup_temp, temp_path)
             except OSError:
                 pass
 

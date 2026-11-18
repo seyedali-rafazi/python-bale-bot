@@ -328,9 +328,15 @@ async def get_video_info_cached(url: str) -> dict | None:
         if not fut.done():
             fut.set_result(res)
         return res
-    except BaseException as exc:
+    except asyncio.CancelledError as exc:
+        if not fut.done():
+            fut.cancel()
+        raise
+    except Exception as exc:
         if not fut.done():
             fut.set_exception(exc)
+            # Mark exception retrieved so single-caller failures don't emit Future warning
+            fut.exception()
         raise
     finally:
         if _inflight_info.get(cache_key) is fut:
@@ -377,9 +383,14 @@ async def get_video_filesize_cached(
         if not fut.done():
             fut.set_result(res)
         return res
-    except BaseException as exc:
+    except asyncio.CancelledError:
+        if not fut.done():
+            fut.cancel()
+        raise
+    except Exception as exc:
         if not fut.done():
             fut.set_exception(exc)
+            fut.exception()
         raise
     finally:
         if _inflight_size.get(cache_key) is fut:
@@ -756,7 +767,7 @@ def _get_video_id_by_ytdlp(url):
 async def split_video_if_needed(original_file_path):
     HARD_LIMIT = 45 * 1024 * 1024
 
-    if os.path.getsize(original_file_path) <= HARD_LIMIT:
+    if await asyncio.to_thread(os.path.getsize, original_file_path) <= HARD_LIMIT:
         return [original_file_path]
 
     files_to_process = [original_file_path]
@@ -775,7 +786,8 @@ async def split_video_if_needed(original_file_path):
     while files_to_process:
         current_file = files_to_process.pop(0)
 
-        if os.path.getsize(current_file) <= HARD_LIMIT:
+        file_size = await asyncio.to_thread(os.path.getsize, current_file)
+        if file_size <= HARD_LIMIT:
             final_valid_parts.append(current_file)
             continue
 
@@ -784,8 +796,6 @@ async def split_video_if_needed(original_file_path):
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
             continue
-
-        file_size = os.path.getsize(current_file)
 
         num_chunks = math.ceil(file_size / HARD_LIMIT)
 
@@ -832,13 +842,25 @@ async def split_video_if_needed(original_file_path):
                 raise RuntimeError("ffmpeg segment timed out")
 
             if process.returncode == 0:
-                new_parts = sorted(
-                    glob.glob(f"{base_name}_temp_{part_counter - 1}_*{ext}")
+                new_parts = await asyncio.to_thread(
+                    lambda p=f"{base_name}_temp_{part_counter - 1}_*{ext}": sorted(glob.glob(p))
                 )
+
+                # Guard against infinite loop when keyframe spacing prevents splitting into smaller parts
+                if not new_parts:
+                    final_valid_parts.append(current_file)
+                    continue
+                if len(new_parts) == 1:
+                    only_size = await asyncio.to_thread(os.path.getsize, new_parts[0])
+                    if only_size >= file_size * 0.95:
+                        if new_parts[0] != current_file and await asyncio.to_thread(os.path.exists, new_parts[0]):
+                            await asyncio.to_thread(os.remove, new_parts[0])
+                        final_valid_parts.append(current_file)
+                        continue
 
                 files_to_process = new_parts + files_to_process
 
-                if current_file != original_file_path and os.path.exists(current_file):
+                if current_file != original_file_path and await asyncio.to_thread(os.path.exists, current_file):
                     await asyncio.to_thread(os.remove, current_file)
 
             else:
@@ -848,8 +870,8 @@ async def split_video_if_needed(original_file_path):
             print(f"Error in ffmpeg: {e}")
             final_valid_parts.append(current_file)
 
-    if original_file_path not in final_valid_parts and os.path.exists(
-        original_file_path
+    if original_file_path not in final_valid_parts and await asyncio.to_thread(
+        os.path.exists, original_file_path
     ):
         await asyncio.to_thread(os.remove, original_file_path)
 

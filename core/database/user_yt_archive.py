@@ -2,6 +2,7 @@
 # Per-user limits for fetching from the shared global YouTube cache.
 # Free: 2 per week (reset Saturday 00:00 Tehran). VIP: 20 per day.
 
+from core.limits import FREE_LIMITS, VIP_LIMITS
 from .counters import get_period_usage, increment_period_usage
 from .utils import get_tehran_today, get_tehran_archive_week_key
 from .vip import is_vip
@@ -20,8 +21,8 @@ from .youtube import (
     VIDEOS_PAGE_SIZE,
 )
 
-ARCHIVE_LIMIT_FREE = 2
-ARCHIVE_LIMIT_VIP = 20
+ARCHIVE_LIMIT_FREE = FREE_LIMITS["yt_archive"]
+ARCHIVE_LIMIT_VIP = VIP_LIMITS["yt_archive"]
 
 
 def _archive_period_key(vip_status: int | bool) -> str:
@@ -47,6 +48,7 @@ async def get_archive_fetches_used(
         "arc_fetch_count",
         "arc_fetch_date",
         period,
+        cache_service="yt_archive",
     )
 
 
@@ -76,6 +78,7 @@ async def increment_archive_fetch(
         "arc_fetch_date",
         period,
         monitor_section="yt_archive",
+        cache_service="yt_archive",
     )
 
 

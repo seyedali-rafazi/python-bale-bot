@@ -250,10 +250,32 @@ def build_zip_and_split(
     if os.path.getsize(zip_path) <= max_part_bytes:
         return [zip_path], archive_basename, "single"
 
-    # 4. If file exceeds max_part_bytes, try spanned zip or fallback to concat parts
+    # 4. If file exceeds max_part_bytes, preserve single ZIP while trying spanned zip
+    backup_zip = f"{zip_path}.single_tmp"
+    try:
+        if os.path.isfile(backup_zip):
+            os.remove(backup_zip)
+        os.replace(zip_path, backup_zip)
+    except OSError:
+        backup_zip = None
+
     spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
     if spanned and len(spanned) > 1:
+        if backup_zip and os.path.isfile(backup_zip):
+            try:
+                os.remove(backup_zip)
+            except OSError:
+                pass
         return spanned, archive_basename, "spanned"
+
+    # Clean up any partial spanned output before restoring single ZIP for concat split
+    for leftover in _collect_spanned_parts(out_dir, archive_basename):
+        try:
+            os.remove(leftover)
+        except OSError:
+            pass
+    if backup_zip and os.path.isfile(backup_zip):
+        os.replace(backup_zip, zip_path)
 
     parts = split_file_concat_parts(zip_path, max_part_bytes, archive_basename)
     return parts, archive_basename, "concat"

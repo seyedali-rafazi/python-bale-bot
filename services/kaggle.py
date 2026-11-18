@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 from typing import List, Tuple
 
+from core.state_manager import StateCache
 from services.zip_utils import _is_incompressible
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ KAGGLE_TEMP_BASE = "kaggle_temp"
 _kaggle_api = None
 _kaggle_token = None
 _kaggle_api_lock = threading.Lock()
+_kaggle_search_cache = StateCache(max_capacity=200, default_ttl=600.0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -79,13 +81,27 @@ def _list_popular_datasets_sync(max_results: int = 8) -> list:
 
 
 async def search_datasets(query: str, max_results: int = 8) -> list:
-    """Async wrapper: search Kaggle datasets by keyword."""
-    return await asyncio.to_thread(_search_datasets_sync, query, max_results)
+    """Async wrapper: search Kaggle datasets by keyword with 10-min L1 cache."""
+    cache_key = f"s:{max_results}:{(query or '').strip().lower()}"
+    cached = _kaggle_search_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    res = await asyncio.to_thread(_search_datasets_sync, query, max_results)
+    if res:
+        _kaggle_search_cache[cache_key] = res
+    return res
 
 
 async def list_popular_datasets(max_results: int = 8) -> list:
-    """Async wrapper: list most-voted datasets."""
-    return await asyncio.to_thread(_list_popular_datasets_sync, max_results)
+    """Async wrapper: list most-voted datasets with 10-min L1 cache."""
+    cache_key = f"pop:{max_results}"
+    cached = _kaggle_search_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    res = await asyncio.to_thread(_list_popular_datasets_sync, max_results)
+    if res:
+        _kaggle_search_cache[cache_key] = res
+    return res
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -162,36 +178,41 @@ def split_into_20mb_zips(src_dir: str, out_dir: str, base_name: str) -> List[str
     part_num = 1
     current_zip_path = os.path.join(out_dir, f"{base_name}_part{part_num}.zip")
     current_zip = zipfile.ZipFile(current_zip_path, "w", zipfile.ZIP_DEFLATED)
-    current_size = 0
+    current_compressed_size = 0
+    has_entries = False
 
     try:
         for abs_path, rel_path in all_files:
             file_size = os.path.getsize(abs_path)
+            is_stored = _is_incompressible(abs_path) or abs_path.lower().endswith(".parquet")
+            est_size = file_size if is_stored else int(file_size * 0.6)
 
-            # If adding this file would exceed limit AND we already have something in the zip
-            if current_size + file_size > MAX_PART_BYTES and current_size > 0:
+            # Rotate to next ZIP part based on actual compressed bytes written + estimated addition
+            if has_entries and (
+                current_compressed_size >= int(MAX_PART_BYTES * 0.92)
+                or current_compressed_size + est_size > MAX_PART_BYTES
+            ):
                 current_zip.close()
                 part_paths.append(current_zip_path)
                 part_num += 1
                 current_zip_path = os.path.join(out_dir, f"{base_name}_part{part_num}.zip")
                 current_zip = zipfile.ZipFile(current_zip_path, "w", zipfile.ZIP_DEFLATED)
-                current_size = 0
+                current_compressed_size = 0
+                has_entries = False
 
             # Skip DEFLATE CPU burn on already-compressed media/archives
-            compress_type = (
-                zipfile.ZIP_STORED
-                if _is_incompressible(abs_path) or abs_path.lower().endswith(".parquet")
-                else zipfile.ZIP_DEFLATED
-            )
+            compress_type = zipfile.ZIP_STORED if is_stored else zipfile.ZIP_DEFLATED
             current_zip.write(abs_path, rel_path, compress_type=compress_type)
-            current_size += file_size
+            has_entries = True
+            zinfo = current_zip.getinfo(rel_path.replace(os.sep, "/"))
+            current_compressed_size += zinfo.compress_size
     finally:
         try:
             current_zip.close()
         except Exception:
             pass
 
-    if current_size > 0:
+    if has_entries:
         part_paths.append(current_zip_path)
 
     return part_paths

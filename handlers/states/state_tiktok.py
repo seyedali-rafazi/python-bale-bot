@@ -79,7 +79,7 @@ async def background_tt_download(
             await _safe_edit_text(status_msg, "⬇️ در حال دریافت ویدیو...")
             file_path = await download_tiktok_video(url)
 
-        if not file_path or not os.path.exists(file_path):
+        if not file_path or not await asyncio.to_thread(os.path.exists, file_path):
             await _safe_edit_text(status_msg, "❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.")
             await log_upload_failed("tiktok", user_id)
             return
@@ -151,7 +151,7 @@ async def handle_tiktok_state(
     user_id_str = str(update.effective_user.id)
 
     if step == "waiting_tt_link":
-        if "tiktok.com" not in text and "tiktok" not in text:
+        if not re.search(r"https?://(?:[\w-]+\.)?tiktok\.com/\S+", text, re.IGNORECASE):
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 

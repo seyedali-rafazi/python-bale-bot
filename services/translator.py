@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import os
 import logging
+import threading
 from dotenv import load_dotenv
 try:
     from deep_translator import GoogleTranslator, MyMemoryTranslator
@@ -41,6 +42,7 @@ _MYMEMORY_LANG_MAP = {
     "tr": "tr-TR",
 }
 _cached_mymemory: dict[tuple[str, str], object] = {}
+_translator_lock = threading.Lock()
 
 
 def _lang_code_mymemory(lang: str) -> str:
@@ -72,12 +74,13 @@ def translate_text(source_lang: str, target_lang: str, text: str) -> str:
 
     # 1. Try Google Translator
     try:
-        translator = cached_translators.get((source_lang, target_lang))
-        if not translator:
-            translator = GoogleTranslator(
-                source=source_lang, target=target_lang, proxies=proxies
-            )
-            cached_translators[(source_lang, target_lang)] = translator
+        with _translator_lock:
+            translator = cached_translators.get((source_lang, target_lang))
+            if not translator:
+                translator = GoogleTranslator(
+                    source=source_lang, target=target_lang, proxies=proxies
+                )
+                cached_translators[(source_lang, target_lang)] = translator
         result = translator.translate(clean_text)
         if result and not str(result).startswith("Server Error:"):
             translated_result = result
@@ -91,10 +94,11 @@ def translate_text(source_lang: str, target_lang: str, text: str) -> str:
         try:
             s = _lang_code_mymemory(source_lang)
             t = _lang_code_mymemory(target_lang)
-            fallback_translator = _cached_mymemory.get((s, t))
-            if not fallback_translator:
-                fallback_translator = MyMemoryTranslator(source=s, target=t, proxies=proxies)
-                _cached_mymemory[(s, t)] = fallback_translator
+            with _translator_lock:
+                fallback_translator = _cached_mymemory.get((s, t))
+                if not fallback_translator:
+                    fallback_translator = MyMemoryTranslator(source=s, target=t, proxies=proxies)
+                    _cached_mymemory[(s, t)] = fallback_translator
             result = fallback_translator.translate(clean_text)
             if result and not str(result).startswith("MYMEMORY WARNING:"):
                 translated_result = result

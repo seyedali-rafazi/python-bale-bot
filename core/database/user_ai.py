@@ -3,12 +3,13 @@
 
 import asyncio
 
+from core.limits import FREE_LIMITS, VIP_LIMITS
 from .counters import get_period_usage, increment_period_usage
 from .utils import get_tehran_today
 from .vip import is_vip
 
-AI_LIMIT_FREE = 2
-AI_LIMIT_VIP = 20
+AI_LIMIT_FREE = FREE_LIMITS["ai_chat"]
+AI_LIMIT_VIP = VIP_LIMITS["ai_chat"]
 
 
 async def get_user_ai_limit(user_id: str) -> int:

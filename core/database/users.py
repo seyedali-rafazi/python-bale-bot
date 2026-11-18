@@ -1,5 +1,6 @@
 # core/database/users.py
 
+from datetime import datetime
 from .connection import get_db
 from .utils import get_tehran_archive_week_key, get_tehran_now_full, get_tehran_today
 from .web_scrapping import (
@@ -103,7 +104,9 @@ async def reset_user_limits(user_id):
     await pool.execute(
         """
         UPDATE users
-        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0
+        SET yt_count = 0, music_count = 0, pinterest_count = 0, tt_dl_count = 0,
+            gh_count = 0, tg_count = 0, kaggle_count = 0, web_search_dl_count = 0,
+            ai_chat_count = 0, arc_fetch_count = 0
         WHERE user_id = $1
         """,
         uid,
@@ -117,7 +120,21 @@ async def reset_all_user_limits():
     """Reset daily limits for all users (used by admin command)."""
     pool = await get_db()
     await pool.execute(
-        "UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0"
+        """
+        UPDATE users SET yt_count = 0, music_count = 0, pinterest_count = 0,
+            tt_dl_count = 0, gh_count = 0, tg_count = 0, kaggle_count = 0,
+            web_search_dl_count = 0, ai_chat_count = 0, arc_fetch_count = 0
+        WHERE COALESCE(yt_count, 0) != 0
+           OR COALESCE(music_count, 0) != 0
+           OR COALESCE(pinterest_count, 0) != 0
+           OR COALESCE(tt_dl_count, 0) != 0
+           OR COALESCE(gh_count, 0) != 0
+           OR COALESCE(tg_count, 0) != 0
+           OR COALESCE(kaggle_count, 0) != 0
+           OR COALESCE(web_search_dl_count, 0) != 0
+           OR COALESCE(ai_chat_count, 0) != 0
+           OR COALESCE(arc_fetch_count, 0) != 0
+        """
     )
     from services.rate_limiter import invalidate_all_cached_usage
 
@@ -167,6 +184,13 @@ async def get_user_profile_summary(user_id) -> dict | None:
         return int(row[count_col] or 0) if row[date_col] == expected_key else 0
 
     is_vip_val = int(row["is_vip"] or 0)
+    expire_str = row["vip_expire_date"]
+    if is_vip_val == 1 and expire_str:
+        try:
+            if datetime.now() > datetime.fromisoformat(expire_str):
+                is_vip_val = 0
+        except ValueError:
+            pass
     arc_period_key = today if is_vip_val == 1 else week_key
 
     return {

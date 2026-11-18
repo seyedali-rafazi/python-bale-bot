@@ -43,7 +43,9 @@ from core.yt_moderation import (
     check_video_info_allowed,
 )
 from .helpers import (
+    ForwardStatus,
     extract_yt_id,
+    forward_file_id_to_user,
     send_cached_files,
     format_duration,
     format_size,
@@ -365,7 +367,7 @@ async def background_yt_download(
                                             os.path.dirname(raw_file) or ".",
                                             f"{archive_basename}.zip",
                                         )
-                                        if os.path.isfile(full_zip):
+                                        if await asyncio.to_thread(os.path.isfile, full_zip):
                                             zip_artifacts.append(full_zip)
                                     result = zip_parts
                                 else:
@@ -393,7 +395,7 @@ async def background_yt_download(
                                 total_video_size_mb = 0
                                 for file_path in result:
                                     total_video_size_mb += round(
-                                        os.path.getsize(file_path) / (1024 * 1024), 2
+                                        (await get_file_size_async(file_path)) / (1024 * 1024), 2
                                     )
 
                                 if (
@@ -574,7 +576,7 @@ async def background_yt_download(
                         if (
                             file_path
                             and isinstance(file_path, str)
-                            and os.path.exists(file_path)
+                            and await asyncio.to_thread(os.path.exists, file_path)
                         ):
                             # =====================
                             # cloud
@@ -589,7 +591,7 @@ async def background_yt_download(
                                     user_storage_mb = 0
 
                                 audio_size_mb = round(
-                                    os.path.getsize(file_path) / (1024 * 1024), 2
+                                    (await get_file_size_async(file_path)) / (1024 * 1024), 2
                                 )
 
                                 if (
@@ -661,7 +663,7 @@ async def background_yt_download(
                             # =====================
 
                             else:
-                                file_size_mb = os.path.getsize(file_path) / (
+                                file_size_mb = (await get_file_size_async(file_path)) / (
                                     1024 * 1024
                                 )
                                 sent_direct_audio = False
@@ -680,10 +682,10 @@ async def background_yt_download(
                                             caption=f"🎵 {info.get('title') if info else video_id}",
                                         )
 
-                                        sent_ok = await send_audio_once(
-                                            context, chat_id, audio_file_id
+                                        fwd_status = await forward_file_id_to_user(
+                                            context, chat_id, audio_file_id, "audio"
                                         )
-                                        if sent_ok:
+                                        if fwd_status != ForwardStatus.FAILED:
                                             await save_cached_video(
                                                 cache_key,
                                                 [audio_file_id],
@@ -694,10 +696,16 @@ async def background_yt_download(
                                                 quality="best",
                                                 uploaded_at=uploaded_at_from_video_info(info),
                                             )
-                                            await context.bot.send_message(
-                                                chat_id=chat_id,
-                                                text="✅ فایل صوتی ارسال شد!",
-                                            )
+                                            if fwd_status == ForwardStatus.OK:
+                                                await context.bot.send_message(
+                                                    chat_id=chat_id,
+                                                    text="✅ فایل صوتی ارسال شد!",
+                                                )
+                                            else:
+                                                await context.bot.send_message(
+                                                    chat_id=chat_id,
+                                                    text="⚠️ وضعیت تحویل فایل صوتی نامطمئن بود؛ پیش از درخواست مجدد چت را بررسی کنید.",
+                                                )
                                             sent_direct_audio = True
                                     except Exception as audio_err:
                                         print(f"⚠️ Could not send as audio: {audio_err}")
@@ -725,7 +733,7 @@ async def background_yt_download(
                                             os.path.dirname(file_path) or ".",
                                             f"{archive_basename}.zip",
                                         )
-                                        if os.path.isfile(full_zip):
+                                        if await asyncio.to_thread(os.path.isfile, full_zip):
                                             zip_artifacts.append(full_zip)
 
                                     await process_and_send_document_parts(

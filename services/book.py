@@ -14,6 +14,7 @@ Uses native async httpx.AsyncClient connection pooling so no ThreadPoolExecutor 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import httpx
+from services.cache_service import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -207,16 +209,25 @@ async def _search_internet_archive(query: str, max_results: int) -> List[dict]:
             pass
         return None
 
-    resolved = await asyncio.gather(
-        *(_resolve_pdf(doc) for doc in docs),
-        return_exceptions=True,
-    )
+    tasks = [asyncio.create_task(_resolve_pdf(doc)) for doc in docs]
     books: List[dict] = []
-    for item in resolved:
-        if isinstance(item, dict):
-            books.append(item)
-            if len(books) >= max_results:
-                break
+    try:
+        for fut in asyncio.as_completed(tasks):
+            try:
+                item = await fut
+            except Exception:
+                item = None
+            if isinstance(item, dict):
+                books.append(item)
+                if len(books) >= max_results:
+                    break
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        pending = [t for t in tasks if not t.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
     return books
 
 
@@ -328,6 +339,15 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
     Search sources concurrently and return a combined, de-duplicated list.
     Books with downloadable files are sorted first.
     """
+    clean_q = (query or "").strip()
+    cache_key = None
+    if clean_q:
+        q_hash = hashlib.md5(clean_q.lower().encode("utf-8")).hexdigest()[:16]
+        cache_key = f"book_search:{max_results}:{q_hash}"
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list) and cached:
+            return cached
+
     per_source = max(4, max_results // 2 + 1)
 
     tasks = [
@@ -366,7 +386,10 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
         source_order.get(b["source"], 9),
     ))
 
-    return unique[:max_results]
+    results = unique[:max_results]
+    if cache_key and results:
+        await cache_set(cache_key, results, ttl_sec=1800)
+    return results
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -478,13 +501,13 @@ async def _download_url_async(
             if await asyncio.to_thread(_is_valid_file, dest_path):
                 return True
             logger.warning("Downloaded file invalid/corrupt: %s", download_url)
-            _safe_unlink(dest_path)
+            await asyncio.to_thread(_safe_unlink, dest_path)
             return False
         except asyncio.CancelledError:
-            _safe_unlink(dest_path)
+            await asyncio.to_thread(_safe_unlink, dest_path)
             raise
         except Exception as e:
-            _safe_unlink(dest_path)
+            await asyncio.to_thread(_safe_unlink, dest_path)
             if attempt < _MAX_RETRIES:
                 logger.info("Download retry %d/%d — %s: %s", attempt + 1, _MAX_RETRIES, download_url, e)
                 await asyncio.sleep(_RETRY_DELAY)
@@ -493,9 +516,13 @@ async def _download_url_async(
     return False
 
 
+def _is_nonempty_book_file(path: str) -> bool:
+    return os.path.exists(path) and os.path.getsize(path) >= 10000
+
+
 async def download_book(book: dict, dest_dir: str) -> Optional[str]:
     """Download a book dict to dest_dir asynchronously. Returns local path or None."""
-    Path(dest_dir).mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, dest_dir, exist_ok=True)
 
     urls_to_try: List[tuple[str, str]] = []  # (url, file_ext)
 
@@ -525,9 +552,9 @@ async def download_book(book: dict, dest_dir: str) -> Optional[str]:
             dest_path = os.path.join(dest_dir, safe_name)
 
             success = await _download_url_async(url, dest_path)
-            if success and os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
+            if success and await asyncio.to_thread(_is_nonempty_book_file, dest_path):
                 return dest_path
-            _safe_unlink(dest_path)
+            await asyncio.to_thread(_safe_unlink, dest_path)
 
     return None
 

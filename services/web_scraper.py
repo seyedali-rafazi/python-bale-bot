@@ -164,6 +164,29 @@ def search_web(query, max_results=10, max_attempts=3):
     return []
 
 
+async def async_search_web(query: str, max_results: int = 10, max_attempts: int = 3) -> list:
+    """Async cached web search with timeout protection."""
+    import hashlib
+    from services.cache_service import cache_get, cache_set
+
+    clean_q = (query or "").strip()
+    cache_key = None
+    if clean_q:
+        q_hash = hashlib.md5(clean_q.lower().encode("utf-8")).hexdigest()[:16]
+        cache_key = f"web_search:{max_results}:{q_hash}"
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list) and cached:
+            return cached
+
+    results = await asyncio.wait_for(
+        asyncio.to_thread(search_web, query, max_results, max_attempts),
+        timeout=35.0,
+    )
+    if cache_key and results:
+        await cache_set(cache_key, results, ttl_sec=900)
+    return results
+
+
 def _remove_file_if_exists(path: str) -> None:
     try:
         if path and os.path.exists(path):
@@ -329,14 +352,14 @@ async def _create_single_file_with_playwright(
 
             await asyncio.to_thread(_write_html_sync)
 
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            if await asyncio.to_thread(lambda: os.path.exists(output_path) and os.path.getsize(output_path) > 0):
                 return True
         except Exception as e:
             print(
                 f"Playwright SingleFile fallback failed "
                 f"(attempt {attempt + 1}/{max_attempts}) for {url}: {e}"
             )
-            _remove_file_if_exists(output_path)
+            await asyncio.to_thread(_remove_file_if_exists, output_path)
 
         if attempt < max_attempts - 1:
             await asyncio.sleep(1.5 * (attempt + 1))
@@ -383,7 +406,7 @@ async def _run_singlefile_cli(
                     process.communicate(),
                     timeout=_SINGLEFILE_COMMUNICATE_TIMEOUT,
                 )
-                if process.returncode == 0 and os.path.exists(output_path):
+                if process.returncode == 0 and await asyncio.to_thread(os.path.exists, output_path):
                     return True
                 err_msg = (
                     stderr.decode(errors="replace") if stderr else "Unknown Error"
@@ -402,16 +425,35 @@ async def _run_singlefile_cli(
                         "Falling back to Playwright."
                     )
                     _SINGLEFILE_MISSING_LOGGED = True
-                _remove_file_if_exists(output_path)
+                await asyncio.to_thread(_remove_file_if_exists, output_path)
                 return False
+            except asyncio.CancelledError:
+                if process is not None and process.returncode is None:
+                    _terminate_process_tree(process)
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=3.0)
+                    except Exception:
+                        pass
+                await asyncio.to_thread(_remove_file_if_exists, output_path)
+                raise
             except asyncio.TimeoutError:
                 if process is not None:
                     _terminate_process_tree(process)
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=3.0)
+                    except Exception:
+                        pass
                 print(f"SingleFile timeout for URL: {url} (attempt {attempt + 1})")
             except Exception as e:
+                if process is not None and process.returncode is None:
+                    _terminate_process_tree(process)
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=3.0)
+                    except Exception:
+                        pass
                 print(f"SingleFile error: {e}")
 
-            _remove_file_if_exists(output_path)
+            await asyncio.to_thread(_remove_file_if_exists, output_path)
 
         if attempt < max_attempts - 1:
             await asyncio.sleep(1.5 * (attempt + 1))

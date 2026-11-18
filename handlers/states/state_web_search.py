@@ -8,9 +8,8 @@ from telegram.ext import ContextTypes
 from core.state_manager import async_get_state, set_state, clear_state
 from core.task_utils import load_input_file, remove_file_async
 from services.rate_limiter import user_action_lock
-from services.web_scraper import create_single_file
+from services.web_scraper import async_search_web, create_single_file
 import asyncio
-from services.web_scraper import search_web
 from core.database import (
     get_web_search_downloads,
     increment_web_search_downloads,
@@ -145,8 +144,12 @@ async def handle_web_search_state(
         # بخش جستجو با موضوع
         wait_msg = await update.message.reply_text("⏳ در حال جستجو...")
 
-        # اجرای سرچ در ترد جداگانه
-        results = await asyncio.to_thread(search_web, text, 10)
+        # اجرای سرچ غیرهم‌زمان با کش و تایم‌اوت
+        try:
+            results = await async_search_web(text, 10)
+        except Exception as e:
+            print(f"Web Search Error: {e}")
+            results = []
 
         if not results:
             await wait_msg.edit_text("❌ نتیجه‌ای یافت نشد یا خطایی رخ داد.")

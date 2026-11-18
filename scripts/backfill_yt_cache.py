@@ -23,10 +23,8 @@ async def main():
         print(f"Rows needing metadata: {pending}")
         if pending > 0:
             total_fixed = 0
-            while True:
-                remaining = await count_cache_needing_metadata()
-                if remaining == 0:
-                    break
+            remaining = pending
+            while remaining > 0:
                 print(f"Remaining: {remaining} ...")
                 result = await backfill_youtube_cache_metadata(
                     batch_size=50,
@@ -38,8 +36,9 @@ async def main():
                 if result["fixed"] == 0:
                     print("No progress this batch; stopping.")
                     break
+                remaining = await count_cache_needing_metadata()
 
-            left = await count_cache_needing_metadata()
+            left = remaining
             print(f"Metadata done. Fixed ~{total_fixed}, still pending: {left}")
 
         missing_dates = await count_cache_missing_upload_date()
@@ -48,11 +47,9 @@ async def main():
             return
 
         date_fixed = 0
-        while True:
-            remaining = await count_cache_missing_upload_date()
-            if remaining == 0:
-                break
-            print(f"Upload dates remaining: {remaining} ...")
+        remaining_dates = missing_dates
+        while remaining_dates > 0:
+            print(f"Upload dates remaining: {remaining_dates} ...")
             result = await backfill_cache_upload_dates(
                 batch_size=50,
                 max_total=200,
@@ -63,8 +60,9 @@ async def main():
             if result["fixed"] == 0:
                 print("No upload-date progress; stopping.")
                 break
+            remaining_dates = await count_cache_missing_upload_date()
 
-        left_dates = await count_cache_missing_upload_date()
+        left_dates = remaining_dates
         print(f"Upload dates done. Fixed ~{date_fixed}, still missing: {left_dates}")
     finally:
         await close_db()

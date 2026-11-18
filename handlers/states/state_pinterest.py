@@ -194,9 +194,11 @@ async def send_image_batch(
         print(f"send_image_batch error: {e}")
         return sent
     finally:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
+        pending = [t for t in tasks if not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def process_pinterest_search(

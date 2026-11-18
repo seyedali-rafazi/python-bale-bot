@@ -49,16 +49,25 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
 
     try:
         if redis is not None:
-            # Atomic SET NX EX in Redis with unique owner token
-            res = await redis.set(lock_key, lock_token, nx=True, ex=timeout_sec)
-            acquired = bool(res)
-        else:
-            # In-memory lock fallback with TTL expiration
+            try:
+                # Atomic SET NX EX in Redis with unique owner token
+                res = await redis.set(lock_key, lock_token, nx=True, ex=timeout_sec)
+                acquired = bool(res)
+            except Exception as e:
+                logger.debug("Redis user_action_lock error for %s, falling back to local: %s", lock_key, e)
+                redis = None
+
+        if redis is None:
+            # In-memory lock fallback with TTL expiration and hard capacity cap
             now = time.monotonic()
             if len(_local_locks) > 5000:
                 expired_keys = [k for k, (_, exp) in _local_locks.items() if now >= exp]
                 for k in expired_keys:
                     _local_locks.pop(k, None)
+                if len(_local_locks) > 5000:
+                    overflow = len(_local_locks) - 4500
+                    for k in list(_local_locks.keys())[:overflow]:
+                        _local_locks.pop(k, None)
             existing = _local_locks.get(lock_key)
             if existing is None or now >= existing[1]:
                 _local_locks[lock_key] = (lock_token, now + timeout_sec)
@@ -87,7 +96,7 @@ async def check_anti_flood(user_id: str | int, max_messages: int = 5, window_sec
     or False if user is flooding/spamming the bot.
     """
     uid_str = str(user_id)
-    now = time.time()
+    now = time.monotonic()
     redis = get_async_redis()
 
     if redis is not None:
@@ -105,10 +114,14 @@ async def check_anti_flood(user_id: str | int, max_messages: int = 5, window_sec
     valid_timestamps.append(now)
     _local_flood_tracker[uid_str] = valid_timestamps
 
-    # Clean old keys occasionally
+    # Clean old keys and enforce hard memory bound
     if len(_local_flood_tracker) > 5000:
         for k in list(_local_flood_tracker.keys()):
             if not _local_flood_tracker[k] or _local_flood_tracker[k][-1] < cutoff:
+                _local_flood_tracker.pop(k, None)
+        if len(_local_flood_tracker) > 5000:
+            overflow = len(_local_flood_tracker) - 4500
+            for k in list(_local_flood_tracker.keys())[:overflow]:
                 _local_flood_tracker.pop(k, None)
 
     return len(valid_timestamps) <= max_messages
@@ -165,6 +178,16 @@ async def _delete_by_scan(redis, pattern: str) -> None:
             batch.clear()
     if batch:
         await redis.delete(*batch)
+
+
+async def delete_cached_daily_usage(service: str, user_id: str | int, period_key: str) -> None:
+    """O(1) deletion of a single cached period-usage key."""
+    redis = get_async_redis()
+    if redis is not None:
+        try:
+            await redis.delete(f"bale:usage:{service}:{user_id}:{period_key}")
+        except Exception as e:
+            logger.debug("Redis delete_cached_daily_usage error: %s", e)
 
 
 async def invalidate_cached_usage(user_id: str | int, service: Optional[str] = None) -> None:

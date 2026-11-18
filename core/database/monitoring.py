@@ -32,13 +32,6 @@ SECTION_LABELS = {
 
 ALL_SECTIONS = list(SECTION_LABELS.keys())
 
-_TODAY_ACTIVITY_SQL = """
-    yt_date = $1 OR music_date = $1 OR pinterest_date = $1
-    OR tt_dl_date = $1 OR ig_dl_date = $1 OR ig_exp_date = $1
-    OR gh_date = $1 OR web_search_dl_date = $1 OR arc_fetch_date = $1
-    OR ai_chat_date = $1 OR tg_date = $1
-"""
-
 
 async def log_monitor_event(
     section: str,
@@ -90,6 +83,10 @@ async def _count_active_users_between(start: str, end: str) -> int:
 async def count_active_users_today() -> int:
     today = get_tehran_today()
     today_start = f"{today} 00:00:00"
+    tomorrow = (
+        datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TEHRAN_TZ)
+        + timedelta(days=1)
+    ).strftime("%Y-%m-%d 00:00:00")
     pool = await get_db()
     val = await pool.fetchval(
         """
@@ -97,8 +94,10 @@ async def count_active_users_today() -> int:
         FROM monitoring_events
         WHERE user_id IS NOT NULL
           AND created_at >= $1
+          AND created_at < $2
         """,
         today_start,
+        tomorrow,
     )
     return int(val or 0)
 

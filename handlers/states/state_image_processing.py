@@ -31,13 +31,28 @@ except ImportError:
 # Semaphore to limit concurrent heavy media operations (video-to-gif, audio extraction)
 MEDIA_MAX_CONCURRENT = 2
 media_processing_semaphore = asyncio.Semaphore(MEDIA_MAX_CONCURRENT)
+_rembg_semaphore = asyncio.Semaphore(1)
 
 _IMG_TMP_DIR = os.path.join("downloads", "img_tmp")
 
+
+def _cleanup_evicted_paths(_key, value) -> None:
+    if not value:
+        return
+    paths = value if isinstance(value, (list, tuple, set)) else [value]
+    for p in paths:
+        if isinstance(p, str) and p:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
+
+
 # Bounded TTL caches storing temp disk paths (never raw image bytes in RAM)
-_pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
-_convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
-_resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
+_pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
+_convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
+_resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
 
 
 def _remove_files_quietly(paths) -> None:
@@ -115,8 +130,12 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
 
         return
 
-    # Handle image upload
-    if update.message.photo:
+    # Handle image upload (photo or uncompressed image document)
+    is_img_doc = bool(
+        update.message.document
+        and (update.message.document.mime_type or "").startswith("image/")
+    )
+    if update.message.photo or is_img_doc:
         pending_images = _pdf_images_cache.get(chat_id)
         if pending_images is None:
             pending_images = []
@@ -125,8 +144,12 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         # Download image to temp file on disk instead of holding bytes in RAM
-        photo = update.message.photo[-1]
-        img_path = await _download_image_to_disk(context.bot, photo.file_id, f"pdf_{chat_id}")
+        file_id = (
+            update.message.photo[-1].file_id
+            if update.message.photo
+            else update.message.document.file_id
+        )
+        img_path = await _download_image_to_disk(context.bot, file_id, f"pdf_{chat_id}")
 
         pending_images.append(img_path)
         _pdf_images_cache[chat_id] = pending_images
@@ -194,7 +217,7 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
     # Handle image upload
     if update.message.photo or (
         update.message.document
-        and update.message.document.mime_type.startswith("image/")
+        and (update.message.document.mime_type or "").startswith("image/")
     ):
         await update.message.reply_text("⏳ در حال دریافت عکس...")
 
@@ -270,7 +293,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle image upload
     if update.message.photo or (
         update.message.document
-        and update.message.document.mime_type.startswith("image/")
+        and (update.message.document.mime_type or "").startswith("image/")
     ):
         await update.message.reply_text("⏳ در حال دریافت عکس...")
 
@@ -318,7 +341,7 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
     # Handle image upload
     if update.message.photo or (
         update.message.document
-        and update.message.document.mime_type.startswith("image/")
+        and (update.message.document.mime_type or "").startswith("image/")
     ):
         await update.message.reply_text(
             "⏳ در حال حذف پس‌زمینه... (ممکن است چند ثانیه طول بکشد)"
@@ -334,8 +357,12 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
 
             input_path = await _download_image_to_disk(context.bot, file_id, f"rmbg_{chat_id}")
 
-            # Remove background
-            output_path = await remove_background(input_path, chat_id)
+            # Remove background under concurrency guard to prevent OOM
+            async with _rembg_semaphore:
+                output_path = await asyncio.wait_for(
+                    remove_background(input_path, chat_id),
+                    timeout=120.0,
+                )
 
             # Send result
             nobg_input = await load_input_file(output_path, filename="no_background.png")

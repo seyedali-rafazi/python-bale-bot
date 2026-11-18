@@ -80,7 +80,13 @@ async def cmd_setvip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_user = context.args[0]
-    status = int(context.args[1])
+    try:
+        status = int(context.args[1])
+        if status not in (0, 1):
+            raise ValueError("status must be 0 or 1")
+    except ValueError:
+        await update.message.reply_text("❌ مقدار وضعیت باید `0` یا `1` باشد.")
+        return
 
     await set_vip(target_user, status)
     status_text = "VIP شد 🌟" if status == 1 else "از VIP خارج شد ❌"
@@ -462,8 +468,8 @@ async def cmd_clean_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await drop_legacy_user_youtube_archive_table()
     pending = await count_incomplete_cache_rows()
-    removed = await purge_incomplete_youtube_cache()
-    left = await count_incomplete_cache_rows()
+    removed = await purge_incomplete_youtube_cache() if pending > 0 else 0
+    left = max(0, pending - removed) if removed == pending else await count_incomplete_cache_rows()
     await update.message.reply_text(
         f"✅ پاکسازی ردیف‌های ناشناس / ناقص:\n"
         f"• حذف شده: **{removed}** (از **{pending}** مورد ناقص)\n"
@@ -515,6 +521,9 @@ async def cmd_fix_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         try:
             limit = int(context.args[0])
+            if limit < 1:
+                await update.message.reply_text("❌ مقدار limit باید حداقل 1 باشد.")
+                return
         except ValueError:
             await update.message.reply_text("❌ limit باید عدد باشد. مثال: `/fixytcache 1000`")
             return
@@ -558,18 +567,15 @@ async def cmd_addcloud(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not await get_full_user_info(target_user):
+    updated = await add_cloud_storage(target_user, size_mb)
+    if not updated:
         await update.message.reply_text(f"❌ کاربر {target_user} یافت نشد.")
         return
 
-    cloud_info = await get_user_cloud_info(target_user)
-    old_total = (cloud_info or {}).get("total_mb") or 0
-    old_used = (cloud_info or {}).get("used_mb") or 0
+    new_total = updated.get("total_mb") or 0
+    old_used = updated.get("used_mb") or 0
+    old_total = new_total - size_mb
     old_available = old_total - old_used
-
-    await add_cloud_storage(target_user, size_mb)
-
-    new_total = old_total + size_mb
     new_available = new_total - old_used
 
     await update.message.reply_text(
@@ -620,8 +626,10 @@ async def cmd_channel_blacklist(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("📭 بلک‌لیست کانال خالی است.")
             return
         lines = ["🚫 **کانال‌های بلک‌لیست:**\n"]
-        for r in rows:
+        for r in rows[:80]:
             lines.append(f"• `{r['display_name']}` (`{r['channel_key']}`)")
+        if len(rows) > 80:
+            lines.append(f"\n... و {len(rows) - 80} مورد دیگر")
         await update.message.reply_text("\n".join(lines))
         return
 

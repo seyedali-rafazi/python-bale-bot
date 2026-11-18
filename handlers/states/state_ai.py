@@ -181,6 +181,7 @@ async def handle_ai_state(
     state_data: dict,
 ):
 
+    clear_after = False
     try:
         # -------------------------------------------------
         # CHAT
@@ -227,6 +228,7 @@ async def handle_ai_state(
                     ),
                     name=f"ai_chat_{chat_id}",
                 )
+                clear_after = True
             except Exception:
                 _ai_chat_in_flight = max(0, _ai_chat_in_flight - 1)
                 raise
@@ -249,6 +251,7 @@ async def handle_ai_state(
                 ),
                 name=f"ai_tts_{chat_id}",
             )
+            clear_after = True
 
             return
 
@@ -268,6 +271,7 @@ async def handle_ai_state(
                 ),
                 name=f"ai_image_{chat_id}",
             )
+            clear_after = True
 
             return
 
@@ -275,9 +279,11 @@ async def handle_ai_state(
         logger.exception("handle_ai_state failed")
 
         await update.message.reply_text("❌ خطای سیستمی")
+        clear_after = True
 
     finally:
-        set_state(chat_id, "")
+        if clear_after:
+            set_state(chat_id, "")
 
 
 # =========================================================
@@ -307,12 +313,10 @@ async def handle_ai_photo(
 
         file = await context.bot.get_file(file_id)
 
-        image_byte_array = await file.download_as_bytearray()
-
-        image_bytes = bytes(image_byte_array)
+        image_bytes = bytes(await asyncio.wait_for(file.download_as_bytearray(), timeout=30.0))
 
         async with ai_media_semaphore:
-            extracted_text = await perform_ocr(image_bytes)
+            extracted_text = await asyncio.wait_for(perform_ocr(image_bytes), timeout=35.0)
 
         await msg.edit_text(f"✅ متن استخراج شده:\n\n{extracted_text}")
         await log_upload_success("ai_chat", chat_id)

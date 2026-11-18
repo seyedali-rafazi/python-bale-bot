@@ -8,6 +8,7 @@ automatic reconnection, health checks, and transparent fallback if Redis is unav
 import os
 import json
 import logging
+import threading
 from typing import Any, Optional
 from dotenv import load_dotenv
 
@@ -20,6 +21,7 @@ REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").strip().lower() in ("true", "
 
 _async_redis_client = None
 _sync_redis_client = None
+_sync_redis_lock = threading.Lock()
 _redis_available = False
 _warned_once = False
 
@@ -73,25 +75,28 @@ def get_sync_redis():
     if _sync_redis_client is not None:
         return _sync_redis_client
 
-    try:
-        import redis
+    with _sync_redis_lock:
+        if _sync_redis_client is not None:
+            return _sync_redis_client
+        try:
+            import redis
 
-        _sync_redis_client = redis.Redis.from_url(
-            REDIS_URL,
-            decode_responses=True,
-            socket_timeout=2.0,
-            socket_connect_timeout=2.0,
-            retry_on_timeout=True,
-        )
-        _sync_redis_client.ping()
-        _redis_available = True
-        return _sync_redis_client
-    except Exception as e:
-        if not _warned_once:
-            logger.warning("⚠️ Sync Redis connection failed (%s). Falling back to in-memory.", e)
-            _warned_once = True
-        _sync_redis_client = None
-        return None
+            _sync_redis_client = redis.Redis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_timeout=2.0,
+                socket_connect_timeout=2.0,
+                retry_on_timeout=True,
+            )
+            _sync_redis_client.ping()
+            _redis_available = True
+            return _sync_redis_client
+        except Exception as e:
+            if not _warned_once:
+                logger.warning("⚠️ Sync Redis connection failed (%s). Falling back to in-memory.", e)
+                _warned_once = True
+            _sync_redis_client = None
+            return None
 
 
 def get_async_redis():

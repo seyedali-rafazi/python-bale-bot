@@ -12,6 +12,7 @@ FREE_LIMITS = {
     "yt_archive": 2,
     "ai_chat": 2,
     "telegram_download": 1,
+    "kaggle_download": 1,
 }
 
 VIP_LIMITS = {
@@ -26,9 +27,12 @@ VIP_LIMITS = {
     "yt_archive": 20,
     "ai_chat": 20,
     "telegram_download": 10,
+    "kaggle_download": 5,
 }
 
 
 def get_limit(key: str, is_vip: int) -> int:
     limits = VIP_LIMITS if is_vip == 1 else FREE_LIMITS
+    if key not in limits:
+        raise KeyError(f"Unknown limit key: {key!r}")
     return limits[key]

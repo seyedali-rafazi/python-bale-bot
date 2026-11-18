@@ -64,6 +64,9 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_id_desc ON youtube_cache(id DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
     ON youtube_cache(channel_name, uploaded_at DESC, id DESC)
     WHERE file_ids IS NOT NULL AND file_ids != '[]';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_group_has_files
+    ON youtube_cache(channel_name, (COALESCE(NULLIF(TRIM(yt_video_id), ''), substr(video_id, 1, 11))))
+    WHERE file_ids IS NOT NULL AND file_ids != '[]';
 
 -- 3. جدول اکسپلور اینستاگرام
 CREATE TABLE IF NOT EXISTS instagram_explore (
@@ -98,6 +101,7 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     upload_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_files_user_date ON cloud_files(user_id, upload_date DESC);
 
 -- 7. جدول آمار استفاده
 CREATE TABLE IF NOT EXISTS usage_stats (
@@ -107,6 +111,7 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     count INTEGER DEFAULT 1,
     PRIMARY KEY (user_id, action, date)
 );
+CREATE INDEX IF NOT EXISTS idx_usage_stats_action_date ON usage_stats(action, date);
 
 -- 8. جدول مانیتورینگ ایونت‌ها
 CREATE TABLE IF NOT EXISTS monitoring_events (

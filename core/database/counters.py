@@ -3,7 +3,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
+from services.rate_limiter import (
+    delete_cached_daily_usage,
+    get_cached_daily_usage,
+    set_cached_daily_usage,
+)
 from .connection import get_db
+from .monitoring import log_upload_success
 
 _ALLOWED_COUNTER_COLUMNS = frozenset(
     {
@@ -39,8 +47,6 @@ async def get_period_usage(
     uid = str(user_id)
 
     if cache_service:
-        from services.rate_limiter import get_cached_daily_usage, set_cached_daily_usage
-
         cached = await get_cached_daily_usage(cache_service, uid, period_key)
         if cached is not None:
             return cached
@@ -55,8 +61,6 @@ async def get_period_usage(
         actual = int(row[count_col] or 0)
 
     if cache_service:
-        from services.rate_limiter import set_cached_daily_usage
-
         await set_cached_daily_usage(cache_service, uid, period_key, actual)
     return actual
 
@@ -92,15 +96,13 @@ async def increment_period_usage(
     )
     new_count = int(new_count or 1)
 
+    post_tasks = []
     if cache_service:
-        from services.rate_limiter import set_cached_daily_usage
-
-        await set_cached_daily_usage(cache_service, uid, period_key, new_count)
-
+        post_tasks.append(set_cached_daily_usage(cache_service, uid, period_key, new_count))
     if monitor_section:
-        from .monitoring import log_upload_success
-
-        await log_upload_success(monitor_section, uid)
+        post_tasks.append(log_upload_success(monitor_section, uid))
+    if post_tasks:
+        await asyncio.gather(*post_tasks)
 
     return new_count
 
@@ -129,6 +131,4 @@ async def decrement_period_usage(
     )
 
     if cache_service:
-        from services.rate_limiter import invalidate_cached_usage
-
-        await invalidate_cached_usage(uid, cache_service)
+        await delete_cached_daily_usage(cache_service, uid, period_key)

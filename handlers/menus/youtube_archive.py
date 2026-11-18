@@ -203,33 +203,37 @@ async def btn_yt_my_cache_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _send_archive_overview(update, context)
 
 
-async def btn_yt_cache_search_title_req(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
+async def _prompt_archive_search(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    step: str,
+    prompt_text: str,
 ):
     if not await ensure_membership(update, context):
         return
     chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_yt_archive_search_title")
+    set_state(chat_id, step)
     await update.message.reply_text(
-        "عنوان یا بخشی از موضوع ویدیو را بنویسید:",
+        prompt_text,
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
         ),
     )
 
 
+async def btn_yt_cache_search_title_req(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    await _prompt_archive_search(
+        update, context, "waiting_yt_archive_search_title", "عنوان یا بخشی از موضوع ویدیو را بنویسید:"
+    )
+
+
 async def btn_yt_cache_search_channel_req(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
-    if not await ensure_membership(update, context):
-        return
-    chat_id = str(update.effective_chat.id)
-    set_state(chat_id, "waiting_yt_archive_search_channel")
-    await update.message.reply_text(
-        "نام کانال یا بخشی از آن را بنویسید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+    await _prompt_archive_search(
+        update, context, "waiting_yt_archive_search_channel", "نام کانال یا بخشی از آن را بنویسید:"
     )
 
 
@@ -390,51 +394,16 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
 
-async def _send_archive_video(
-    update: Update,
+async def _deliver_archive_video_bg(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: str,
-    archive_id: int,
+    vip,
+    video_id: str,
+    file_ids: list,
+    fmt: str,
 ):
-    query = update.callback_query
-    entry = await get_archive_entry(archive_id)
-    if not entry:
-        if query:
-            await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
-        return
-
-    if await is_channel_blacklisted(_row_str(entry, "channel_name")):
-        await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
-        return
-    if await is_search_query_blocked(_row_str(entry, "title")):
-        await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
-        return
-
-    vip = await is_vip(user_id)
-    allowed, used, limit = await can_user_fetch_from_archive(
-        user_id, is_vip_status=vip
-    )
-    if not allowed:
-        period = archive_limit_period_label(vip)
-        await query.answer(
-            f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
-            show_alert=True,
-        )
-        return
-
-    try:
-        file_ids = json.loads(entry["file_ids"] or "[]")
-    except (json.JSONDecodeError, TypeError):
-        await query.answer("فایل کش خراب است.", show_alert=True)
-        return
-    if not file_ids:
-        await query.answer("فایل کش خالی است.", show_alert=True)
-        return
-
-    await query.answer("در حال ارسال...")
     from handlers.states.youtube.helpers import send_cached_files
 
-    fmt = entry["format_type"] or "video_zip"
     try:
         await send_cached_files(context, user_id, file_ids, fmt)
     except Exception as e:
@@ -445,7 +414,66 @@ async def _send_archive_video(
         )
         return
     await increment_archive_fetch(user_id, is_vip_status=vip)
-    await increment_yt_video_view(entry["video_id"])
+    await increment_yt_video_view(video_id)
+
+
+async def _send_archive_video(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: str,
+    archive_id: int,
+):
+    from services.rate_limiter import user_action_lock
+
+    query = update.callback_query
+    async with user_action_lock(user_id, "yt_archive", timeout_sec=15) as acquired:
+        if not acquired:
+            if query:
+                await query.answer("⏳ درخواست قبلی شما در حال ارسال است.", show_alert=True)
+            return
+
+        entry = await get_archive_entry(archive_id)
+        if not entry:
+            if query:
+                await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
+            return
+
+        if await is_channel_blacklisted(_row_str(entry, "channel_name")):
+            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+            return
+        if await is_search_query_blocked(_row_str(entry, "title")):
+            await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
+            return
+
+        vip = await is_vip(user_id)
+        allowed, used, limit = await can_user_fetch_from_archive(
+            user_id, is_vip_status=vip
+        )
+        if not allowed:
+            period = archive_limit_period_label(vip)
+            await query.answer(
+                f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
+                show_alert=True,
+            )
+            return
+
+        try:
+            file_ids = json.loads(entry["file_ids"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            await query.answer("فایل کش خراب است.", show_alert=True)
+            return
+        if not file_ids:
+            await query.answer("فایل کش خالی است.", show_alert=True)
+            return
+
+        await query.answer("در حال ارسال...")
+        fmt = entry["format_type"] or "video_zip"
+        track_task(
+            _deliver_archive_video_bg(
+                context, user_id, vip, entry["video_id"], file_ids, fmt
+            ),
+            name=f"yt_archive_send_{user_id}",
+        )
 
 
 _backfill_inflight = StateCache(max_capacity=500, default_ttl=600.0)

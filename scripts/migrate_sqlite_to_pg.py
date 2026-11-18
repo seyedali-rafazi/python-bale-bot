@@ -261,7 +261,7 @@ async def migrate_table(
         async with pg_conn.transaction():
             # در SQLite ممکن است foreign_keys خاموش بوده باشد و cloud_files رکورد بی‌سرپرست داشته باشد
             if tbl_name == "cloud_files":
-                orphan_uids = [(str(r[1]),) for r in rows if r[1] is not None]
+                orphan_uids = [(uid,) for uid in {str(r[1]) for r in rows if r[1] is not None}]
                 if orphan_uids:
                     await pg_conn.executemany(
                         "INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
@@ -278,9 +278,10 @@ async def migrate_table(
         seq_query = f"""
             SELECT setval(
                 pg_get_serial_sequence('{tbl_name}', 'id'),
-                COALESCE((SELECT MAX(id) FROM {tbl_name}), 1),
-                (SELECT MAX(id) FROM {tbl_name}) IS NOT NULL
-            );
+                COALESCE(m.max_id, 1),
+                m.max_id IS NOT NULL
+            )
+            FROM (SELECT MAX(id) AS max_id FROM {tbl_name}) AS m;
         """
         try:
             await pg_conn.execute(seq_query)
@@ -318,6 +319,7 @@ async def run_migration(
         pg_conn = await asyncpg.connect(pg_dsn)
     except Exception as e:
         print(f"❌ خطا در اتصال به دیتابیس PostgreSQL: {e}")
+        sqlite_conn.close()
         return
 
     try:
