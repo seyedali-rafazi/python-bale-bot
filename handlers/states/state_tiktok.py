@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 from core.state_manager import set_state
-from core.task_utils import remove_file_async, track_task
+from core.task_utils import load_input_file, remove_file_async, track_task
 from core.constants import BTN_BACK
 from services.rate_limiter import user_action_lock
 from services.tiktok import (
@@ -90,15 +90,15 @@ async def background_tt_download(
 
         await _safe_edit_text(status_msg, "📤 ویدیو دانلود شد! در حال ارسال...")
 
-        with open(file_path, "rb") as vid:
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=vid,
-                filename=display_name,
-                caption=caption,
-                read_timeout=300,
-                write_timeout=300,
-            )
+        vid_input = await load_input_file(file_path, filename=display_name)
+        await context.bot.send_video(
+            chat_id=chat_id,
+            video=vid_input,
+            filename=display_name,
+            caption=caption,
+            read_timeout=300,
+            write_timeout=300,
+        )
 
         await increment_tt_downloads(user_id)
 

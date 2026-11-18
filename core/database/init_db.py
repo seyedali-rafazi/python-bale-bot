@@ -128,25 +128,21 @@ CREATE TABLE IF NOT EXISTS yt_blocked_words (
 
 async def _ensure_float_cloud_columns(conn) -> None:
     """Upgrade legacy INTEGER cloud size columns to DOUBLE PRECISION if needed."""
-    checks = [
-        ("users", "cloud_total_mb"),
-        ("users", "cloud_used_mb"),
-        ("cloud_files", "file_size_mb"),
-    ]
-    for table_name, col_name in checks:
-        data_type = await conn.fetchval(
-            """
-            SELECT data_type FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = $1
-              AND column_name = $2
-            """,
-            table_name,
-            col_name,
-        )
-        if data_type and data_type != "double precision":
+    rows = await conn.fetch(
+        """
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND (
+              (table_name = 'users' AND column_name IN ('cloud_total_mb', 'cloud_used_mb'))
+              OR (table_name = 'cloud_files' AND column_name = 'file_size_mb')
+          )
+        """
+    )
+    for row in rows:
+        if row["data_type"] != "double precision":
             await conn.execute(
-                f"ALTER TABLE {table_name} ALTER COLUMN {col_name} TYPE DOUBLE PRECISION"
+                f"ALTER TABLE {row['table_name']} ALTER COLUMN {row['column_name']} TYPE DOUBLE PRECISION"
             )
 
 

@@ -2,7 +2,7 @@
 
 import os
 import asyncio
-from core.task_utils import remove_files_async
+from core.task_utils import get_file_size_async, remove_files_async
 from core.database import (
     is_vip,
     decrement_yt_downloads,
@@ -10,14 +10,14 @@ from core.database import (
     get_cache_row_metadata,
     save_cached_video,
     increment_yt_video_view,
-    reduce_cloud_storage,
-    add_cloud_file,
+    record_cloud_upload,
+    record_cloud_uploads,
     get_available_cloud_mb,
     log_upload_failed,
 )
 from services.youtube import (
-    download_youtube_video,
-    download_youtube_audio,
+    async_download_youtube_video,
+    async_download_youtube_audio,
     split_video_if_needed,
     get_video_info_cached,
     uploaded_at_from_video_info,
@@ -311,8 +311,7 @@ async def background_yt_download(
                     raw_file = None
                     try:
                         max_size = 1 * 1024 * 1024 * 1024
-                        raw_file = await asyncio.to_thread(
-                            download_youtube_video,
+                        raw_file = await async_download_youtube_video(
                             url,
                             quality,
                             progress_dict,
@@ -429,7 +428,8 @@ async def background_yt_download(
                                 )
 
                                 s3_links = []
-                                total_size_mb = 0
+                                cloud_records: list[tuple[str, float, str]] = []
+                                total_size_mb = 0.0
 
                                 for file_path in result:
                                     s3_url = await asyncio.to_thread(
@@ -441,21 +441,18 @@ async def background_yt_download(
 
                                     if s3_url:
                                         file_size_mb = round(
-                                            os.path.getsize(file_path) / (1024 * 1024),
+                                            (await get_file_size_async(file_path)) / (1024 * 1024),
                                             2,
                                         )
                                         file_name = os.path.basename(file_path)
                                         total_size_mb += file_size_mb
-
-                                        await add_cloud_file(
-                                            chat_id, file_name, file_size_mb, s3_url
-                                        )
+                                        cloud_records.append((file_name, file_size_mb, s3_url))
                                         s3_links.append(s3_url)
 
                                 progress_dict["is_finished"] = True
 
                                 if s3_links:
-                                    await reduce_cloud_storage(chat_id, total_size_mb)
+                                    await record_cloud_uploads(chat_id, cloud_records)
 
                                     links_text = "\n\n".join(
                                         [
@@ -553,8 +550,7 @@ async def background_yt_download(
 
                     try:
                         max_size = 1 * 1024 * 1024 * 1024
-                        file_path = await asyncio.to_thread(
-                            download_youtube_audio,
+                        file_path = await async_download_youtube_audio(
                             url,
                             max_size,
                         )
@@ -638,14 +634,13 @@ async def background_yt_download(
 
                                 if s3_url:
                                     audio_size_mb = round(
-                                        os.path.getsize(file_path) / (1024 * 1024), 2
+                                        (await get_file_size_async(file_path)) / (1024 * 1024), 2
                                     )
                                     file_name = os.path.basename(file_path)
 
-                                    await add_cloud_file(
+                                    await record_cloud_upload(
                                         chat_id, file_name, audio_size_mb, s3_url
                                     )
-                                    await reduce_cloud_storage(chat_id, audio_size_mb)
 
                                     await context.bot.send_message(
                                         chat_id=chat_id,

@@ -16,7 +16,7 @@ import asyncio
 from core.state_manager import StateCache, get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.database import log_upload_success
-from core.task_utils import remove_file_async, remove_files_async, track_task
+from core.task_utils import load_input_file, remove_file_async, remove_files_async, track_task
 import time
 
 # Try to import rembg, but make it optional
@@ -90,12 +90,13 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
             pdf_path = await create_pdf_from_images(pending_images, chat_id)
 
             # Send PDF to user
-            with open(pdf_path, "rb") as pdf_file:
-                await update.message.reply_document(
-                    document=pdf_file,
-                    filename=f"images_{chat_id}.pdf",
-                    caption="✅ PDF شما آماده است!",
-                )
+            pdf_name = f"images_{chat_id}.pdf"
+            pdf_input = await load_input_file(pdf_path, filename=pdf_name)
+            await update.message.reply_document(
+                document=pdf_input,
+                filename=pdf_name,
+                caption="✅ PDF شما آماده است!",
+            )
             await log_upload_success("image_processing", chat_id)
 
             clear_state(chat_id)
@@ -164,12 +165,13 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                 )
 
                 # Send converted image
-                with open(converted_path, "rb") as img_file:
-                    await update.message.reply_document(
-                        document=img_file,
-                        filename=f"converted.{format_text.lower()}",
-                        caption=f"✅ عکس به فرمت {format_text} تبدیل شد!",
-                    )
+                conv_name = f"converted.{format_text.lower()}"
+                conv_input = await load_input_file(converted_path, filename=conv_name)
+                await update.message.reply_document(
+                    document=conv_input,
+                    filename=conv_name,
+                    caption=f"✅ عکس به فرمت {format_text} تبدیل شد!",
+                )
                 await log_upload_success("image_processing", chat_id)
 
                 clear_state(chat_id)
@@ -240,12 +242,12 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resized_path = await resize_image(raw_img, size_text, chat_id)
 
             # Send resized image
-            with open(resized_path, "rb") as img_file:
-                await update.message.reply_document(
-                    document=img_file,
-                    filename="resized.png",
-                    caption="✅ اندازه عکس تغییر کرد!",
-                )
+            resized_input = await load_input_file(resized_path, filename="resized.png")
+            await update.message.reply_document(
+                document=resized_input,
+                filename="resized.png",
+                caption="✅ اندازه عکس تغییر کرد!",
+            )
             await log_upload_success("image_processing", chat_id)
 
             _resize_images_cache.pop(chat_id, None)
@@ -336,12 +338,12 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
             output_path = await remove_background(input_path, chat_id)
 
             # Send result
-            with open(output_path, "rb") as img_file:
-                await update.message.reply_document(
-                    document=img_file,
-                    filename="no_background.png",
-                    caption="✅ پس‌زمینه عکس حذف شد!",
-                )
+            nobg_input = await load_input_file(output_path, filename="no_background.png")
+            await update.message.reply_document(
+                document=nobg_input,
+                filename="no_background.png",
+                caption="✅ پس‌زمینه عکس حذف شد!",
+            )
             await log_upload_success("image_processing", chat_id)
 
             clear_state(chat_id)
@@ -518,9 +520,9 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
     # Clear user state immediately so they are free to use the bot
     clear_state(chat_id)
 
-    timestamp = int(time.time())
+    req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
     await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
-    temp_video_path = f"downloads/temp_video_{chat_id}_{timestamp}"
+    temp_video_path = f"downloads/temp_video_{chat_id}_{req_uid}"
     
     ext = ".mp4"
     if hasattr(video_file, "file_name") and video_file.file_name:
@@ -536,7 +538,7 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
             chat_id,
             video_file,
             status_msg,
-            timestamp,
+            req_uid,
             temp_video_path,
             in_queue
         ),
@@ -549,7 +551,7 @@ async def background_video_to_gif(
     chat_id: str,
     video_file,
     status_msg,
-    timestamp: int,
+    timestamp,
     temp_video_path: str,
     in_queue: bool,
 ):
@@ -570,15 +572,16 @@ async def background_video_to_gif(
             is_video_note = hasattr(video_file, "length") and video_file.length is not None
             gif_path = await convert_video_to_gif(temp_video_path, chat_id, timestamp, is_video_note)
 
-            if gif_path and os.path.exists(gif_path):
+            if gif_path and await asyncio.to_thread(os.path.exists, gif_path):
                 await status_msg.edit_text("📤 تبدیل با موفقیت انجام شد! در حال ارسال...")
-                with open(gif_path, "rb") as gif_file:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=gif_file,
-                        filename=f"video_{timestamp}.gif",
-                        caption="✅ ویدیوی شما به GIF تبدیل شد!",
-                    )
+                gif_name = f"video_{timestamp}.gif"
+                gif_input = await load_input_file(gif_path, filename=gif_name)
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=gif_input,
+                    filename=gif_name,
+                    caption="✅ ویدیوی شما به GIF تبدیل شد!",
+                )
                 
                 await log_upload_success("image_processing", chat_id)
                 
@@ -699,9 +702,9 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
     # Clear user state immediately so they are free to use the bot
     clear_state(chat_id)
 
-    timestamp = int(time.time())
+    req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
     await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
-    temp_media_path = f"downloads/temp_media_{chat_id}_{timestamp}"
+    temp_media_path = f"downloads/temp_media_{chat_id}_{req_uid}"
     
     ext = ".mp4"
     if hasattr(video_file, "file_name") and video_file.file_name:
@@ -717,7 +720,7 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
             chat_id,
             video_file,
             status_msg,
-            timestamp,
+            req_uid,
             temp_media_path,
             in_queue
         ),
@@ -730,7 +733,7 @@ async def background_extract_audio(
     chat_id: str,
     video_file,
     status_msg,
-    timestamp: int,
+    timestamp,
     temp_media_path: str,
     in_queue: bool,
 ):
@@ -749,17 +752,18 @@ async def background_extract_audio(
 
             mp3_path = await extract_audio_from_video(temp_media_path, chat_id, timestamp)
 
-            if mp3_path and os.path.exists(mp3_path):
+            if mp3_path and await asyncio.to_thread(os.path.exists, mp3_path):
                 await status_msg.edit_text("📤 استخراج صوتی تکمیل شد! در حال ارسال...")
-                with open(mp3_path, "rb") as mp3_file:
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=mp3_file,
-                        filename=f"audio_{timestamp}.mp3",
-                        title="استخراج شده از ویدیو",
-                        performer="ربات پردازش رسانه",
-                        caption="✅ صدای استخراج شده با موفقیت آماده شد!",
-                    )
+                mp3_name = f"audio_{timestamp}.mp3"
+                mp3_input = await load_input_file(mp3_path, filename=mp3_name)
+                await context.bot.send_audio(
+                    chat_id=chat_id,
+                    audio=mp3_input,
+                    filename=mp3_name,
+                    title="استخراج شده از ویدیو",
+                    performer="ربات پردازش رسانه",
+                    caption="✅ صدای استخراج شده با موفقیت آماده شد!",
+                )
                 
                 await log_upload_success("image_processing", chat_id)
                 

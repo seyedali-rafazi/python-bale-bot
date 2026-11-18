@@ -10,8 +10,7 @@ from core.state_manager import set_state, clear_state
 from core.task_utils import async_temp_dir
 from core.database import (
     get_available_cloud_mb,
-    reduce_cloud_storage,
-    add_cloud_file,
+    record_cloud_upload,
     get_cloud_usage_stats,
     log_upload_success,
 )
@@ -133,9 +132,8 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
             )
 
         if download_link:
-            # Save to database
-            await reduce_cloud_storage(user_id, file_size_mb)
-            await add_cloud_file(user_id, safe_name, file_size_mb, download_link)
+            # Save to database atomically
+            await record_cloud_upload(user_id, safe_name, file_size_mb, download_link)
 
             # Get updated cloud stats
             cloud_stats = await get_cloud_usage_stats(user_id)

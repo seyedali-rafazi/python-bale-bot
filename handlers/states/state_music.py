@@ -13,14 +13,13 @@ from core.database import (
     get_music_downloads,
     increment_music_downloads,
     get_available_cloud_mb,
-    reduce_cloud_storage,
-    add_cloud_file,
+    record_cloud_upload,
     log_upload_success,
     log_upload_failed,
 )
 from core.state_manager import StateCache
 from core.limits import get_limit
-from core.task_utils import remove_file_async, track_task
+from core.task_utils import get_file_size_async, load_input_file, remove_file_async, track_task
 from services.rate_limiter import user_action_lock
 from services.music import (
     async_search_track,
@@ -42,7 +41,7 @@ from services.music_identify import (
     async_probe_media_duration_sec,
     recognize_music_from_file,
 )
-from services.youtube import download_youtube_audio
+from services.youtube import async_download_youtube_audio
 
 try:
     from services.parspack_s3 import upload_to_s3
@@ -83,10 +82,10 @@ async def background_download_task(
             except BadRequest:
                 pass
 
-            # دانلود در ترد جداگانه
-            file_path = await asyncio.to_thread(download_youtube_audio, track_id)
+            # دانلود ناهمگام بدون اشغال ThreadPool
+            file_path = await async_download_youtube_audio(track_id)
 
-        if file_path and os.path.exists(file_path):
+        if file_path and await asyncio.to_thread(os.path.exists, file_path):
                 # =====================================
                 # چک فضای ابری برای آپلود به سرور
                 # =====================================
@@ -95,7 +94,7 @@ async def background_download_task(
                     if user_storage_mb is None or user_storage_mb <= 0:
                         user_storage_mb = 0
 
-                    file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+                    file_size_mb = round((await get_file_size_async(file_path)) / (1024 * 1024), 2)
 
                     if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
                         await context.bot.send_message(
@@ -135,12 +134,11 @@ async def background_download_task(
 
                     if s3_url:
                         file_size_mb = round(
-                            os.path.getsize(file_path) / (1024 * 1024), 2
+                            (await get_file_size_async(file_path)) / (1024 * 1024), 2
                         )
                         file_name = os.path.basename(file_path)
 
-                        await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
-                        await reduce_cloud_storage(chat_id, file_size_mb)
+                        await record_cloud_upload(chat_id, file_name, file_size_mb, s3_url)
 
                         await context.bot.send_message(
                             chat_id=chat_id,
@@ -163,10 +161,12 @@ async def background_download_task(
                 # آپلود به بله
                 # ========================
                 else:
-                    # ارسال فایل به صورت مستقیم بدون with open (ارسال ناهمگام و بدون فریز)
+                    audio_input = await load_input_file(
+                        file_path, filename=f"{safe_filename}.mp3"
+                    )
                     await context.bot.send_audio(
                         chat_id=chat_id,
-                        audio=file_path,
+                        audio=audio_input,
                         title=title,
                         performer=performer,
                         filename=f"{safe_filename}.mp3",

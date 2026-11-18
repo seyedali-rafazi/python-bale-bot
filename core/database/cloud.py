@@ -77,6 +77,54 @@ async def add_cloud_file(
     )
 
 
+async def record_cloud_uploads(
+    user_id,
+    files: list[tuple[str, float, str]],
+) -> float:
+    """
+    Atomically insert one or more cloud_files rows and increment cloud_used_mb
+    inside a single PostgreSQL transaction.
+    Returns total size added in MB.
+    """
+    if not files:
+        return 0.0
+    uid = str(user_id)
+    upload_date = get_tehran_now_full()
+    total_mb = sum(float(size_mb) for _, size_mb, _ in files)
+    records = [
+        (uid, file_name, float(size_mb), download_link, upload_date)
+        for file_name, size_mb, download_link in files
+    ]
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                """
+                INSERT INTO cloud_files (user_id, file_name, file_size_mb, download_link, upload_date)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                records,
+            )
+            await conn.execute(
+                "UPDATE users SET cloud_used_mb = COALESCE(cloud_used_mb, 0) + $1 WHERE user_id = $2",
+                total_mb,
+                uid,
+            )
+    return total_mb
+
+
+async def record_cloud_upload(
+    user_id,
+    file_name: str,
+    file_size_mb: float,
+    download_link: str,
+) -> float:
+    """Atomically record a single cloud upload and deduct storage quota."""
+    return await record_cloud_uploads(
+        user_id, [(file_name, float(file_size_mb), download_link)]
+    )
+
+
 async def get_user_cloud_files(user_id):
     """Get all files uploaded by user to cloud."""
     uid = str(user_id)

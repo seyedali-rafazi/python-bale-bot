@@ -8,10 +8,12 @@ import logging
 import urllib.parse
 import html
 import re
+import threading
 import time
 from dotenv import load_dotenv
 
 from core.task_utils import remove_file_async, stream_aiohttp_to_file
+from services.cache_service import cache_get, cache_set
 from services.http_client import get_http_session
 from services.flaresolverr import flaresolverr_request
 from services.youtube import get_ytdlp_executable
@@ -116,7 +118,7 @@ async def _download_stream_to_file(
                 return False
 
             downloaded = await stream_aiohttp_to_file(
-                resp, output_path, chunk_size=64 * 1024
+                resp, output_path, chunk_size=512 * 1024
             )
 
         if downloaded > 1024:
@@ -233,6 +235,27 @@ def _parse_ajax_downloader_links(html_fragment: str) -> list[str]:
     return list(dict.fromkeys(hd_links + sd_links))
 
 
+_primp_clients: dict[str | None, object] = {}
+_primp_lock = threading.Lock()
+
+
+def _get_primp_client(primp_mod, proxy: str | None = None):
+    valid_proxy = (
+        proxy
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://"))
+        else None
+    )
+    with _primp_lock:
+        client = _primp_clients.get(valid_proxy)
+        if client is None:
+            client_kwargs = {"impersonate": "chrome_145"}
+            if valid_proxy:
+                client_kwargs["proxy"] = valid_proxy
+            client = primp_mod.Client(**client_kwargs)
+            _primp_clients[valid_proxy] = client
+        return client
+
+
 async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> list[tuple[str, str]]:
     """Query SaveTik and TikVid via primp TLS impersonation to extract direct MP4 URLs."""
     try:
@@ -247,10 +270,7 @@ async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> lis
     ]
 
     def _query_sync() -> list[tuple[str, str]]:
-        client_kwargs = {"impersonate": "chrome_145"}
-        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
-            client_kwargs["proxy"] = proxy
-        client = primp.Client(**client_kwargs)
+        client = _get_primp_client(primp, proxy)
 
         collected: list[tuple[str, str]] = []
         for endpoint, referer in providers:
@@ -439,9 +459,17 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
     جستجوی ویدیو در تیک‌تاک با انکودینگ کامل، تست مستقیم POST/GET
     و بای‌پاس کلادفلر (Cloudflare 403) با استفاده از FlareSolverr.
     """
+    import hashlib
+
     clean_query = query.strip()
     if not clean_query:
         return []
+
+    q_hash = hashlib.md5(f"{clean_query.lower()}:{max_results}".encode("utf-8")).hexdigest()[:16]
+    cache_key = f"tiktok:search:{q_hash}"
+    cached = await cache_get(cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
 
     results = []
     cf_blocked = False
@@ -475,6 +503,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
+                                await cache_set(cache_key, results, ttl_sec=180)
                                 return results
                     elif response.status == 403:
                         cf_blocked = True
@@ -497,6 +526,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                             results = _parse_tikwm_search_response(data, max_results)
                             if results:
                                 logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
+                                await cache_set(cache_key, results, ttl_sec=180)
                                 return results
                     elif response.status == 403:
                         cf_blocked = True
@@ -538,6 +568,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
                 results = _parse_tikwm_search_response(data, max_results)
                 if results:
                     logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
+                    await cache_set(cache_key, results, ttl_sec=180)
                     return results
             else:
                 logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
@@ -614,7 +645,12 @@ def _parse_tikwm_search_response(data: dict, max_results: int) -> list:
 
 
 async def get_tiktok_trends(count: int = 10):
-    """گرفتن ویدیوهای ترند تیک‌تاک با پشتیبانی بای‌پاس کلادفلر FlareSolverr"""
+    """گرفتن ویدیوهای ترند تیک‌تاک با پشتیبانی بای‌پاس کلادفلر FlareSolverr و کش کوتاه‌مدت"""
+    cache_key = f"tiktok:trends:{count}"
+    cached = await cache_get(cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
+
     results = []
     cf_blocked = False
     session = await get_http_session()
@@ -668,6 +704,7 @@ async def get_tiktok_trends(count: int = 10):
                                     break
 
                             if results:
+                                await cache_set(cache_key, results, ttl_sec=300)
                                 return results
                     elif response.status == 403:
                         cf_blocked = True
@@ -716,6 +753,7 @@ async def get_tiktok_trends(count: int = 10):
                         break
 
                 if results:
+                    await cache_set(cache_key, results, ttl_sec=300)
                     return results
 
     return results

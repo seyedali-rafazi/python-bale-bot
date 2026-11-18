@@ -3,6 +3,7 @@ import re
 import os
 import logging
 from core.database import is_vip, get_yt_downloads, save_cached_video
+from core.task_utils import load_input_file
 from .config import STORAGE_CHANNEL_ID
 from core.limits import get_limit
 from services.zip_utils import format_merge_instructions, part_display_filename
@@ -25,9 +26,11 @@ _STORAGE_UPLOAD_TIMEOUTS = {
 
 
 async def check_user_limit(chat_id: str) -> bool:
-    vip_status = await is_vip(chat_id)
+    vip_status, usage = await asyncio.gather(
+        is_vip(chat_id),
+        get_yt_downloads(chat_id),
+    )
     limit = get_limit("youtube_download", vip_status)
-    usage = await get_yt_downloads(chat_id)
     return usage < limit
 
 
@@ -153,15 +156,16 @@ async def send_document_once(context, chat_id: str, file_id: str) -> bool:
 async def upload_document_to_storage_once(
     context, file_path: str, caption: str, filename: str | None = None
 ):
+    doc_file = await load_input_file(file_path, filename=filename)
+
     async def _upload():
-        with open(file_path, "rb") as doc:
-            channel_msg = await context.bot.send_document(
-                chat_id=STORAGE_CHANNEL_ID,
-                document=doc,
-                filename=filename,
-                caption=caption,
-                **_STORAGE_UPLOAD_TIMEOUTS,
-            )
+        channel_msg = await context.bot.send_document(
+            chat_id=STORAGE_CHANNEL_ID,
+            document=doc_file,
+            filename=filename,
+            caption=caption,
+            **_STORAGE_UPLOAD_TIMEOUTS,
+        )
         return channel_msg.document.file_id
 
     return await run_storage_upload(
@@ -312,17 +316,17 @@ async def process_and_send_mp4_videos_no_cache(
         )
         caption = f"{label or f'Video ID: {video_id}'} | {display_name}"
         try:
-            with open(file_path, "rb") as vid:
-                await context.bot.send_video(
-                    chat_id=chat_id,
-                    video=vid,
-                    caption=caption,
-                    filename=display_name,
-                    read_timeout=180,
-                    write_timeout=180,
-                    connect_timeout=30,
-                    pool_timeout=30,
-                )
+            vid_file = await load_input_file(file_path, filename=display_name)
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=vid_file,
+                caption=caption,
+                filename=display_name,
+                read_timeout=180,
+                write_timeout=180,
+                connect_timeout=30,
+                pool_timeout=30,
+            )
         except Exception as e:
             logger.exception("MP4 video part %s send failed", idx)
             await context.bot.send_message(
@@ -344,30 +348,32 @@ process_and_send_mp4_documents_no_cache = process_and_send_mp4_videos_no_cache
 
 
 async def upload_video_to_storage_once(context, file_path: str, caption: str):
+    vid_file = await load_input_file(file_path)
+
     async def _upload():
-        with open(file_path, "rb") as vid:
-            channel_msg = await context.bot.send_video(
-                chat_id=STORAGE_CHANNEL_ID,
-                video=vid,
-                caption=caption,
-                **_STORAGE_UPLOAD_TIMEOUTS,
-            )
+        channel_msg = await context.bot.send_video(
+            chat_id=STORAGE_CHANNEL_ID,
+            video=vid_file,
+            caption=caption,
+            **_STORAGE_UPLOAD_TIMEOUTS,
+        )
         return channel_msg.video.file_id
 
     return await run_storage_upload(_upload, label=f"storage video {file_path}")
 
 
 async def upload_audio_to_storage_once(context, file_path: str, caption: str):
+    aud_file = await load_input_file(file_path)
+
     async def _upload():
-        with open(file_path, "rb") as aud:
-            channel_msg = await context.bot.send_audio(
-                chat_id=STORAGE_CHANNEL_ID,
-                audio=aud,
-                title="صوت یوتیوب",
-                performer="ربات دانلودر",
-                caption=caption,
-                **_STORAGE_UPLOAD_TIMEOUTS,
-            )
+        channel_msg = await context.bot.send_audio(
+            chat_id=STORAGE_CHANNEL_ID,
+            audio=aud_file,
+            title="صوت یوتیوب",
+            performer="ربات دانلودر",
+            caption=caption,
+            **_STORAGE_UPLOAD_TIMEOUTS,
+        )
         return channel_msg.audio.file_id
 
     return await run_storage_upload(_upload, label=f"storage audio {file_path}")

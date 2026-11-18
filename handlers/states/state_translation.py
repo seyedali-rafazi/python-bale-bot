@@ -3,7 +3,7 @@
 import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
-from services.translator import translate_text
+from services.translator import async_translate_text
 from core.state_manager import clear_state  # فرض بر اینکه این تابع را دارید
 from core.database import log_upload_success
 
@@ -31,8 +31,7 @@ async def handle_translation_state(
         wait_msg = await update.message.reply_text("⏳ در حال ترجمه...")
 
         async with TRANSLATION_SEMAPHORE:
-            # فراخوانی سرویس ترجمه در ترد جداگانه تا ربات هنگ نکند
-            result = await asyncio.to_thread(translate_text, source, target, text)
+            result = await async_translate_text(source, target, text)
 
         # ویرایش پیام انتظار به جای ارسال یک پیام جدید (UX بهتر)
         await wait_msg.edit_text(

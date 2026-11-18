@@ -8,7 +8,9 @@ from core.state_manager import set_state
 from core.constants import BTN_BACK
 from core.keyboards import get_youtube_menu_keyboard
 from core.database import get_setting, get_top_cached_videos, get_user_info
+from core.task_utils import track_task
 from handlers.ensure_membership import ensure_membership
+from services.rate_limiter import user_action_lock
 
 
 async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -92,6 +94,52 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def _send_top_videos_task(context: ContextTypes.DEFAULT_TYPE, chat_id, top_videos) -> None:
+    async with user_action_lock(str(chat_id), "yt_top_videos", timeout_sec=60) as acquired:
+        if not acquired:
+            return
+        for index, video in enumerate(top_videos):
+            try:
+                file_ids = json.loads(video["file_ids"])
+                views = video["view_count"]
+                video_id = video["video_id"]
+
+                if file_ids:
+                    total_parts = len(file_ids)
+
+                    for part_index, file_id in enumerate(file_ids):
+                        if total_parts > 1:
+                            caption = (
+                                f"🏅 رتبه: {index + 1} (پارت {part_index + 1} از {total_parts})\n"
+                                f"👁 بازدید: {views}\n"
+                                f"🔗 آیدی ویدیو: {video_id}"
+                            )
+                        else:
+                            caption = (
+                                f"🏅 رتبه: {index + 1}\n"
+                                f"👁 بازدید: {views}\n"
+                                f"🔗 آیدی ویدیو: {video_id}"
+                            )
+
+                        try:
+                            await context.bot.send_video(
+                                chat_id=chat_id, video=file_id, caption=caption
+                            )
+                            await asyncio.sleep(1.5)
+
+                        except RetryAfter as e:
+                            print(f"Rate limited! Sleeping for {e.retry_after} seconds...")
+                            await asyncio.sleep(e.retry_after)
+                            await context.bot.send_video(
+                                chat_id=chat_id, video=file_id, caption=caption
+                            )
+                            await asyncio.sleep(1.5)
+
+            except Exception as e:
+                print(f"Error sending top video {video.get('video_id', 'Unknown')}: {e}")
+                continue
+
+
 async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_membership(update, context):
         return
@@ -106,44 +154,7 @@ async def btn_yt_top_videos_req(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     chat_id = update.effective_chat.id
-
-    for index, video in enumerate(top_videos):
-        try:
-            file_ids = json.loads(video["file_ids"])
-            views = video["view_count"]
-            video_id = video["video_id"]
-
-            if file_ids:
-                total_parts = len(file_ids)
-
-                for part_index, file_id in enumerate(file_ids):
-                    if total_parts > 1:
-                        caption = (
-                            f"🏅 رتبه: {index + 1} (پارت {part_index + 1} از {total_parts})\n"
-                            f"👁 بازدید: {views}\n"
-                            f"🔗 آیدی ویدیو: {video_id}"
-                        )
-                    else:
-                        caption = (
-                            f"🏅 رتبه: {index + 1}\n"
-                            f"👁 بازدید: {views}\n"
-                            f"🔗 آیدی ویدیو: {video_id}"
-                        )
-
-                    try:
-                        await context.bot.send_video(
-                            chat_id=chat_id, video=file_id, caption=caption
-                        )
-                        await asyncio.sleep(1.5)
-
-                    except RetryAfter as e:
-                        print(f"Rate limited! Sleeping for {e.retry_after} seconds...")
-                        await asyncio.sleep(e.retry_after)
-                        await context.bot.send_video(
-                            chat_id=chat_id, video=file_id, caption=caption
-                        )
-                        await asyncio.sleep(1.5)
-
-        except Exception as e:
-            print(f"Error sending top video {video.get('video_id', 'Unknown')}: {e}")
-            continue
+    track_task(
+        _send_top_videos_task(context, chat_id, top_videos),
+        name=f"yt_top_{chat_id}",
+    )

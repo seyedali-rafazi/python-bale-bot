@@ -108,6 +108,31 @@ async def async_temp_dir(prefix: str = "bot_tmp_") -> AsyncIterator[str]:
         await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
 
 
+async def load_input_file(file_path: str, filename: Optional[str] = None):
+    """Read a local file off the event loop and wrap it in telegram.InputFile."""
+    from telegram import InputFile
+
+    resolved_name = filename or os.path.basename(file_path)
+
+    def _read_bytes() -> bytes:
+        with open(file_path, "rb") as fh:
+            return fh.read()
+
+    data = await asyncio.to_thread(_read_bytes)
+    return InputFile(data, filename=resolved_name)
+
+
+async def get_file_size_async(path: str) -> int:
+    """Return file size in bytes off the event loop (0 if missing)."""
+    def _stat() -> int:
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    return await asyncio.to_thread(_stat)
+
+
 class FileTooLargeError(ValueError):
     """Raised when a streamed download exceeds max_bytes."""
 
@@ -119,13 +144,15 @@ async def stream_aiohttp_to_file(
     chunk_size: int = 512 * 1024,
     max_bytes: Optional[int] = None,
 ) -> int:
-    """Stream an aiohttp response body to disk without blocking the event loop."""
+    """Stream an aiohttp response body to disk with buffered writes off the event loop."""
     parent_dir = os.path.dirname(dest_path)
     if parent_dir:
         await asyncio.to_thread(os.makedirs, parent_dir, exist_ok=True)
 
+    write_threshold = max(chunk_size, 512 * 1024)
     f = await asyncio.to_thread(open, dest_path, "wb")
     downloaded = 0
+    buf = bytearray()
     try:
         async for chunk in resp.content.iter_chunked(chunk_size):
             if not chunk:
@@ -133,7 +160,15 @@ async def stream_aiohttp_to_file(
             downloaded += len(chunk)
             if max_bytes is not None and downloaded > max_bytes:
                 raise FileTooLargeError(f"Stream exceeded limit ({max_bytes} bytes)")
-            await asyncio.to_thread(f.write, chunk)
+            buf.extend(chunk)
+            if len(buf) >= write_threshold:
+                payload = bytes(buf)
+                buf.clear()
+                await asyncio.to_thread(f.write, payload)
+        if buf:
+            payload = bytes(buf)
+            buf.clear()
+            await asyncio.to_thread(f.write, payload)
         return downloaded
     except BaseException:
         await asyncio.to_thread(f.close)

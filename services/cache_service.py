@@ -5,6 +5,7 @@ Provides sub-millisecond caching using Redis with automatic JSON serialization
 and a local in-memory fallback cache when Redis is unavailable.
 """
 
+from collections import OrderedDict
 import json
 import logging
 import os
@@ -16,21 +17,20 @@ logger = logging.getLogger(__name__)
 
 MAX_LOCAL_CACHE_SIZE = max(500, int(os.getenv("MAX_LOCAL_CACHE_SIZE", "5000")))
 
-# Fallback in-memory cache: { key: (value, expire_timestamp) }
-_local_cache: dict[str, tuple[Any, float]] = {}
+# Fallback in-memory O(1) LRU+TTL cache: OrderedDict[key, (value, expire_timestamp)]
+_local_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
 
 
 def _cleanup_local_cache():
-    """Remove expired keys and enforce MAX_LOCAL_CACHE_SIZE to prevent memory leaks."""
+    """Remove expired keys and enforce MAX_LOCAL_CACHE_SIZE in O(1) LRU order."""
     now = time.time()
     expired = [k for k, (_, exp) in _local_cache.items() if exp < now]
     for k in expired:
         _local_cache.pop(k, None)
     if len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
         overflow = len(_local_cache) - MAX_LOCAL_CACHE_SIZE + max(1, MAX_LOCAL_CACHE_SIZE // 10)
-        oldest = sorted(_local_cache.keys(), key=lambda k: _local_cache[k][1])
-        for k in oldest[:overflow]:
-            _local_cache.pop(k, None)
+        for _ in range(min(overflow, len(_local_cache))):
+            _local_cache.popitem(last=False)
 
 
 async def cache_get(key: str) -> Optional[Any]:
@@ -51,6 +51,7 @@ async def cache_get(key: str) -> Optional[Any]:
     if key in _local_cache:
         val, exp = _local_cache[key]
         if exp > time.time():
+            _local_cache.move_to_end(key)
             return val
         else:
             _local_cache.pop(key, None)
@@ -63,16 +64,17 @@ async def cache_set(key: str, value: Any, ttl_sec: int = 3600) -> bool:
     redis = get_async_redis()
     if redis is not None:
         try:
-            serialized = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            serialized = json.dumps(value, ensure_ascii=False)
             await redis.set(f"bale:cache:{key}", serialized, ex=max(1, ttl_sec))
             return True
         except Exception as e:
             logger.debug("Redis cache_set error for %s: %s", key, e)
 
     # Local fallback
-    if len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
+    if key not in _local_cache and len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
         _cleanup_local_cache()
     _local_cache[key] = (value, time.time() + ttl_sec)
+    _local_cache.move_to_end(key)
     return True
 
 

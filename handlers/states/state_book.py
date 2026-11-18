@@ -21,7 +21,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import StateCache, clear_state
-from core.task_utils import async_temp_dir
+from core.task_utils import async_temp_dir, get_file_size_async, load_input_file
 from core.database import log_upload_success, log_upload_failed
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 from services.rate_limiter import user_action_lock
@@ -204,7 +204,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 return
 
             # Send the file
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            file_size_mb = (await get_file_size_async(file_path)) / (1024 * 1024)
             caption = (
                 f"📖 *{book['title']}*\n"
                 f"✍️ {book['author']}\n"
@@ -212,14 +212,15 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 f"🌐 منبع: {source_label}"
             )
             try:
-                with open(file_path, "rb") as fh:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=fh,
-                        filename=os.path.basename(file_path),
-                        caption=caption,
-                        parse_mode="Markdown",
-                    )
+                book_name = os.path.basename(file_path)
+                book_input = await load_input_file(file_path, filename=book_name)
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=book_input,
+                    filename=book_name,
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
                 await context.bot.send_message(
                     chat_id,
                     "✅ کتاب با موفقیت ارسال شد!\n"

@@ -15,8 +15,10 @@ from services import telegram_telethon
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
+from core.task_utils import track_task
 from core.database import is_vip, get_tg_downloads, increment_tg_downloads
 from core.limits import get_limit
+from services.rate_limiter import user_action_lock
 
 logger = logging.getLogger(__name__)
 
@@ -114,34 +116,13 @@ async def _send_latest_via_scrape(bot, chat_id: str, channel_id: str) -> bool:
     return any_sent
 
 
-async def handle_telegram_state(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+async def _process_telegram_request(
+    bot,
     step: str,
     text: str,
     chat_id: str,
-    state_data: dict,
-):
-    user_id = str(update.effective_user.id)
-
-    if not await check_tg_limit(update, user_id):
-        set_state(chat_id, "")
-        return
-
-    waiters = (
-        len(processing_semaphore._waiters)
-        if hasattr(processing_semaphore, "_waiters") and processing_semaphore._waiters
-        else 0
-    )
-
-    if processing_semaphore.locked():
-        await update.message.reply_text(
-            f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
-        )
-    else:
-        await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
-
-    bot = context.bot
+    user_id: str,
+) -> None:
     success = False
 
     try:
@@ -170,23 +151,27 @@ async def handle_telegram_state(
                         success = await send_parsed_message(bot, chat_id, parsed)
 
                     if not success:
-                        await update.message.reply_text(
-                            "❌ محتوایی در این لینک یافت نشد، یا فایل‌ها از وب قابل دریافت نیستند."
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ محتوایی در این لینک یافت نشد، یا فایل‌ها از وب قابل دریافت نیستند.",
                         )
 
                 except asyncio.TimeoutError:
-                    await update.message.reply_text(
-                        "❌ ارتباط با سرور زمان‌بر شد. لطفاً دوباره تلاش کنید."
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ ارتباط با سرور زمان‌بر شد. لطفاً دوباره تلاش کنید.",
                     )
                 except aiohttp.ClientError as e:
                     print(f"Network Error: {e}")
-                    await update.message.reply_text(
-                        "❌ خطا در دریافت شبکه! ممکن است لینک معتبر نباشد."
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ خطا در دریافت شبکه! ممکن است لینک معتبر نباشد.",
                     )
                 except Exception as e:
                     print(f"Telegram Scraping Error: {e}")
-                    await update.message.reply_text(
-                        "❌ خطا در دریافت! محتوا خصوصی است یا حذف شده است."
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ خطا در دریافت! محتوا خصوصی است یا حذف شده است.",
                     )
 
             elif step == "waiting_tg_latest":
@@ -210,8 +195,9 @@ async def handle_telegram_state(
                             )
                         except aiohttp.ClientError as e:
                             print(f"Network Error: {e}")
-                            await update.message.reply_text(
-                                "❌ خطا در دریافت شبکه! ممکن است آیدی معتبر نباشد."
+                            await bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ خطا در دریافت شبکه! ممکن است آیدی معتبر نباشد.",
                             )
 
                     if not success:
@@ -223,19 +209,22 @@ async def handle_telegram_state(
                             )
                         elif telethon_err:
                             hint = f"\n\n{telethon_err}"
-                        await update.message.reply_text(
-                            "❌ پیامی یافت نشد! مطمئن شوید آیدی صحیح است و کانال عمومی می‌باشد."
-                            + hint
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ پیامی یافت نشد! مطمئن شوید آیدی صحیح است و کانال عمومی می‌باشد."
+                            + hint,
                         )
 
                 except asyncio.TimeoutError:
-                    await update.message.reply_text(
-                        "❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید."
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ ارتباط با سرور تلگرام قطع شد. لطفاً بعدا تلاش کنید.",
                     )
                 except Exception as e:
                     print(f"Telegram Latest Error: {e}")
-                    await update.message.reply_text(
-                        "❌ خطا در خواندن کانال! ممکن است آیدی اشتباه باشد."
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ خطا در خواندن کانال! ممکن است آیدی اشتباه باشد.",
                     )
 
             if success:
@@ -243,7 +232,53 @@ async def handle_telegram_state(
 
     except Exception as general_err:
         print(f"Queue/Processing Error: {general_err}")
-        await update.message.reply_text("❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.")
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.",
+        )
 
-    finally:
+
+async def handle_telegram_state(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    step: str,
+    text: str,
+    chat_id: str,
+    state_data: dict,
+):
+    user_id = str(update.effective_user.id)
+
+    async with user_action_lock(user_id, "tg_dl", timeout_sec=15) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما هنوز در حال ثبت است. لطفاً صبر کنید.")
+            return
+
+        if not await check_tg_limit(update, user_id):
+            set_state(chat_id, "")
+            return
+
+        waiters = (
+            len(processing_semaphore._waiters)
+            if hasattr(processing_semaphore, "_waiters") and processing_semaphore._waiters
+            else 0
+        )
+
+        if processing_semaphore.locked():
+            await update.message.reply_text(
+                f"⏳ ربات در حال حاضر مشغول است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
+            )
+        else:
+            await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
+
         set_state(chat_id, "")
+
+    track_task(
+        _process_telegram_request(
+            context.bot,
+            step,
+            text,
+            chat_id,
+            user_id,
+        ),
+        name=f"tg_dl_{chat_id}",
+    )

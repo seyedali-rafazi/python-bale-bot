@@ -4,13 +4,12 @@ import os
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from core.task_utils import remove_file_async, track_task
+from core.task_utils import get_file_size_async, load_input_file, remove_file_async, track_task
 from services.instagram import download_instagram
 from services.rate_limiter import user_action_lock
 from core.database import (
     get_available_cloud_mb,
-    reduce_cloud_storage,
-    add_cloud_file,
+    record_cloud_upload,
     log_upload_success,
     log_upload_failed,
 )
@@ -66,13 +65,13 @@ async def background_download_insta_link(
                 asyncio.to_thread(download_instagram, link), timeout=60.0
             )
 
-        if file_path and os.path.exists(file_path):
+        if file_path and await asyncio.to_thread(os.path.exists, file_path):
             if destination == "server":
                 user_storage_mb = await get_available_cloud_mb(chat_id)
                 if user_storage_mb is None or user_storage_mb <= 0:
                     user_storage_mb = 0
 
-                file_size_mb = round(os.path.getsize(file_path) / (1024 * 1024), 2)
+                file_size_mb = round((await get_file_size_async(file_path)) / (1024 * 1024), 2)
 
                 if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
                     await context.bot.send_message(
@@ -105,12 +104,11 @@ async def background_download_insta_link(
 
                 if s3_url:
                     file_size_mb = round(
-                        os.path.getsize(file_path) / (1024 * 1024), 2
+                        (await get_file_size_async(file_path)) / (1024 * 1024), 2
                     )
                     file_name = os.path.basename(file_path)
 
-                    await add_cloud_file(chat_id, file_name, file_size_mb, s3_url)
-                    await reduce_cloud_storage(chat_id, file_size_mb)
+                    await record_cloud_upload(chat_id, file_name, file_size_mb, s3_url)
 
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -131,13 +129,14 @@ async def background_download_insta_link(
 
             else:
                 try:
+                    media_input = await load_input_file(file_path)
                     if file_path.endswith(".mp4"):
                         await context.bot.send_video(
-                            chat_id=chat_id, video=file_path
+                            chat_id=chat_id, video=media_input
                         )
                     else:
                         await context.bot.send_document(
-                            chat_id=chat_id, document=file_path
+                            chat_id=chat_id, document=media_input
                         )
                     await log_upload_success("instagram", chat_id)
                 finally:

@@ -427,9 +427,11 @@ async def _download_url_async(
 
                 downloaded = 0
                 first_chunk = True
+                write_buf = bytearray()
+                write_threshold = 512 * 1024
                 fh = await asyncio.to_thread(open, dest_path, "wb")
                 try:
-                    async for chunk in stream.aiter_bytes(chunk_size=65536):
+                    async for chunk in stream.aiter_bytes(chunk_size=131072):
                         if first_chunk:
                             first_chunk = False
                             chunk_start = chunk[:512].lower()
@@ -453,7 +455,6 @@ async def _download_url_async(
                                 await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
 
-                        await asyncio.to_thread(fh.write, chunk)
                         downloaded += len(chunk)
                         if downloaded > MAX_BOOK_BYTES:
                             logger.warning("File too large (>50 MB): %s", download_url)
@@ -461,6 +462,15 @@ async def _download_url_async(
                             fh = None
                             await asyncio.to_thread(_safe_unlink, dest_path)
                             return False
+                        write_buf.extend(chunk)
+                        if len(write_buf) >= write_threshold:
+                            payload = bytes(write_buf)
+                            write_buf.clear()
+                            await asyncio.to_thread(fh.write, payload)
+                    if write_buf:
+                        payload = bytes(write_buf)
+                        write_buf.clear()
+                        await asyncio.to_thread(fh.write, payload)
                 finally:
                     if fh is not None:
                         await asyncio.to_thread(fh.close)

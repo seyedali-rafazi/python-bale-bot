@@ -11,7 +11,12 @@ import aiohttp
 from bs4 import Tag
 from telegram import Bot
 
-from core.task_utils import FileTooLargeError, remove_file_async, stream_aiohttp_to_file
+from core.task_utils import (
+    FileTooLargeError,
+    load_input_file,
+    remove_file_async,
+    stream_aiohttp_to_file,
+)
 from services.http_client import get_http_session
 
 MAX_MEDIA_BYTES = 50 * 1024 * 1024
@@ -279,23 +284,19 @@ async def _send_item(
             read_timeout=120,
             write_timeout=120,
         )
+        input_file = await load_input_file(temp_path, filename=item.filename)
         if item.kind == "photo":
-            with open(temp_path, "rb") as f:
-                await bot.send_photo(photo=f, **send_kwargs)
+            await bot.send_photo(photo=input_file, **send_kwargs)
         elif item.kind == "video":
-            with open(temp_path, "rb") as f:
-                await bot.send_video(video=f, **send_kwargs)
+            await bot.send_video(video=input_file, **send_kwargs)
         elif item.kind == "voice":
-            with open(temp_path, "rb") as f:
-                await bot.send_voice(voice=f, **send_kwargs)
+            await bot.send_voice(voice=input_file, **send_kwargs)
         elif item.kind == "audio":
-            with open(temp_path, "rb") as f:
-                await bot.send_audio(audio=f, **send_kwargs)
+            await bot.send_audio(audio=input_file, **send_kwargs)
         else:
-            with open(temp_path, "rb") as f:
-                await bot.send_document(
-                    document=f, filename=item.filename, **send_kwargs
-                )
+            await bot.send_document(
+                document=input_file, filename=item.filename, **send_kwargs
+            )
         return True, None
     except Exception:
         return False, "send_failed"

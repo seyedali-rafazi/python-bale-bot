@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import clear_state
 from core.keyboards import get_main_menu_keyboard
-from services.translator import translate_text
+from services.translator import async_translate_text
 from services.weather import get_weather_forecast
 from core.database import add_user, log_user_active, log_upload_success
 from handlers.ensure_membership import CHANNEL_URL, is_user_channel_member
@@ -65,9 +65,7 @@ async def cmd_tr(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     source_lang, target_lang = lang_config.split(":", 1)
     await update.message.reply_text(f"⏳ در حال ترجمه...")
-    result = await asyncio.to_thread(
-        translate_text, source_lang, target_lang, text_to_translate
-    )
+    result = await async_translate_text(source_lang, target_lang, text_to_translate)
     await update.message.reply_text(f"✅ **ترجمه:**\n\n{result}")
     await log_upload_success("translation", str(update.effective_chat.id))
 

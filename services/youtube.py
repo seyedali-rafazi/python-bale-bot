@@ -530,6 +530,77 @@ YTDLP_DOWNLOAD_TIMEOUT_SEC = max(
 )
 
 
+async def _run_async_subprocess_and_capture(
+    cmd: list[str],
+    progress_dict=None,
+    timeout_sec: int = YTDLP_DOWNLOAD_TIMEOUT_SEC,
+) -> tuple[bool, str]:
+    """Run yt-dlp asynchronously with live progress parsing and zero ThreadPool usage."""
+    print("Running command:")
+    print(" ".join(cmd))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    output_lines: deque[str] = deque(maxlen=200)
+
+    async def _pump_and_wait() -> int:
+        if proc.stdout is not None:
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                output_lines.append(line)
+                if progress_dict is not None:
+                    if "[download]" in line and "%" in line:
+                        match = re.search(r"(\d+\.\d+)%", line)
+                        if match:
+                            percent = float(match.group(1))
+                            bar = generate_progress_bar(percent)
+                            clean_line = line.split("]", 1)[-1].strip()
+                            progress_dict["text"] = (
+                                f"📥 در حال دانلود...\n{bar}\n{clean_line}"
+                            )
+                    elif "Destination:" in line:
+                        progress_dict["text"] = "📥 شروع دانلود..."
+                        print(line)
+                elif not line.startswith("[download]"):
+                    print(line)
+        return await proc.wait()
+
+    timed_out = False
+    try:
+        rc = await asyncio.wait_for(_pump_and_wait(), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        timed_out = True
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        rc = -1
+    except asyncio.CancelledError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise
+
+    full_output = "\n".join(output_lines)
+    if timed_out:
+        print(f"❌ yt-dlp timed out after {timeout_sec}s")
+        return False, f"{full_output}\nTimed out after {timeout_sec}s".strip()
+    if rc != 0:
+        print("❌ yt-dlp failed")
+        print(full_output)
+        return False, full_output
+    return True, full_output
+
+
 def _run_subprocess_and_capture(
     cmd,
     progress_dict=None,
@@ -912,6 +983,135 @@ def download_youtube_audio(video_id_or_url: str, max_filesize=MAX_DOWNLOAD_SIZE)
         except Exception:
             pass
 
+        return "TOO_LARGE"
+
+    return final_file
+
+
+async def async_download_youtube_video(
+    url: str,
+    quality: str = "480",
+    progress_dict=None,
+    max_filesize: int = MAX_DOWNLOAD_SIZE,
+):
+    """Native async YouTube video download without occupying ThreadPoolExecutor slots."""
+    req_id = uuid.uuid4().hex
+    video_id = extract_yt_id_fast(url)
+    if not video_id:
+        rc, out, _ = await _run_async_subprocess(
+            _base_ytdlp_cmd() + ["--print", "%(id)s", "--skip-download", url],
+            timeout_sec=60.0,
+        )
+        lines = [x.strip() for x in out.splitlines() if x.strip()] if rc == 0 else []
+        video_id = lines[-1] if lines else None
+
+    if not video_id:
+        print("❌ Could not detect video id")
+        return None
+
+    output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
+    format_selector = _normalize_format_selector(str(quality))
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(
+        [
+            "--newline",
+            "-f",
+            format_selector,
+            "--merge-output-format",
+            "mp4",
+            "--max-filesize",
+            str(max_filesize),
+            "-o",
+            output_template,
+            url,
+        ]
+    )
+
+    ok, output = await _run_async_subprocess_and_capture(cmd, progress_dict=progress_dict)
+    if not ok:
+        if "File is larger than max-filesize" in output or "max-filesize" in output:
+            return "TOO_LARGE"
+        return None
+
+    final_file = await asyncio.to_thread(_find_downloaded_file, video_id, req_id)
+    if not final_file or not await asyncio.to_thread(os.path.exists, final_file):
+        print("❌ Download finished but file not found")
+        return None
+
+    actual_size = await asyncio.to_thread(os.path.getsize, final_file)
+    if actual_size > max_filesize:
+        try:
+            await asyncio.to_thread(os.remove, final_file)
+        except Exception:
+            pass
+        return "TOO_LARGE"
+
+    return final_file
+
+
+async def async_download_youtube_audio(
+    video_id_or_url: str,
+    max_filesize: int = MAX_DOWNLOAD_SIZE,
+):
+    """Native async YouTube audio download without occupying ThreadPoolExecutor slots."""
+    if video_id_or_url.startswith("http://") or video_id_or_url.startswith("https://"):
+        url = video_id_or_url
+    else:
+        url = f"https://www.youtube.com/watch?v={video_id_or_url}"
+
+    req_id = uuid.uuid4().hex
+    video_id = extract_yt_id_fast(url)
+    if not video_id:
+        rc, out, _ = await _run_async_subprocess(
+            _base_ytdlp_cmd() + ["--print", "%(id)s", "--skip-download", url],
+            timeout_sec=60.0,
+        )
+        lines = [x.strip() for x in out.splitlines() if x.strip()] if rc == 0 else []
+        video_id = lines[-1] if lines else None
+
+    if not video_id:
+        print("❌ Could not detect video id")
+        return None
+
+    output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(
+        [
+            "--newline",
+            "-f",
+            "bestaudio/best",
+            "--extract-audio",
+            "--audio-format",
+            "mp3",
+            "--audio-quality",
+            "192K",
+            "--max-filesize",
+            str(max_filesize),
+            "-o",
+            output_template,
+            url,
+        ]
+    )
+
+    ok, output = await _run_async_subprocess_and_capture(cmd)
+    if not ok:
+        if "File is larger than max-filesize" in output or "max-filesize" in output:
+            return "TOO_LARGE"
+        return None
+
+    final_file = await asyncio.to_thread(
+        _find_downloaded_file, video_id, req_id, "mp3"
+    )
+    if not final_file or not await asyncio.to_thread(os.path.exists, final_file):
+        print("❌ Audio download finished but mp3 file not found")
+        return None
+
+    actual_size = await asyncio.to_thread(os.path.getsize, final_file)
+    if actual_size > max_filesize:
+        try:
+            await asyncio.to_thread(os.remove, final_file)
+        except Exception:
+            pass
         return "TOO_LARGE"
 
     return final_file

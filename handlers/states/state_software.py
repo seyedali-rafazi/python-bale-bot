@@ -20,7 +20,8 @@ from telegram.ext import ContextTypes
 
 from core.database.monitoring import log_upload_failed, log_upload_success
 from core.state_manager import StateCache, clear_state, async_get_state, set_state
-from core.task_utils import async_temp_dir
+from core.task_utils import async_temp_dir, get_file_size_async, load_input_file, track_task
+from services.rate_limiter import user_action_lock
 from services.software_service import (
     MAX_ALLOWED_DOWNLOAD_BYTES,
     SoftwareService,
@@ -195,20 +196,51 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
         )
         return
 
-    # Immediately disable inline buttons to prevent spam/double-tap
-    try:
-        await query.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    user_id = str(query.from_user.id) if query.from_user else chat_id
+    async with user_action_lock(user_id, "software_dl", timeout_sec=15) as acquired:
+        if not acquired:
+            await query.message.reply_text("⏳ درخواست دانلود قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
 
-    try:
-        await query.message.edit_text(
-            f"⏳ در حال پردازش و دانلود نرم‌افزار «{app_name}»...\n"
-            "لطفاً شکیبا باشید."
-        )
-    except Exception:
-        pass
+        # Immediately disable inline buttons to prevent spam/double-tap
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
+        try:
+            await query.message.edit_text(
+                f"⏳ در حال پردازش و دانلود نرم‌افزار «{app_name}»...\n"
+                "لطفاً شکیبا باشید."
+            )
+        except Exception:
+            pass
+
+    track_task(
+        _process_software_download(
+            context=context,
+            chat_id=chat_id,
+            platform_key=platform_key,
+            item_index=item_index,
+            app=app,
+        ),
+        name=f"software_dl_{chat_id}",
+    )
+
+
+async def _process_software_download(
+    *,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: str,
+    platform_key: str,
+    item_index: int,
+    app: Dict[str, Any],
+) -> None:
+    app_name = app.get("name", "نرم‌افزار")
+    version = app.get("version", "نامشخص")
+    download_url = app["download_url"]
+    updated = app.get("updated", "نامشخص")
+    extension = app.get("extension", "bin")
     platform_fa = "اندروید (Android)" if platform_key == "android" else "ویندوز (Windows)"
 
     # Download & package under concurrency semaphore; release semaphore before Bale upload
@@ -248,7 +280,7 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await log_upload_failed("software", chat_id)
                 return
 
-            if not os.path.isfile(downloaded_path):
+            if not await asyncio.to_thread(os.path.isfile, downloaded_path):
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text="❌ فایل دانلود شده یافت نشد.",
@@ -256,14 +288,14 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await log_upload_failed("software", chat_id)
                 return
 
-            file_size = os.path.getsize(downloaded_path)
+            file_size = await get_file_size_async(downloaded_path)
             file_size_mb = file_size / (1024 * 1024)
 
-            if file_size > MAX_BALE_BYTES:
+            if file_size > MAX_BALE_SEND_BYTES:
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف ۵۰ مگابایت پیام‌رسان بله است.\n"
+                        f"📦 حجم این برنامه ({file_size_mb:.1f} MB) بیش از سقف مجاز پیام‌رسان بله است.\n"
                         "⚙️ در حال فشرده‌سازی و پارت‌بندی خودکار فایل در پس‌زمینه..."
                     ),
                 )
@@ -274,41 +306,19 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 )
 
             zips_dir = os.path.join(tmp_dir, "zips")
+            # Split directly at MAX_BALE_SEND_BYTES (40 MB) in a single pass
             part_paths, archive_base, split_method = await asyncio.to_thread(
                 build_zip_and_split,
                 input_path=downloaded_path,
                 out_dir=zips_dir,
                 zip_basename=safe_base,
-                max_part_bytes=MAX_BALE_BYTES,
+                max_part_bytes=MAX_BALE_SEND_BYTES,
             )
-
             total_parts = len(part_paths)
-
-            if total_parts == 1 and os.path.getsize(part_paths[0]) > MAX_BALE_SEND_BYTES:
-                logger.info(
-                    "ZIP size (%d bytes) exceeds safe send limit (%d), re-splitting for chat %s",
-                    os.path.getsize(part_paths[0]), MAX_BALE_SEND_BYTES, chat_id
-                )
-                from services.zip_utils import split_file_concat_parts
-                part_paths = await asyncio.to_thread(
-                    split_file_concat_parts,
-                    part_paths[0],
-                    MAX_BALE_SEND_BYTES,
-                    archive_base,
-                )
-                split_method = "concat"
-                total_parts = len(part_paths)
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"📦 حجم نهایی ZIP ({os.path.getsize(part_paths[0]) / (1024*1024):.1f} MB) بیشتر از حد مجاز بله بود.\n"
-                        f"⚙️ در حال تقسیم‌بندی مجدد به {total_parts} پارت..."
-                    ),
-                )
 
         if total_parts == 1:
             zip_file = part_paths[0]
-            zip_size_mb = os.path.getsize(zip_file) / (1024 * 1024)
+            zip_size_mb = (await get_file_size_async(zip_file)) / (1024 * 1024)
             caption = (
                 f"📦 **{app_name}**\n\n"
                 f"🔖 **نسخه:** `{version}`\n"
@@ -318,17 +328,18 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 "📁 **راهنما:** نرم‌افزار به صورت فایل زیپ (ZIP) ارسال شد تا محدودیت امنیتی بله رفع شود. پس از دانلود، فایل را استخراج (Extract) فرمایید."
             )
             try:
-                with open(zip_file, "rb") as fh:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=fh,
-                        filename=os.path.basename(zip_file),
-                        caption=caption,
-                        parse_mode="Markdown",
-                        write_timeout=180,
-                        read_timeout=120,
-                        connect_timeout=60,
-                    )
+                zip_name = os.path.basename(zip_file)
+                doc_input = await load_input_file(zip_file, filename=zip_name)
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=doc_input,
+                    filename=zip_name,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    write_timeout=180,
+                    read_timeout=120,
+                    connect_timeout=60,
+                )
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text="✅ نرم‌افزار با موفقیت ارسال شد!\nبرای جستجوی برنامه‌ای دیگر، مجدداً نام آن را بنویسید.",
@@ -343,7 +354,7 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                 await log_upload_failed("software", chat_id)
         else:
             for part_idx, part_path in enumerate(part_paths, 1):
-                part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
+                part_size_mb = (await get_file_size_async(part_path)) / (1024 * 1024)
                 part_caption = (
                     f"📦 **{app_name}** (پارت {part_idx} از {total_parts})\n"
                     f"🔖 **نسخه:** `{version}`\n"
@@ -351,17 +362,18 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
                     f"💻 **سیستم‌عامل:** {platform_fa}"
                 )
                 try:
-                    with open(part_path, "rb") as pf:
-                        await context.bot.send_document(
-                            chat_id=chat_id,
-                            document=pf,
-                            filename=os.path.basename(part_path),
-                            caption=part_caption,
-                            parse_mode="Markdown",
-                            write_timeout=180,
-                            read_timeout=120,
-                            connect_timeout=60,
-                        )
+                    part_name = os.path.basename(part_path)
+                    part_input = await load_input_file(part_path, filename=part_name)
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=part_input,
+                        filename=part_name,
+                        caption=part_caption,
+                        parse_mode="Markdown",
+                        write_timeout=180,
+                        read_timeout=120,
+                        connect_timeout=60,
+                    )
                 except Exception as e:
                     logger.exception("Failed sending part %d of %s: %s", part_idx, app_name, e)
                     await context.bot.send_message(

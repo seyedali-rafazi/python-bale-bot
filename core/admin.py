@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes
 from core.database import (
     get_total_users,
     set_vip,
-    get_all_users,
     get_users_batch,
     get_total_vip_users,
     reset_user_limits,
@@ -55,8 +54,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id != ADMIN_ID:
         return
 
-    total_users = await get_total_users()
-    vip_users = await get_total_vip_users()
+    total_users, vip_users = await asyncio.gather(
+        get_total_users(),
+        get_total_vip_users(),
+    )
     normal_users = total_users - vip_users
 
     await update.message.reply_text(
@@ -361,13 +362,14 @@ async def cmd_messageuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏳ ارسال همگانی در پس‌زمینه آغاز شد.\nتعداد کل کاربران: {total_users}\nگزارش پایان ارسال برای شما ارسال خواهد شد."
         )
 
-        _broadcast_task = asyncio.create_task(
+        _broadcast_task = track_task(
             _run_broadcast_job(
                 bot=context.bot,
                 admin_chat_id=chat_id,
                 message_text=message_text,
                 total_users=total_users,
-            )
+            ),
+            name="admin_broadcast",
         )
 
 

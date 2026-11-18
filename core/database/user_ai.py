@@ -1,6 +1,8 @@
 # core/database/user_ai.py
 # Per-user daily limits for AI chat questions.
 
+import asyncio
+
 from .counters import get_period_usage, increment_period_usage
 from .utils import get_tehran_today
 from .vip import is_vip
@@ -26,8 +28,11 @@ async def get_ai_questions_today(user_id: str) -> int:
 
 async def can_user_ask_ai(user_id: str) -> tuple[bool, int, int]:
     """Returns (allowed, used_today, limit)."""
-    limit = await get_user_ai_limit(user_id)
-    used = await get_ai_questions_today(user_id)
+    vip, used = await asyncio.gather(
+        is_vip(user_id),
+        get_ai_questions_today(user_id),
+    )
+    limit = AI_LIMIT_VIP if vip else AI_LIMIT_FREE
     return used < limit, used, limit
 
 

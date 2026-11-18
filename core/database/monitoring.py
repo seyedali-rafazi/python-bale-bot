@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 from .connection import get_db
@@ -71,49 +72,6 @@ async def log_user_active(user_id: str) -> None:
     await log_monitor_event("bot", user_id, "user_active")
 
 
-async def _section_counts_between(
-    start: str, end: str, event_type: str = "upload_success"
-) -> dict[str, int]:
-    pool = await get_db()
-    counts = {section: 0 for section in ALL_SECTIONS}
-    rows = await pool.fetch(
-        """
-        SELECT section, COUNT(*) AS cnt
-        FROM monitoring_events
-        WHERE event_type = $1
-          AND created_at >= $2
-          AND created_at < $3
-        GROUP BY section
-        """,
-        event_type,
-        start,
-        end,
-    )
-    for row in rows:
-        section = row["section"]
-        if section in counts:
-            counts[section] = int(row["cnt"])
-    return counts
-
-
-async def _count_responses_between(
-    start: str, end: str, event_type: str = "upload_success"
-) -> int:
-    pool = await get_db()
-    val = await pool.fetchval(
-        """
-        SELECT COUNT(*) FROM monitoring_events
-        WHERE event_type = $1
-          AND created_at >= $2
-          AND created_at < $3
-        """,
-        event_type,
-        start,
-        end,
-    )
-    return int(val or 0)
-
-
 async def _count_active_users_between(start: str, end: str) -> int:
     pool = await get_db()
     val = await pool.fetchval(
@@ -171,25 +129,29 @@ async def get_monitoring_report_data() -> dict:
     window_end = max(hour_end, tomorrow)
 
     pool = await get_db()
-    rows = await pool.fetch(
-        """
-        SELECT
-            section,
-            event_type,
-            COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $4) AS hour_cnt,
-            COUNT(*) FILTER (WHERE created_at >= $5 AND created_at < $6) AS today_cnt
-        FROM monitoring_events
-        WHERE created_at >= $1
-          AND created_at < $2
-          AND event_type IN ('upload_success', 'upload_failed')
-        GROUP BY section, event_type
-        """,
-        window_start,
-        window_end,
-        hour_start,
-        hour_end,
-        today_start,
-        tomorrow,
+    rows, hour_active_users, today_active_users = await asyncio.gather(
+        pool.fetch(
+            """
+            SELECT
+                section,
+                event_type,
+                COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $4) AS hour_cnt,
+                COUNT(*) FILTER (WHERE created_at >= $5 AND created_at < $6) AS today_cnt
+            FROM monitoring_events
+            WHERE created_at >= $1
+              AND created_at < $2
+              AND event_type IN ('upload_success', 'upload_failed')
+            GROUP BY section, event_type
+            """,
+            window_start,
+            window_end,
+            hour_start,
+            hour_end,
+            today_start,
+            tomorrow,
+        ),
+        _count_active_users_between(hour_start, hour_end),
+        count_active_users_today(),
     )
 
     hour_ok = {section: 0 for section in ALL_SECTIONS}
@@ -233,8 +195,8 @@ async def get_monitoring_report_data() -> dict:
         "today_section_fails": today_fail,
         "hour_failures": hour_failures,
         "today_failures": today_failures,
-        "hour_active_users": await _count_active_users_between(hour_start, hour_end),
-        "today_active_users": await count_active_users_today(),
+        "hour_active_users": hour_active_users,
+        "today_active_users": today_active_users,
     }
 
 

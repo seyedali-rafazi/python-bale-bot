@@ -24,6 +24,7 @@ from telethon.tl.types import (
 )
 
 from core.state_manager import StateCache
+from core.task_utils import get_file_size_async, load_input_file
 from services.ai import get_telethon_client
 from services.telegram_public import MAX_MEDIA_BYTES
 
@@ -100,8 +101,8 @@ async def _send_downloaded(
 
     try:
         if isinstance(media, MessageMediaPhoto):
-            with open(path, "rb") as f:
-                await bot.send_photo(chat_id=chat_id, photo=f, caption=cap)
+            photo_file = await load_input_file(path, filename="photo.jpg")
+            await bot.send_photo(chat_id=chat_id, photo=photo_file, caption=cap)
             return True
 
         if isinstance(media, DocMedia):
@@ -114,25 +115,25 @@ async def _send_downloaded(
                 isinstance(a, DocumentAttributeAudio) for a in (doc.attributes or [])
             )
             fname = _filename_from_document(doc)
+            media_file = await load_input_file(path, filename=fname)
 
-            with open(path, "rb") as f:
-                if is_video:
-                    await bot.send_video(
-                        chat_id=chat_id, video=f, caption=cap, filename=fname
-                    )
-                elif is_voice:
-                    await bot.send_voice(chat_id=chat_id, voice=f, caption=cap)
-                elif is_audio and not is_voice:
-                    await bot.send_audio(
-                        chat_id=chat_id, audio=f, caption=cap, filename=fname
-                    )
-                else:
-                    await bot.send_document(
-                        chat_id=chat_id,
-                        document=f,
-                        filename=fname,
-                        caption=cap,
-                    )
+            if is_video:
+                await bot.send_video(
+                    chat_id=chat_id, video=media_file, caption=cap, filename=fname
+                )
+            elif is_voice:
+                await bot.send_voice(chat_id=chat_id, voice=media_file, caption=cap)
+            elif is_audio and not is_voice:
+                await bot.send_audio(
+                    chat_id=chat_id, audio=media_file, caption=cap, filename=fname
+                )
+            else:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=media_file,
+                    filename=fname,
+                    caption=cap,
+                )
             return True
     except Exception as e:
         logger.warning("Bale send failed for telethon media: %s", e)
@@ -162,7 +163,7 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
             return True
         return False
 
-    os.makedirs(TG_DOWNLOAD_DIR, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, TG_DOWNLOAD_DIR, exist_ok=True)
     temp_path = None
     try:
         async with _tg_fetch_semaphore:
@@ -170,10 +171,10 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
             temp_path = await client.download_media(
                 message, file=os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
             )
-        if not temp_path or not os.path.exists(temp_path):
+        if not temp_path or not await asyncio.to_thread(os.path.exists, temp_path):
             return False
 
-        if os.path.getsize(temp_path) > MAX_MEDIA_BYTES:
+        if await get_file_size_async(temp_path) > MAX_MEDIA_BYTES:
             await bot.send_message(
                 chat_id=chat_id,
                 text="⚠️ فایل پس از دانلود بیش از ۵۰ مگابایت بود و ارسال نشد.",

@@ -282,6 +282,14 @@ async def _create_single_file_with_playwright(
                 try:
                     context = await manager.new_context(_PLAYWRIGHT_USER_AGENT)
                     page = await context.new_page()
+
+                    async def _block_media(route):
+                        if route.request.resource_type == "media":
+                            await route.abort()
+                        else:
+                            await route.continue_()
+
+                    await page.route("**/*", _block_media)
                     await page.goto(
                         url,
                         wait_until="domcontentloaded",

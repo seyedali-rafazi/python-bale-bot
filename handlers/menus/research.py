@@ -33,9 +33,11 @@ async def btn_kaggle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from core.keyboards import get_kaggle_menu_keyboard
 
     user_id = str(update.effective_user.id)
-    vip = await is_vip(user_id)
+    vip, used = await asyncio.gather(
+        is_vip(user_id),
+        get_kaggle_downloads(user_id),
+    )
     limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-    used = await get_kaggle_downloads(user_id)
     remaining = max(0, limit - used)
     tier = "🌟 VIP" if vip else "رایگان"
 
@@ -67,9 +69,11 @@ async def btn_kaggle_popular_req(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     user_id = str(update.effective_user.id)
-    vip = await is_vip(user_id)
+    vip, used = await asyncio.gather(
+        is_vip(user_id),
+        get_kaggle_downloads(user_id),
+    )
     limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-    used = await get_kaggle_downloads(user_id)
 
     if used >= limit:
         await update.message.reply_text(

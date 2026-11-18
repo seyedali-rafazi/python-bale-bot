@@ -68,6 +68,8 @@ from .cloud import (
     add_cloud_storage,
     reduce_cloud_storage,
     add_cloud_file,
+    record_cloud_upload,
+    record_cloud_uploads,
     get_user_cloud_files,
     delete_cloud_file,
     get_cloud_usage_stats,

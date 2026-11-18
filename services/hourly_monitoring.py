@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
@@ -127,9 +128,11 @@ async def send_hourly_monitoring_report(
         return
 
     try:
-        data = await get_monitoring_report_data()
-        total_users = await get_total_users()
-        vip_users = await get_total_vip_users()
+        data, total_users, vip_users = await asyncio.gather(
+            get_monitoring_report_data(),
+            get_total_users(),
+            get_total_vip_users(),
+        )
         report = build_monitoring_report_text(data, total_users, vip_users)
 
         targets: list[str] = []

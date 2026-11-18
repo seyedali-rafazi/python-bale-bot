@@ -22,6 +22,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import clear_state, set_state
+from core.task_utils import get_file_size_async, load_input_file
 from core.database import (
     get_kaggle_downloads,
     increment_kaggle_downloads,
@@ -188,20 +189,20 @@ async def process_kaggle_download(
         # ── Step 4: Send each part ──
         sent_ok = True
         for i, part_path in enumerate(parts, 1):
-            part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
+            part_size_mb = (await get_file_size_async(part_path)) / (1024 * 1024)
             caption = (
                 f"📦 دیتاست: `{ref}`\n"
                 f"قسمت {i} از {total_parts} | حجم: {part_size_mb:.1f} مگابایت"
             )
             try:
-                with open(part_path, "rb") as f:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=f,
-                        filename=os.path.basename(part_path),
-                        caption=caption,
-                        parse_mode="Markdown",
-                    )
+                doc_file = await load_input_file(part_path, filename=os.path.basename(part_path))
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=doc_file,
+                    filename=os.path.basename(part_path),
+                    caption=caption,
+                    parse_mode="Markdown",
+                )
             except Exception:
                 logger.exception("Failed to send Kaggle part %s", part_path)
                 await context.bot.send_message(
@@ -242,9 +243,11 @@ async def handle_kaggle_state(
     state_data: dict,
 ):
     user_id = str(update.effective_user.id)
-    vip = await is_vip(user_id)
+    vip, used = await asyncio.gather(
+        is_vip(user_id),
+        get_kaggle_downloads(user_id),
+    )
     limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-    used = await get_kaggle_downloads(user_id)
 
     if used >= limit:
         await update.message.reply_text(

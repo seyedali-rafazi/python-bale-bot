@@ -6,7 +6,12 @@ from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip
 from core.limits import get_limit
 from core.state_manager import StateCache, clear_state
-from core.task_utils import FileTooLargeError, remove_file_async, stream_aiohttp_to_file
+from core.task_utils import (
+    FileTooLargeError,
+    load_input_file,
+    remove_file_async,
+    stream_aiohttp_to_file,
+)
 import uuid
 import os
 
@@ -233,8 +238,9 @@ async def process_github_download(
                         "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
                     )
                 else:
+                    doc_input = await load_input_file(temp_path, filename=file_name)
                     await context.bot.send_document(
-                        chat_id=chat_id, document=temp_path, filename=file_name
+                        chat_id=chat_id, document=doc_input, filename=file_name
                     )
                     await increment_gh_downloads(user_id)
             else:
