@@ -36,6 +36,7 @@ from .youtube import (
     get_cache_row_metadata,
     save_cached_video,
     increment_yt_video_view,
+    flush_pending_yt_views,
     get_top_cached_videos,
     count_global_cache,
     count_cache_needing_metadata,
@@ -105,6 +106,7 @@ from .user_ai import (
     get_ai_questions_today,
     can_user_ask_ai,
     increment_ai_question,
+    decrement_ai_question,
     AI_LIMIT_FREE,
     AI_LIMIT_VIP,
 )

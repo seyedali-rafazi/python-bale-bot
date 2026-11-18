@@ -8,6 +8,7 @@ High-concurrency optimized:
 """
 
 import asyncio
+from functools import lru_cache
 import hashlib
 import logging
 import os
@@ -97,6 +98,11 @@ def sanitize_filename(filename: str) -> str:
     clean = re.sub(r'[\\/*?:"<>|]', "", filename)
     clean = clean.strip()
     return clean or "software_package"
+
+
+@lru_cache(maxsize=1)
+def _has_winget() -> bool:
+    return bool(shutil.which("winget"))
 
 
 def _software_cache_key(prefix: str, text: str, limit: int = 0) -> str:
@@ -383,7 +389,7 @@ class SoftwareService:
     @classmethod
     async def _search_windows_winget(cls, norm_query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Fallback Windows search using local winget CLI (only when winget exists on system)."""
-        if not shutil.which("winget"):
+        if not _has_winget():
             return []
 
         def _run_search():
@@ -484,7 +490,7 @@ class SoftwareService:
         results = await cls._search_windows_scoop(norm_query, limit=limit)
 
         # 2. Fallback: If no results found and local winget CLI is installed
-        if not results and shutil.which("winget"):
+        if not results and _has_winget():
             results = await cls._search_windows_winget(norm_query, limit=limit)
 
         if results:
@@ -528,11 +534,21 @@ class SoftwareService:
                     raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
 
                 f = await asyncio.to_thread(open, dest_path, "wb")
+                write_buf = bytearray()
+                write_threshold = 512 * 1024
                 async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
                     total_downloaded += len(chunk)
                     if total_downloaded > max_bytes:
                         raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
-                    await asyncio.to_thread(f.write, chunk)
+                    write_buf.extend(chunk)
+                    if len(write_buf) >= write_threshold:
+                        payload = bytes(write_buf)
+                        write_buf.clear()
+                        await asyncio.to_thread(f.write, payload)
+                if write_buf:
+                    payload = bytes(write_buf)
+                    write_buf.clear()
+                    await asyncio.to_thread(f.write, payload)
 
             return os.path.abspath(dest_path)
         except Exception:

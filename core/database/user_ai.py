@@ -4,7 +4,7 @@
 import asyncio
 
 from core.limits import FREE_LIMITS, VIP_LIMITS
-from .counters import get_period_usage, increment_period_usage
+from .counters import decrement_period_usage, get_period_usage, increment_period_usage
 from .utils import get_tehran_today
 from .vip import is_vip
 
@@ -44,5 +44,15 @@ async def increment_ai_question(user_id: str) -> int:
         "ai_chat_date",
         get_tehran_today(),
         monitor_section="ai_chat",
+        cache_service="ai_chat",
+    )
+
+
+async def decrement_ai_question(user_id: str) -> None:
+    await decrement_period_usage(
+        user_id,
+        "ai_chat_count",
+        "ai_chat_date",
+        get_tehran_today(),
         cache_service="ai_chat",
     )

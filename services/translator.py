@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 import logging
 import threading
@@ -54,22 +55,8 @@ def _translation_cache_key(source_lang: str, target_lang: str, clean_text: str) 
     return f"tr:{source_lang}:{target_lang}:{text_hash}"
 
 
-def translate_text(source_lang: str, target_lang: str, text: str) -> str:
-    if not text or not text.strip():
-        return "❌ لطفاً متنی برای ترجمه وارد کنید."
-
-    clean_text = text.strip()
-    cache_key = f"bale:cache:{_translation_cache_key(source_lang, target_lang, clean_text)}"
-    try:
-        from services.redis_client import get_sync_redis
-        sync_redis = get_sync_redis()
-        if sync_redis is not None:
-            cached_val = sync_redis.get(cache_key)
-            if cached_val:
-                return cached_val
-    except Exception:
-        pass
-
+def _translate_sync_no_cache(source_lang: str, target_lang: str, clean_text: str) -> str | None:
+    """Execute blocking translation providers without redundant sync Redis I/O."""
     translated_result = None
 
     # 1. Try Google Translator
@@ -105,13 +92,39 @@ def translate_text(source_lang: str, target_lang: str, text: str) -> str:
         except Exception as e:
             logger.error("MyMemory fallback translation failed: %s", e)
 
+    return translated_result
+
+
+def translate_text(source_lang: str, target_lang: str, text: str) -> str:
+    if not text or not text.strip():
+        return "❌ لطفاً متنی برای ترجمه وارد کنید."
+
+    clean_text = text.strip()
+    cache_key = f"bale:cache:{_translation_cache_key(source_lang, target_lang, clean_text)}"
+    try:
+        from services.redis_client import get_sync_redis
+        sync_redis = get_sync_redis()
+        if sync_redis is not None:
+            cached_val = sync_redis.get(cache_key)
+            if cached_val:
+                try:
+                    decoded = json.loads(cached_val)
+                    if isinstance(decoded, str) and decoded:
+                        return decoded
+                except Exception:
+                    return cached_val
+    except Exception:
+        pass
+
+    translated_result = _translate_sync_no_cache(source_lang, target_lang, clean_text)
+
     if translated_result:
-        # Cache translation for 30 days
+        # Cache translation for 30 days using the same JSON format as cache_service
         try:
             from services.redis_client import get_sync_redis
             sync_redis = get_sync_redis()
             if sync_redis is not None:
-                sync_redis.set(cache_key, translated_result, ex=86400 * 30)
+                sync_redis.set(cache_key, json.dumps(translated_result, ensure_ascii=False), ex=86400 * 30)
         except Exception:
             pass
         return translated_result
@@ -119,8 +132,11 @@ def translate_text(source_lang: str, target_lang: str, text: str) -> str:
     return "❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید."
 
 
+_ORIG_TRANSLATE_TEXT = translate_text
+
+
 async def async_translate_text(source_lang: str, target_lang: str, text: str) -> str:
-    """Async translation: checks async Redis/local cache first without consuming a thread."""
+    """Async translation: checks async Redis/local cache first without consuming a thread or double-hitting Redis."""
     if not text or not text.strip():
         return "❌ لطفاً متنی برای ترجمه وارد کنید."
 
@@ -132,7 +148,14 @@ async def async_translate_text(source_lang: str, target_lang: str, text: str) ->
     if isinstance(cached, str) and cached:
         return cached
 
-    result = await asyncio.to_thread(translate_text, source_lang, target_lang, clean_text)
+    if translate_text is not _ORIG_TRANSLATE_TEXT:
+        result = await asyncio.to_thread(translate_text, source_lang, target_lang, clean_text)
+    else:
+        translated = await asyncio.to_thread(
+            _translate_sync_no_cache, source_lang, target_lang, clean_text
+        )
+        result = translated or "❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید."
+
     if result and not result.startswith("❌"):
         await cache_set(sub_key, result, ttl_sec=86400 * 30)
     return result

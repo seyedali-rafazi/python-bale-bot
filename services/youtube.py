@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import sys
 import threading
+import time
 from collections import deque
 from functools import lru_cache
 from dotenv import load_dotenv
@@ -63,11 +64,24 @@ def get_video_duration(file_path):
         return 0
 
 
-def _cookie_args():
-    if COOKIE_FILE and os.path.exists(COOKIE_FILE):
-        return ["--cookies", COOKIE_FILE]
+_cookie_cache_checked_at: float = 0.0
+_cookie_cache_exists: bool = False
+_cookie_warned_missing: bool = False
 
-    print(f"Cookie file not found: {COOKIE_FILE}")
+
+def _cookie_args():
+    global _cookie_cache_checked_at, _cookie_cache_exists, _cookie_warned_missing
+    if not COOKIE_FILE:
+        return []
+    now = time.monotonic()
+    if now - _cookie_cache_checked_at > 60.0:
+        _cookie_cache_exists = os.path.exists(COOKIE_FILE)
+        _cookie_cache_checked_at = now
+        if not _cookie_cache_exists and not _cookie_warned_missing:
+            print(f"Cookie file not found: {COOKIE_FILE}")
+            _cookie_warned_missing = True
+    if _cookie_cache_exists:
+        return ["--cookies", COOKIE_FILE]
     return []
 
 
@@ -160,8 +174,85 @@ def extract_yt_id_fast(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _parse_video_info_json(raw_stdout: str) -> dict | None:
-    data = json.loads(raw_stdout)
+def _format_bytes_estimate(fmt: dict, duration: float | int | None) -> int | None:
+    size = fmt.get("filesize") or fmt.get("filesize_approx")
+    if isinstance(size, (int, float)) and size > 0:
+        return int(size)
+    tbr = fmt.get("tbr") or fmt.get("abr") or fmt.get("vbr")
+    if isinstance(tbr, (int, float)) and tbr > 0 and isinstance(duration, (int, float)) and duration > 0:
+        return int((tbr * 1000.0 / 8.0) * float(duration))
+    return None
+
+
+def _estimate_format_sizes_from_formats(formats: list, duration: float | int | None) -> dict[str, int]:
+    """Estimate total bytes per common quality selector from yt-dlp --dump-json formats."""
+    if not isinstance(formats, list) or not formats:
+        return {}
+
+    audio_only = [
+        f for f in formats
+        if isinstance(f, dict)
+        and f.get("acodec") not in (None, "none")
+        and f.get("vcodec") in (None, "none")
+    ]
+    best_audio_size: int | None = None
+    best_audio_score = (-1, -1.0)
+    for af in audio_only:
+        sz = _format_bytes_estimate(af, duration)
+        if not sz:
+            continue
+        is_m4a = 1 if af.get("ext") == "m4a" else 0
+        abr = float(af.get("abr") or af.get("tbr") or 0)
+        score = (is_m4a, abr)
+        if score > best_audio_score:
+            best_audio_score = score
+            best_audio_size = sz
+
+    sizes: dict[str, int] = {}
+    if best_audio_size:
+        sizes["bestaudio"] = best_audio_size
+
+    for q_str in ("360", "480", "720", "1080"):
+        max_h = int(q_str)
+        best_video_only: int | None = None
+        best_vo_score = (-1, -1, -1.0)
+        best_muxed: int | None = None
+        best_mx_score = (-1, -1.0)
+
+        for vf in formats:
+            if not isinstance(vf, dict):
+                continue
+            h = vf.get("height")
+            if not isinstance(h, (int, float)) or h <= 0 or h > max_h:
+                continue
+            vcodec = vf.get("vcodec")
+            acodec = vf.get("acodec")
+            if vcodec in (None, "none"):
+                continue
+            sz = _format_bytes_estimate(vf, duration)
+            if not sz:
+                continue
+            if acodec in (None, "none"):
+                is_mp4 = 1 if vf.get("ext") == "mp4" else 0
+                score = (int(h), is_mp4, float(vf.get("tbr") or 0))
+                if score > best_vo_score:
+                    best_vo_score = score
+                    best_video_only = sz
+            else:
+                score = (int(h), float(vf.get("tbr") or 0))
+                if score > best_mx_score:
+                    best_mx_score = score
+                    best_muxed = sz
+
+        if best_video_only and best_audio_size:
+            sizes[q_str] = best_video_only + best_audio_size
+        elif best_muxed:
+            sizes[q_str] = best_muxed
+
+    return sizes
+
+
+def _extract_info_dict(data: dict) -> dict:
     return {
         "title": data.get("title", "بدون عنوان"),
         "thumbnail": data.get("thumbnail"),
@@ -175,6 +266,21 @@ def _parse_video_info_json(raw_stdout: str) -> dict | None:
         "upload_date": data.get("upload_date"),
         "timestamp": data.get("timestamp") or data.get("release_timestamp"),
     }
+
+
+def _parse_video_info_json(raw_stdout: str) -> dict | None:
+    data = json.loads(raw_stdout)
+    return _extract_info_dict(data)
+
+
+def _parse_video_info_and_sizes_json(raw_stdout: str) -> tuple[dict | None, dict[str, int]]:
+    data = json.loads(raw_stdout)
+    info = _extract_info_dict(data)
+    sizes = _estimate_format_sizes_from_formats(
+        data.get("formats") or [],
+        data.get("duration"),
+    )
+    return info, sizes
 
 
 def _normalize_format_selector(format_selector) -> str:
@@ -262,16 +368,28 @@ async def async_get_video_duration(file_path: str) -> float:
     return 0
 
 
-async def async_get_video_info(url: str) -> dict | None:
+def _filesize_cache_key(vid: str, format_selector: str) -> str:
+    import hashlib
+
+    sel_hash = hashlib.md5(str(format_selector).encode("utf-8")).hexdigest()[:12]
+    return f"yt_size:{vid}:{sel_hash}"
+
+
+async def _async_get_video_info_with_sizes(url: str) -> tuple[dict | None, dict[str, int]]:
     cmd = _base_ytdlp_cmd()
     cmd.extend(["--dump-json", "--skip-download", url])
     try:
         rc, out, _ = await _run_async_subprocess(cmd, timeout_sec=60.0)
         if rc == 0 and out.strip():
-            return _parse_video_info_json(out)
+            return _parse_video_info_and_sizes_json(out)
     except Exception as e:
         print(f"Error getting video info: {e}")
-    return None
+    return None, {}
+
+
+async def async_get_video_info(url: str) -> dict | None:
+    info, _ = await _async_get_video_info_with_sizes(url)
+    return info
 
 
 async def async_get_video_filesize(
@@ -305,12 +423,23 @@ async def get_video_info_cached(url: str) -> dict | None:
             return cached
 
     async def _fetch():
+        format_sizes: dict[str, int] = {}
         if get_video_info is not _ORIG_GET_VIDEO_INFO:
             info = await asyncio.to_thread(get_video_info, url)
-        else:
+        elif async_get_video_info is not _ORIG_ASYNC_GET_VIDEO_INFO:
             info = await async_get_video_info(url)
+        else:
+            info, format_sizes = await _async_get_video_info_with_sizes(url)
+
         if info and cache_key:
-            await cache_set(cache_key, info, ttl_sec=21600)
+            tasks = [cache_set(cache_key, info, ttl_sec=21600)]
+            if vid and format_sizes:
+                for sel, sz in format_sizes.items():
+                    if sz > 0:
+                        tasks.append(
+                            cache_set(_filesize_cache_key(vid, sel), int(sz), ttl_sec=3600)
+                        )
+            await asyncio.gather(*tasks)
         return info
 
     if not cache_key:
@@ -348,12 +477,10 @@ async def get_video_filesize_cached(
     format_selector: str = "best[height<=480][ext=mp4]/best[height<=480]/best",
 ) -> int | None:
     """Fetch estimated filesize with 1-hour Redis/memory caching and singleflight dedup."""
-    import hashlib
     from services.cache_service import cache_get, cache_set
 
     vid = extract_yt_id_fast(url)
-    sel_hash = hashlib.md5(str(format_selector).encode("utf-8")).hexdigest()[:12]
-    cache_key = f"yt_size:{vid}:{sel_hash}" if vid else None
+    cache_key = _filesize_cache_key(vid, format_selector) if vid else None
     if cache_key:
         cached = await cache_get(cache_key)
         if isinstance(cached, int) and cached > 0:
@@ -1201,6 +1328,7 @@ async def async_search_yt_videos(query: str, max_results: int = 5) -> list[dict]
 
 
 _ORIG_GET_VIDEO_INFO = get_video_info
+_ORIG_ASYNC_GET_VIDEO_INFO = async_get_video_info
 _ORIG_GET_VIDEO_FILESIZE = get_video_filesize
 
 

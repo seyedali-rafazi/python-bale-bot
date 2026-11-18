@@ -274,6 +274,16 @@ async def on_shutdown(app):
     except Exception:
         logger.exception("AI client cleanup on shutdown failed")
 
+    # 6.5 Flush buffered YouTube views before closing PostgreSQL/Redis
+    try:
+        from core.database import flush_pending_yt_views
+
+        flushed = await flush_pending_yt_views()
+        if flushed:
+            logger.info("✅ Flushed %d pending YouTube view updates", flushed)
+    except Exception:
+        logger.exception("Failed flushing pending YouTube views on shutdown")
+
     # 7. Close PostgreSQL pool (after in-flight tasks and clients are done)
     try:
         await close_db()
@@ -290,6 +300,15 @@ async def on_shutdown(app):
 # =========================================================
 # MAIN
 # =========================================================
+
+async def _flush_yt_views_job(context: ContextTypes.DEFAULT_TYPE = None):
+    try:
+        from core.database import flush_pending_yt_views
+
+        await flush_pending_yt_views()
+    except Exception:
+        logger.exception("Periodic YouTube view flush failed")
+
 
 def main():
     if not BALE_TOKEN:
@@ -322,6 +341,12 @@ def main():
             interval=3600,
             first=seconds_until_next_hour_tehran(),
             name="hourly_monitoring_report",
+        )
+        application.job_queue.run_repeating(
+            _flush_yt_views_job,
+            interval=300,
+            first=300,
+            name="flush_yt_views",
         )
         logger.info("✅ Hourly monitoring report scheduled")
 

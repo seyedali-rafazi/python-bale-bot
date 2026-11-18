@@ -54,6 +54,7 @@ from core.yt_moderation import (
 )
 from core.database.yt_blacklist import is_channel_blacklisted
 from handlers.ensure_membership import ensure_membership
+from handlers.states.youtube.helpers import parse_quality_from_cache_key
 
 
 def _channel_callback_data(page: int, index: int) -> str:
@@ -74,8 +75,6 @@ def _variant_button_label(row) -> str:
     fmt = _row_str(row, "format_type", "video_zip")
     quality = _row_str(row, "quality", "")
     if not quality:
-        from handlers.states.youtube.helpers import parse_quality_from_cache_key
-
         quality = parse_quality_from_cache_key(_row_str(row, "video_id"))
     if "audio" in fmt:
         return "🎵 صوتی (MP3)"

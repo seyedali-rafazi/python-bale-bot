@@ -53,6 +53,15 @@ def _cleanup_evicted_paths(_key, value) -> None:
 _pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
 _convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
 _resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0, on_evict=_cleanup_evicted_paths)
+_pdf_append_locks: StateCache = StateCache(max_capacity=400, default_ttl=1800.0)
+
+
+def _get_pdf_append_lock(chat_id: str) -> asyncio.Lock:
+    lock = _pdf_append_locks.get(chat_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _pdf_append_locks[chat_id] = lock
+    return lock
 
 
 def _remove_files_quietly(paths) -> None:
@@ -106,12 +115,16 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
 
             # Send PDF to user
             pdf_name = f"images_{chat_id}.pdf"
-            pdf_input = await load_input_file(pdf_path, filename=pdf_name)
-            await update.message.reply_document(
-                document=pdf_input,
-                filename=pdf_name,
-                caption="✅ PDF شما آماده است!",
-            )
+            async with bounded_large_upload():
+                pdf_input = await load_input_file(pdf_path, filename=pdf_name)
+                try:
+                    await update.message.reply_document(
+                        document=pdf_input,
+                        filename=pdf_name,
+                        caption="✅ PDF شما آماده است!",
+                    )
+                finally:
+                    del pdf_input
             await log_upload_success("image_processing", chat_id)
 
             clear_state(chat_id)
@@ -136,14 +149,8 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         and (update.message.document.mime_type or "").startswith("image/")
     )
     if update.message.photo or is_img_doc:
-        pending_images = _pdf_images_cache.get(chat_id)
-        if pending_images is None:
-            pending_images = []
-        if len(pending_images) >= 20:
-            await update.message.reply_text("❌ حداکثر 20 عکس می‌توانید ارسال کنید!")
-            return
-
-        # Download image to temp file on disk instead of holding bytes in RAM
+        # Download image to temp file on disk first, then append under per-chat lock
+        # so concurrent album uploads never drop photos or leak temp files.
         file_id = (
             update.message.photo[-1].file_id
             if update.message.photo
@@ -151,11 +158,18 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         )
         img_path = await _download_image_to_disk(context.bot, file_id, f"pdf_{chat_id}")
 
-        pending_images.append(img_path)
-        _pdf_images_cache[chat_id] = pending_images
+        async with _get_pdf_append_lock(chat_id):
+            pending_images = list(_pdf_images_cache.get(chat_id) or [])
+            if len(pending_images) >= 20:
+                await remove_file_async(img_path)
+                await update.message.reply_text("❌ حداکثر 20 عکس می‌توانید ارسال کنید!")
+                return
+            pending_images.append(img_path)
+            _pdf_images_cache[chat_id] = pending_images
+            count = len(pending_images)
 
         await update.message.reply_text(
-            f"✅ عکس {len(pending_images)} دریافت شد.\n"
+            f"✅ عکس {count} دریافت شد.\n"
             f"برای ادامه عکس بعدی را ارسال کنید یا 'تمام' را بنویسید."
         )
     else:
@@ -189,12 +203,16 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
 
                 # Send converted image
                 conv_name = f"converted.{format_text.lower()}"
-                conv_input = await load_input_file(converted_path, filename=conv_name)
-                await update.message.reply_document(
-                    document=conv_input,
-                    filename=conv_name,
-                    caption=f"✅ عکس به فرمت {format_text} تبدیل شد!",
-                )
+                async with bounded_large_upload():
+                    conv_input = await load_input_file(converted_path, filename=conv_name)
+                    try:
+                        await update.message.reply_document(
+                            document=conv_input,
+                            filename=conv_name,
+                            caption=f"✅ عکس به فرمت {format_text} تبدیل شد!",
+                        )
+                    finally:
+                        del conv_input
                 await log_upload_success("image_processing", chat_id)
 
                 clear_state(chat_id)
@@ -265,12 +283,16 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resized_path = await resize_image(raw_img, size_text, chat_id)
 
             # Send resized image
-            resized_input = await load_input_file(resized_path, filename="resized.png")
-            await update.message.reply_document(
-                document=resized_input,
-                filename="resized.png",
-                caption="✅ اندازه عکس تغییر کرد!",
-            )
+            async with bounded_large_upload():
+                resized_input = await load_input_file(resized_path, filename="resized.png")
+                try:
+                    await update.message.reply_document(
+                        document=resized_input,
+                        filename="resized.png",
+                        caption="✅ اندازه عکس تغییر کرد!",
+                    )
+                finally:
+                    del resized_input
             await log_upload_success("image_processing", chat_id)
 
             _resize_images_cache.pop(chat_id, None)
@@ -365,12 +387,16 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             # Send result
-            nobg_input = await load_input_file(output_path, filename="no_background.png")
-            await update.message.reply_document(
-                document=nobg_input,
-                filename="no_background.png",
-                caption="✅ پس‌زمینه عکس حذف شد!",
-            )
+            async with bounded_large_upload():
+                nobg_input = await load_input_file(output_path, filename="no_background.png")
+                try:
+                    await update.message.reply_document(
+                        document=nobg_input,
+                        filename="no_background.png",
+                        caption="✅ پس‌زمینه عکس حذف شد!",
+                    )
+                finally:
+                    del nobg_input
             await log_upload_success("image_processing", chat_id)
 
             clear_state(chat_id)

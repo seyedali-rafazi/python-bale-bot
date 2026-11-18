@@ -10,7 +10,7 @@ from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
 from core.task_utils import track_task
-from core.database import can_user_ask_ai, increment_ai_question, log_upload_success
+from core.database import can_user_ask_ai, decrement_ai_question, increment_ai_question, log_upload_success
 
 from services.ai import (
     ask_chatbot,
@@ -47,6 +47,9 @@ async def process_ai_chat(
         async with ai_chat_semaphore:
             answer = await ask_chatbot(text)
 
+        if not answer or answer.startswith(("⏳", "⛔", "❌")):
+            await decrement_ai_question(chat_id)
+
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
@@ -55,6 +58,10 @@ async def process_ai_chat(
 
     except Exception:
         logger.exception("process_ai_chat failed")
+        try:
+            await decrement_ai_question(chat_id)
+        except Exception:
+            pass
 
         try:
             await context.bot.edit_message_text(

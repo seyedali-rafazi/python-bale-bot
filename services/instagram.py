@@ -7,7 +7,6 @@ import os
 import shutil
 import sys
 import uuid
-import yt_dlp
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -114,6 +113,8 @@ async def async_download_instagram(url: str, timeout_sec: float = 60.0) -> str |
 
 
 def download_instagram(url):
+    import yt_dlp
+
     req_id = uuid.uuid4().hex
 
     ydl_opts = {

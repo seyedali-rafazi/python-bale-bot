@@ -6,7 +6,7 @@ import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import async_get_state, set_state, clear_state
-from core.task_utils import load_input_file, remove_file_async
+from core.task_utils import bounded_large_upload, load_input_file, remove_file_async
 from services.rate_limiter import user_action_lock
 from services.web_scraper import async_search_web, create_single_file
 import asyncio
@@ -65,13 +65,17 @@ async def _download_and_send_webpage(
             new_count = await increment_web_search_downloads(user_id)
             await wait_msg.edit_text("✅ فایل آماده شد. در حال ارسال...")
             try:
-                doc_input = await load_input_file(output_filename, filename=filename)
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=doc_input,
-                    filename=filename,
-                    caption=f"{caption_label}: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
-                )
+                async with bounded_large_upload():
+                    doc_input = await load_input_file(output_filename, filename=filename)
+                    try:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=doc_input,
+                            filename=filename,
+                            caption=f"{caption_label}: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
+                        )
+                    finally:
+                        del doc_input
                 return True
             except Exception as e:
                 print(f"Send Document Error: {e}")

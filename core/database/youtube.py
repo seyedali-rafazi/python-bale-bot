@@ -84,6 +84,7 @@ async def _invalidate_archive_summary_cache(*, include_top: bool = True) -> None
         "yt_archive:count_global",
         "yt_archive:count_channels",
         "yt_archive:channels_p0",
+        "yt_archive:channels_all",
     ]
     if include_top:
         keys.extend(["yt_archive:top:4", "yt_archive:top:10"])
@@ -149,6 +150,13 @@ async def get_cached_video(video_id: str) -> list:
 
 async def get_cache_row_metadata(video_id: str) -> dict | None:
     """Return cached metadata columns for video_id without spawning yt-dlp."""
+    from services.cache_service import cache_get, cache_set
+
+    meta_key = f"yt_meta:{video_id}"
+    cached = await cache_get(meta_key)
+    if isinstance(cached, dict) and "format_type" in cached:
+        return cached
+
     pool = await get_db()
     row = await pool.fetchrow(
         """
@@ -160,7 +168,7 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
     )
     if not row:
         return None
-    return {
+    meta = {
         "title": row["title"],
         "uploader": row["channel_name"],
         "channel": row["channel_name"],
@@ -168,6 +176,8 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
         "uploaded_at": row["uploaded_at"],
         "format_type": row["format_type"],
     }
+    await cache_set(meta_key, meta, ttl_sec=86400 * 7)
+    return meta
 
 
 async def save_cached_video(
@@ -218,9 +228,31 @@ async def save_cached_video(
         cached_at,
         (uploaded_at or "").strip()[:14] or None,
     )
-    from services.cache_service import cache_set
+    from services.cache_service import cache_delete, cache_set
 
-    await cache_set(f"yt_video:{cache_key}", file_ids, ttl_sec=86400 * 7)
+    norm_title = _normalize_title(title)
+    norm_channel = _normalize_channel(channel_name)
+    norm_yt_id = yt_video_id or extract_yt_id_from_cache_key(cache_key)
+    norm_uploaded = (uploaded_at or "").strip()[:14] or None
+    tasks = [cache_set(f"yt_video:{cache_key}", file_ids, ttl_sec=86400 * 7)]
+    if norm_title and norm_channel and norm_uploaded:
+        tasks.append(
+            cache_set(
+                f"yt_meta:{cache_key}",
+                {
+                    "title": norm_title,
+                    "uploader": norm_channel,
+                    "channel": norm_channel,
+                    "yt_video_id": norm_yt_id,
+                    "uploaded_at": norm_uploaded,
+                    "format_type": format_type,
+                },
+                ttl_sec=86400 * 7,
+            )
+        )
+    else:
+        tasks.append(cache_delete(f"yt_meta:{cache_key}"))
+    await asyncio.gather(*tasks)
     await _invalidate_archive_summary_cache(include_top=False)
 
 
@@ -251,9 +283,9 @@ async def update_cache_metadata(
         (uploaded_at or "").strip()[:14] or None,
         cache_key,
     )
-    from services.cache_service import cache_delete
+    from services.cache_service import cache_delete_many
 
-    await cache_delete(f"yt_video:{cache_key}")
+    await cache_delete_many([f"yt_video:{cache_key}", f"yt_meta:{cache_key}"])
     if invalidate_summary and (norm_title or norm_channel):
         await _invalidate_archive_summary_cache()
 
@@ -336,6 +368,7 @@ async def _batch_update_cache_metadata(
             has_summary_change = True
         records.append((norm_title, norm_channel, yt_video_id, norm_uploaded, cache_key))
         cache_keys.append(f"yt_video:{cache_key}")
+        cache_keys.append(f"yt_meta:{cache_key}")
 
     pool = await get_db()
     async with pool.acquire() as conn:
@@ -664,16 +697,10 @@ async def count_global_cache() -> int:
     return count
 
 
-async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_SIZE):
+async def _load_all_global_channels() -> list[dict]:
     from services.cache_service import cache_get, cache_set
 
-    if offset == 0 and limit == CHANNELS_PAGE_SIZE:
-        cache_key = "yt_archive:channels_p0"
-    else:
-        ver = await cache_get("yt_archive:channels_ver") or "1"
-        cache_key = f"yt_archive:channels_v{ver}:{offset}:{limit}"
-
-    cached = await cache_get(cache_key)
+    cached = await cache_get("yt_archive:channels_all")
     if isinstance(cached, list):
         return cached
 
@@ -686,17 +713,24 @@ async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_S
           AND {_CACHE_HAS_FILES_SQL}
         GROUP BY channel_name
         ORDER BY video_count DESC, channel_name ASC
-        LIMIT $1 OFFSET $2
-        """,
-        limit,
-        offset,
+        """
     )
     serialized = [
         {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
         for r in rows
     ]
-    await cache_set(cache_key, serialized, ttl_sec=60)
+    await asyncio.gather(
+        cache_set("yt_archive:channels_all", serialized, ttl_sec=120),
+        cache_set("yt_archive:count_channels", len(serialized), ttl_sec=120),
+    )
     return serialized
+
+
+async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_SIZE):
+    all_channels = await _load_all_global_channels()
+    start = max(0, int(offset))
+    end = start + max(0, int(limit))
+    return all_channels[start:end]
 
 
 async def count_global_channels() -> int:
@@ -705,6 +739,12 @@ async def count_global_channels() -> int:
     cached = await cache_get("yt_archive:count_channels")
     if isinstance(cached, int):
         return cached
+
+    cached_all = await cache_get("yt_archive:channels_all")
+    if isinstance(cached_all, list):
+        count = len(cached_all)
+        await cache_set("yt_archive:count_channels", count, ttl_sec=120)
+        return count
 
     pool = await get_db()
     val = await pool.fetchval(
@@ -868,7 +908,93 @@ async def search_global_cache_by_channel(query: str, limit: int = 15):
     )
 
 
+_YT_VIEWS_PENDING_HASH = "bale:yt:views_pending"
+_YT_VIEWS_FLUSH_THRESHOLD = 25
+_views_flush_lock = asyncio.Lock()
+_POP_ALL_HASH_LUA = """
+local vals = redis.call("HGETALL", KEYS[1])
+if #vals > 0 then
+    redis.call("DEL", KEYS[1])
+end
+return vals
+"""
+
+
+async def flush_pending_yt_views() -> int:
+    """Flush Redis-buffered YouTube view increments to PostgreSQL in one batch."""
+    from services.redis_client import get_async_redis
+
+    redis = get_async_redis()
+    if redis is None:
+        return 0
+
+    async with _views_flush_lock:
+        try:
+            raw = await redis.eval(_POP_ALL_HASH_LUA, 1, _YT_VIEWS_PENDING_HASH)
+        except Exception:
+            return 0
+        if not raw:
+            return 0
+
+        video_ids: list[str] = []
+        deltas: list[int] = []
+        for i in range(0, len(raw) - 1, 2):
+            vid = raw[i]
+            try:
+                delta = int(raw[i + 1])
+            except (TypeError, ValueError):
+                continue
+            if vid and delta > 0:
+                video_ids.append(vid)
+                deltas.append(delta)
+
+        if not video_ids:
+            return 0
+
+        try:
+            pool = await get_db()
+            await pool.execute(
+                """
+                UPDATE youtube_cache AS yc
+                SET view_count = COALESCE(yc.view_count, 0) + v.delta
+                FROM (
+                    SELECT UNNEST($1::text[]) AS video_id, UNNEST($2::int[]) AS delta
+                ) AS v
+                WHERE yc.video_id = v.video_id
+                """,
+                video_ids,
+                deltas,
+            )
+            return len(video_ids)
+        except Exception:
+            # Restore deltas to Redis on transient DB error
+            try:
+                pipe = redis.pipeline()
+                for vid, delta in zip(video_ids, deltas):
+                    pipe.hincrby(_YT_VIEWS_PENDING_HASH, vid, delta)
+                await pipe.execute()
+            except Exception:
+                pass
+            raise
+
+
 async def increment_yt_video_view(video_id: str):
+    from services.redis_client import get_async_redis
+
+    redis = get_async_redis()
+    if redis is not None:
+        try:
+            pipe = redis.pipeline()
+            pipe.hincrby(_YT_VIEWS_PENDING_HASH, video_id, 1)
+            pipe.hlen(_YT_VIEWS_PENDING_HASH)
+            res = await pipe.execute()
+            pending_len = int(res[1] or 0)
+            if pending_len >= _YT_VIEWS_FLUSH_THRESHOLD:
+                await flush_pending_yt_views()
+            return
+        except Exception:
+            pass
+
     pool = await get_db()
     await pool.execute(
         "UPDATE youtube_cache SET view_count = view_count + 1 WHERE video_id = $1",
@@ -884,6 +1010,7 @@ async def get_top_cached_videos(limit: int = 10):
     if isinstance(cached, list):
         return cached
 
+    await flush_pending_yt_views()
     pool = await get_db()
     rows = await pool.fetch(
         f"""

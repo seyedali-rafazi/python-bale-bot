@@ -69,7 +69,6 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_channel ON youtube_cache(channel_name);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_yt_id ON youtube_cache(yt_video_id);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_views ON youtube_cache(view_count DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_uploaded ON youtube_cache(uploaded_at DESC);
-CREATE INDEX IF NOT EXISTS idx_yt_cache_id_desc ON youtube_cache(id DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
     ON youtube_cache(channel_name, uploaded_at DESC, id DESC)
     WHERE file_ids IS NOT NULL AND file_ids != '[]';
@@ -82,6 +81,15 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_has_files_views
 CREATE INDEX IF NOT EXISTS idx_yt_cache_has_files_only
     ON youtube_cache(id)
     WHERE file_ids IS NOT NULL AND file_ids != '[]';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_incomplete
+    ON youtube_cache(id)
+    WHERE channel_name IS NULL OR channel_name IN ('ناشناس', 'Unknown', 'unknown', '')
+       OR title IS NULL OR title IN ('بدون عنوان', '')
+       OR yt_video_id IS NULL OR TRIM(yt_video_id) = '';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_missing_upload_date
+    ON youtube_cache(id DESC)
+    WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
+      AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != '';
 CREATE TABLE IF NOT EXISTS instagram_explore (
     id SERIAL PRIMARY KEY,
     file_id TEXT UNIQUE
@@ -186,6 +194,7 @@ async def init_db():
 
     async with pool.acquire() as conn:
         await conn.execute(schema_sql)
+        await conn.execute("DROP INDEX IF EXISTS idx_yt_cache_id_desc")
         await conn.execute("ALTER TABLE cloud_files ADD COLUMN IF NOT EXISTS s3_key TEXT")
         await _ensure_float_cloud_columns(conn)
         await _ensure_trigram_indexes(conn)
