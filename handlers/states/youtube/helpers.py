@@ -9,6 +9,7 @@ from core.limits import get_limit
 from services.zip_utils import format_merge_instructions, part_display_filename
 from .bale_send import (
     ForwardStatus,
+    chat_send_lock,
     forward_file_id_to_user,
     run_storage_upload,
     pause_between_parts,
@@ -203,21 +204,22 @@ async def _deliver_stored_parts(
     """Forward file_ids to user once each; return indexes with uncertain delivery."""
     total = total_parts or len(file_ids)
     uncertain: list[int] = []
-    for idx, file_id in enumerate(file_ids, 1):
-        if total > 1:
-            status_msg = await _update_part_status(
-                context, chat_id, status_msg, f"📤 ارسال پارت {idx} از {total}..."
-            )
-        status = await forward_file_id_to_user(context, chat_id, file_id, media_kind)
-        if status == ForwardStatus.UNCERTAIN:
-            uncertain.append(idx)
-        elif status == ForwardStatus.FAILED:
-            uncertain.append(idx)
-            logger.error("Forward failed for part %s/%s to %s", idx, total, chat_id)
-        if idx < total:
-            await pause_between_parts(
-                extra_sec=1.0 if status != ForwardStatus.OK else 0.0
-            )
+    async with chat_send_lock(chat_id):
+        for idx, file_id in enumerate(file_ids, 1):
+            if total > 1:
+                status_msg = await _update_part_status(
+                    context, chat_id, status_msg, f"📤 ارسال پارت {idx} از {total}..."
+                )
+            status = await forward_file_id_to_user(context, chat_id, file_id, media_kind)
+            if status == ForwardStatus.UNCERTAIN:
+                uncertain.append(idx)
+            elif status == ForwardStatus.FAILED:
+                uncertain.append(idx)
+                logger.error("Forward failed for part %s/%s to %s", idx, total, chat_id)
+            if idx < total:
+                await pause_between_parts(
+                    extra_sec=1.5 if status != ForwardStatus.OK else 0.0
+                )
     return uncertain
 
 

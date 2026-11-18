@@ -262,7 +262,6 @@ async def handle_tiktok_state(
                         return
 
                     selected_video = videos[index]
-                    clear_state(chat_id)
                     _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
                     track_task(
                         background_tt_download(

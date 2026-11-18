@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 from gtts import gTTS
 
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError, RPCError
 
 from services.http_client import get_http_session
 
@@ -20,7 +19,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY")
-CHATGPT_BOT_USERNAME = os.getenv("CHATGPT_BOT_USERNAME" , "@UnlimitChatGPTbot")
+GROQ_API_KEY = (os.getenv("groq_api") or os.getenv("GROQ_API_KEY") or "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH")
@@ -28,16 +29,13 @@ SESSION_NAME = os.getenv("AI_SESSION_NAME", "ai_session")
 AI_RESPONSE_TIMEOUT_SEC = max(10.0, float(os.getenv("AI_RESPONSE_TIMEOUT_SEC", "28")))
 
 # =========================================================
-# TELETHON
+# TELETHON (shared session for Telegram downloads)
 # =========================================================
 
 _ai_client: TelegramClient | None = None
 
 _ai_client_lock = asyncio.Lock()
 
-# مهم‌ترین بخش
-# فقط AI interaction serialize میشه
-_ai_chat_lock = asyncio.Lock()
 _TTS_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("TTS_MAX_CONCURRENT", "4"))))
 _IMAGE_GEN_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("IMAGE_GEN_MAX_CONCURRENT", "3"))))
 
@@ -117,77 +115,66 @@ async def get_telethon_client() -> TelegramClient:
 
 
 # =========================================================
-# AI CHAT
+# AI CHAT (GROQ)
 # =========================================================
 
 
 async def ask_chatbot(text: str) -> str:
-    # Serialize messages to the single Telegram bot chat so replies never mix across users
-    async with _ai_chat_lock:
-        try:
-            client = await _ensure_ai_client()
+    api_key = (GROQ_API_KEY or os.getenv("groq_api") or os.getenv("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        logger.error("Groq API key (groq_api / GROQ_API_KEY) is not configured")
+        return "❌ کلید API هوش مصنوعی تنظیم نشده است."
 
-            prompt = (
-                "این درخواست کاملاً مستقل است.\n"
-                "از پیام‌های قبلی استفاده نکن.\n"
-                "بدون سلام و احوالپرسی پاسخ بده.\n\n"
-                f"{text}"
-            )
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful AI assistant. Respond directly and clearly "
+                    "in the same language as the user (e.g., Persian if the user writes in Persian), "
+                    "without unnecessary greetings."
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.7,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
-            sent_msg = None
-            try:
-                async with client.conversation(
-                    CHATGPT_BOT_USERNAME,
-                    timeout=AI_RESPONSE_TIMEOUT_SEC,
-                    total_timeout=AI_RESPONSE_TIMEOUT_SEC,
-                    exclusive=False,
-                ) as conv:
-                    sent_msg = await asyncio.wait_for(
-                        conv.send_message(prompt),
-                        timeout=15,
-                    )
+    try:
+        session = await get_http_session()
+        async with session.post(
+            GROQ_API_URL,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=AI_RESPONSE_TIMEOUT_SEC),
+        ) as resp:
+            if resp.status == 429:
+                return "⛔ محدودیت درخواست Groq. لطفاً چند لحظه بعد دوباره تلاش کنید."
+            if resp.status != 200:
+                err_body = await resp.text()
+                logger.warning("Groq API returned status %s: %s", resp.status, err_body[:300])
+                return "❌ خطا در ارتباط با AI."
 
-                    while True:
-                        msg = await conv.get_response()
-                        if getattr(msg, "sticker", None):
-                            continue
-                        if not msg.text:
-                            continue
-                        current_text = msg.text.strip()
-                        if len(current_text) < 5:
-                            continue
-                        return current_text
+            data = await resp.json()
+            choices = data.get("choices") or []
+            if choices:
+                content = (choices[0].get("message") or {}).get("content") or ""
+                content = content.strip()
+                if content:
+                    return content
+            return "❌ پاسخی از هوش مصنوعی دریافت نشد."
 
-            except asyncio.TimeoutError:
-                # Single fallback check in case update delivery lagged behind RPC
-                if sent_msg is not None:
-                    messages = await asyncio.wait_for(
-                        client.get_messages(
-                            CHATGPT_BOT_USERNAME,
-                            limit=5,
-                        ),
-                        timeout=10.0,
-                    )
-                    for msg in messages or []:
-                        if msg.id <= sent_msg.id or msg.out:
-                            continue
-                        if getattr(msg, "sticker", None) or not msg.text:
-                            continue
-                        current_text = msg.text.strip()
-                        if len(current_text) >= 5:
-                            return current_text
-                return "⏳ زمان پاسخ AI تمام شد."
+    except asyncio.TimeoutError:
+        return "⏳ زمان پاسخ AI تمام شد."
 
-        except FloodWaitError as e:
-            return f"⛔ محدودیت تلگرام.\n{e.seconds} ثانیه بعد تلاش کنید."
-
-        except RPCError:
-            logger.exception("Telethon RPC Error")
-            return "❌ خطا در ارتباط با تلگرام."
-
-        except Exception:
-            logger.exception("ask_chatbot failed")
-            return "❌ خطا در ارتباط با AI."
+    except Exception:
+        logger.exception("ask_chatbot failed")
+        return "❌ خطا در ارتباط با AI."
 
 
 # =========================================================

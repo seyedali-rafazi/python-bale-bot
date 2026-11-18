@@ -17,6 +17,11 @@ from typing import Any, Dict, List
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+try:
+    from telegram.error import Forbidden
+except ImportError:
+    class Forbidden(Exception):
+        pass
 
 from core.database.monitoring import log_upload_failed, log_upload_success
 from core.state_manager import StateCache, async_clear_state, async_get_state, async_set_state, clear_state, set_state
@@ -348,19 +353,36 @@ async def _process_software_download(
                     text="✅ نرم‌افزار با موفقیت ارسال شد!\nبرای جستجوی برنامه‌ای دیگر، مجدداً نام آن را بنویسید.",
                 )
                 await log_upload_success("software", chat_id)
+            except Forbidden as e:
+                logger.warning("Forbidden sending software document to chat %s: %s", chat_id, e)
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "❌ ارسال این فایل توسط بله مسدود شد (محدودیت امنیتی یا فایل).\n"
+                            f"🔗 لینک مستقیم دانلود:\n{download_url}"
+                        ),
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    pass
+                await log_upload_failed("software", chat_id)
             except Exception as e:
                 logger.exception("Failed to send software document to chat %s: %s", chat_id, e)
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text="❌ خطا در ارسال فایل به بله. لطفاً مجدداً امتحان کنید.",
-                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="❌ خطا در ارسال فایل به بله. لطفاً مجدداً امتحان کنید.",
+                    )
+                except Exception:
+                    pass
                 await log_upload_failed("software", chat_id)
         else:
             for part_idx, part_path in enumerate(part_paths, 1):
                 part_size_mb = (await get_file_size_async(part_path)) / (1024 * 1024)
                 part_caption = (
-                    f"📦 **{app_name}** (پارت {part_idx} از {total_parts})\n"
-                    f"🔖 **نسخه:** `{version}`\n"
+                    f"📦 **{escape_markdown(app_name)}** (پارت {part_idx} از {total_parts})\n"
+                    f"🔖 **نسخه:** `{escape_markdown(version)}`\n"
                     f"💾 **حجم این پارت:** `{part_size_mb:.1f} MB`\n"
                     f"💻 **سیستم‌عامل:** {platform_fa}"
                 )
@@ -381,12 +403,30 @@ async def _process_software_download(
                             )
                         finally:
                             del part_input
+                except Forbidden as e:
+                    logger.warning("Forbidden sending part %d of %s to chat %s: %s", part_idx, app_name, chat_id, e)
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"❌ ارسال پارت {part_idx} توسط بله مسدود شد.\n"
+                                f"🔗 لینک مستقیم دانلود:\n{download_url}"
+                            ),
+                            disable_web_page_preview=True,
+                        )
+                    except Exception:
+                        pass
+                    await log_upload_failed("software", chat_id)
+                    return
                 except Exception as e:
                     logger.exception("Failed sending part %d of %s: %s", part_idx, app_name, e)
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"❌ خطا در ارسال پارت {part_idx}. فرآیند متوقف شد.",
-                    )
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"❌ خطا در ارسال پارت {part_idx}. فرآیند متوقف شد.",
+                        )
+                    except Exception:
+                        pass
                     await log_upload_failed("software", chat_id)
                     return
 

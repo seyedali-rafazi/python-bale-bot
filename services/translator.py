@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import os
 import logging
@@ -17,8 +18,18 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 PROXY = os.getenv("PROXY")
-# If no proxy is provided in .env, explicitly pass empty strings to avoid inheriting broken system proxies
-proxies = {"http": PROXY, "https": PROXY} if PROXY else {"http": "", "https": ""}
+_DIRECT_PROXIES = {"http": "", "https": ""}
+_HAS_SOCKS = importlib.util.find_spec("socks") is not None
+if PROXY and PROXY.lower().startswith("socks") and not _HAS_SOCKS:
+    logger.warning(
+        "PROXY is set to a SOCKS URL (%s) but PySocks is not installed; "
+        "translator will connect directly. Install PySocks (`pip install PySocks`) to enable SOCKS.",
+        PROXY.split("://", 1)[0],
+    )
+    proxies = dict(_DIRECT_PROXIES)
+else:
+    # If no proxy is provided in .env, explicitly pass empty strings to avoid inheriting broken system proxies
+    proxies = {"http": PROXY, "https": PROXY} if PROXY else dict(_DIRECT_PROXIES)
 
 # Cached translator instances
 cached_translators = {}

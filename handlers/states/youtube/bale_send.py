@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+from contextlib import asynccontextmanager
 import logging
 import os
 from enum import Enum
@@ -14,14 +16,37 @@ logger = logging.getLogger(__name__)
 
 MediaKind = Literal["document", "video", "audio"]
 
-PART_SEND_DELAY_SEC = max(1.0, float(os.getenv("BALE_PART_SEND_DELAY_SEC", "2.5")))
+PART_SEND_DELAY_SEC = max(1.5, float(os.getenv("BALE_PART_SEND_DELAY_SEC", "2.5")))
 STORAGE_UPLOAD_RETRIES = max(1, int(os.getenv("BALE_STORAGE_UPLOAD_RETRIES", "3")))
 _BALE_SEND_TIMEOUTS = {
-    "read_timeout": 180,
-    "write_timeout": 180,
-    "connect_timeout": 30,
-    "pool_timeout": 30,
+    "read_timeout": 45,
+    "write_timeout": 30,
+    "connect_timeout": 20,
+    "pool_timeout": 20,
 }
+
+_CHAT_SEND_LOCKS: OrderedDict[str, asyncio.Lock] = OrderedDict()
+_MAX_CHAT_LOCKS = 2000
+
+
+@asynccontextmanager
+async def chat_send_lock(chat_id: str):
+    """Serialize cached media deliveries per chat to prevent Bale 504/rate-limit stalls."""
+    key = str(chat_id)
+    lock = _CHAT_SEND_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CHAT_SEND_LOCKS[key] = lock
+        while len(_CHAT_SEND_LOCKS) > _MAX_CHAT_LOCKS:
+            oldest_key, oldest_lock = next(iter(_CHAT_SEND_LOCKS.items()))
+            if oldest_lock.locked():
+                break
+            _CHAT_SEND_LOCKS.pop(oldest_key, None)
+    else:
+        _CHAT_SEND_LOCKS.move_to_end(key)
+
+    async with lock:
+        yield
 
 
 class ForwardStatus(str, Enum):
