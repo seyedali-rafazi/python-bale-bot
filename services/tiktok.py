@@ -303,7 +303,16 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
             stderr=asyncio.subprocess.PIPE,
         )
 
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180.0)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+            logger.warning("[TikTok] yt-dlp timed out after 180s (proxy=%s)", proxy or "none")
+            return None
 
         if process.returncode != 0:
             err_msg = stderr.decode("utf-8", errors="ignore")

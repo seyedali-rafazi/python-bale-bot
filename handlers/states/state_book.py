@@ -24,6 +24,7 @@ from telegram.ext import ContextTypes
 from core.state_manager import StateCache, clear_state
 from core.database import log_upload_success, log_upload_failed
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
+from services.rate_limiter import user_action_lock
 
 logger = logging.getLogger(__name__)
 
@@ -153,73 +154,79 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text("❌ لینک دانلود این کتاب موجود نیست.")
         return
 
-    # Disable buttons to prevent double-tap
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    # Disable buttons & guard against double-tap
+    user_id = str(query.from_user.id) if query.from_user else chat_id
+    async with user_action_lock(user_id, "book_dl", timeout_sec=60) as acquired:
+        if not acquired:
+            await query.message.reply_text("⏳ دانلود کتاب قبلی شما هنوز در حال انجام است.")
+            return
 
-    source_label = book.get("source_label", "کتابخانه دیجیتال")
-    ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
-
-    wait_msg = await query.message.reply_text(
-        f"⏳ در حال دانلود کتاب از {source_label}...\n"
-        f"📖 *{book['title']}*\n"
-        f"📄 فرمت: {ext_tag}\n"
-        "این ممکن است چند ثانیه طول بکشد.",
-        parse_mode="Markdown",
-    )
-
-    # Download in a thread-safe temp directory
-    with tempfile.TemporaryDirectory(prefix="book_dl_") as tmp_dir:
         try:
-            file_path = await download_book(book, tmp_dir)
+            await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
-            logger.exception("Book download exception: %s", book.get("title"))
-            await context.bot.send_message(chat_id, "❌ خطا در دانلود کتاب. لطفاً دوباره تلاش کنید.")
-            await log_upload_failed("book", chat_id)
-            return
-        finally:
-            try:
-                await wait_msg.delete()
-            except Exception:
-                pass
+            pass
 
-        if file_path is None:
-            await context.bot.send_message(
-                chat_id,
-                f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۵۰ مگابایت است.\n\n"
-                f"📖 *{book['title']}*\n"
-                f"می‌توانید آن را مستقیماً از {source_label} دانلود کنید.",
-                parse_mode="Markdown",
-            )
-            await log_upload_failed("book", chat_id)
-            return
+        source_label = book.get("source_label", "کتابخانه دیجیتال")
+        ext_tag = book.get("file_ext", ".pdf").lstrip(".").upper()
 
-        # Send the file
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        caption = (
+        wait_msg = await query.message.reply_text(
+            f"⏳ در حال دانلود کتاب از {source_label}...\n"
             f"📖 *{book['title']}*\n"
-            f"✍️ {book['author']}\n"
-            f"📦 حجم: {file_size_mb:.1f} مگابایت\n"
-            f"🌐 منبع: {source_label}"
+            f"📄 فرمت: {ext_tag}\n"
+            "این ممکن است چند ثانیه طول بکشد.",
+            parse_mode="Markdown",
         )
-        try:
-            with open(file_path, "rb") as fh:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=fh,
-                    filename=os.path.basename(file_path),
-                    caption=caption,
+
+        # Download in a thread-safe temp directory
+        with tempfile.TemporaryDirectory(prefix="book_dl_") as tmp_dir:
+            try:
+                file_path = await download_book(book, tmp_dir)
+            except Exception:
+                logger.exception("Book download exception: %s", book.get("title"))
+                await context.bot.send_message(chat_id, "❌ خطا در دانلود کتاب. لطفاً دوباره تلاش کنید.")
+                await log_upload_failed("book", chat_id)
+                return
+            finally:
+                try:
+                    await wait_msg.delete()
+                except Exception:
+                    pass
+
+            if file_path is None:
+                await context.bot.send_message(
+                    chat_id,
+                    f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۵۰ مگابایت است.\n\n"
+                    f"📖 *{book['title']}*\n"
+                    f"می‌توانید آن را مستقیماً از {source_label} دانلود کنید.",
                     parse_mode="Markdown",
                 )
-            await context.bot.send_message(
-                chat_id,
-                "✅ کتاب با موفقیت ارسال شد!\n"
-                "برای جستجوی کتاب دیگر دوباره دکمه 🔍 جستجوی کتاب را بزنید.",
+                await log_upload_failed("book", chat_id)
+                return
+
+            # Send the file
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            caption = (
+                f"📖 *{book['title']}*\n"
+                f"✍️ {book['author']}\n"
+                f"📦 حجم: {file_size_mb:.1f} مگابایت\n"
+                f"🌐 منبع: {source_label}"
             )
-            await log_upload_success("book", chat_id)
-        except Exception:
-            logger.exception("Failed to send book file: %s", file_path)
-            await context.bot.send_message(chat_id, "❌ خطا در ارسال فایل. لطفاً دوباره تلاش کنید.")
-            await log_upload_failed("book", chat_id)
+            try:
+                with open(file_path, "rb") as fh:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=fh,
+                        filename=os.path.basename(file_path),
+                        caption=caption,
+                        parse_mode="Markdown",
+                    )
+                await context.bot.send_message(
+                    chat_id,
+                    "✅ کتاب با موفقیت ارسال شد!\n"
+                    "برای جستجوی کتاب دیگر دوباره دکمه 🔍 جستجوی کتاب را بزنید.",
+                )
+                await log_upload_success("book", chat_id)
+            except Exception:
+                logger.exception("Failed to send book file: %s", file_path)
+                await context.bot.send_message(chat_id, "❌ خطا در ارسال فایل. لطفاً دوباره تلاش کنید.")
+                await log_upload_failed("book", chat_id)

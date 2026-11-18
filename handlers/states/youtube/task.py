@@ -289,6 +289,17 @@ async def background_yt_download(
 
                     await asyncio.sleep(5)
 
+            async def _stop_updater_task(task: asyncio.Task | None) -> None:
+                progress_dict["is_finished"] = True
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+
             updater_task = asyncio.create_task(update_progress_message())
 
             try:
@@ -423,6 +434,7 @@ async def background_yt_download(
                                     text="☁️ آپلود در فضای ابری ...",
                                 )
 
+                                await _stop_updater_task(updater_task)
                                 progress_dict["is_finished"] = False
                                 progress_dict["text"] = "☁️ شروع آپلود ابری..."
 
@@ -653,7 +665,9 @@ async def background_yt_download(
                                     text="☁️ آپلود در سرور ابری...",
                                 )
 
+                                await _stop_updater_task(updater_task)
                                 progress_dict["is_finished"] = False
+                                progress_dict["text"] = "☁️ شروع آپلود ابری..."
 
                                 updater_task = asyncio.create_task(
                                     update_progress_message()
@@ -820,9 +834,7 @@ async def background_yt_download(
                 await decrement_yt_downloads(chat_id)
 
             finally:
-                progress_dict["is_finished"] = True
-
-                updater_task.cancel()
+                await _stop_updater_task(updater_task)
 
     except Exception as e:
         print(f"Semaphore Error: {e}")

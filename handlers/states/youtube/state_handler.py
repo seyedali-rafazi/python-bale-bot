@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
 from core.keyboards import get_yt_format_keyboard
-from services.youtube import search_yt_videos, get_video_info_cached
+from services.youtube import async_search_yt_videos, get_video_info_cached
 from core.yt_moderation import (
     MSG_BLOCKED_CHANNEL,
     MSG_BLOCKED_SEARCH,
@@ -37,7 +37,7 @@ async def handle_youtube_state(
             return
         url = f"https://www.youtube.com/@{channel}/videos"
         await update.message.reply_text("⏳ در حال دریافت لیست ویدیوها...")
-        results = await asyncio.to_thread(search_yt_videos, url, 5)
+        results = await async_search_yt_videos(url, 5)
 
         if not results:
             await update.message.reply_text("❌ کانال پیدا نشد یا ویدیویی ندارد.")
@@ -64,7 +64,7 @@ async def handle_youtube_state(
             await update.message.reply_text(MSG_BLOCKED_SEARCH)
             return
         await update.message.reply_text("⏳ در حال جستجو...")
-        results = await asyncio.to_thread(search_yt_videos, text, 10)
+        results = await async_search_yt_videos(text, 10)
 
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
@@ -109,7 +109,7 @@ async def handle_youtube_state(
 
         await update.message.reply_text("⏳ در حال جستجو در کانال...")
         search_query = f"{channel} {query}"
-        results = await asyncio.to_thread(search_yt_videos, search_query, 5)
+        results = await async_search_yt_videos(search_query, 5)
 
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")

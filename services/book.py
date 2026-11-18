@@ -8,7 +8,7 @@ Sources (in priority order):
   3. Open Library                    — comprehensive global catalog & metadata
 
 No API key required for any source.
-All blocking I/O is wrapped in asyncio.to_thread().
+Uses native async httpx.AsyncClient connection pooling so no ThreadPoolExecutor slots are blocked.
 """
 
 from __future__ import annotations
@@ -17,10 +17,8 @@ import asyncio
 import logging
 import os
 import re
-import time
 import urllib.parse
-import threading
-from concurrent.futures import ThreadPoolExecutor
+import zipfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -61,17 +59,21 @@ SOURCE_LABELS = {
     SRC_DOAB:      "🎓 DOAB (Open Access)",
 }
 
+_async_clients: dict[bool, httpx.AsyncClient] = {}
+_async_clients_lock = asyncio.Lock()
+_BOOK_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(4)
 
-_sync_clients: dict[bool, httpx.Client] = {}
-_sync_clients_lock = threading.Lock()
 
+async def _get_shared_async_client(verify: bool = True) -> httpx.AsyncClient:
+    """Return a shared httpx.AsyncClient with connection pooling."""
+    client = _async_clients.get(verify)
+    if client is not None and not client.is_closed:
+        return client
 
-def _get_shared_client(verify: bool = True) -> httpx.Client:
-    """Return a shared thread-safe httpx.Client with connection pooling."""
-    with _sync_clients_lock:
-        client = _sync_clients.get(verify)
+    async with _async_clients_lock:
+        client = _async_clients.get(verify)
         if client is None or client.is_closed:
-            client = httpx.Client(
+            client = httpx.AsyncClient(
                 timeout=_TIMEOUT,
                 follow_redirects=True,
                 verify=verify,
@@ -79,38 +81,40 @@ def _get_shared_client(verify: bool = True) -> httpx.Client:
                 trust_env=False,
                 limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
             )
-            _sync_clients[verify] = client
+            _async_clients[verify] = client
         return client
 
 
-def close_book_clients() -> None:
-    with _sync_clients_lock:
-        for client in _sync_clients.values():
+async def close_book_clients() -> None:
+    async with _async_clients_lock:
+        for client in _async_clients.values():
             if not client.is_closed:
                 try:
-                    client.close()
+                    await client.aclose()
                 except Exception:
                     pass
-        _sync_clients.clear()
+        _async_clients.clear()
 
 
-def _get_with_retry(
-    client: httpx.Client,
+async def _get_with_retry(
+    client: httpx.AsyncClient,
     url: str,
     *,
     params: dict | None = None,
     retries: int = _MAX_RETRIES,
 ) -> Optional[httpx.Response]:
-    """GET with automatic retry on connection errors."""
+    """Async GET with automatic retry on connection errors."""
     for attempt in range(retries + 1):
         try:
-            resp = client.get(url, params=params)
+            resp = await client.get(url, params=params)
             resp.raise_for_status()
             return resp
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             if attempt < retries:
                 logger.info("Retry %d/%d for %s: %s", attempt + 1, retries, url, e)
-                time.sleep(_RETRY_DELAY)
+                await asyncio.sleep(_RETRY_DELAY)
             else:
                 logger.warning("Request failed after %d retries — %s: %s", retries, url, e)
     return None
@@ -132,7 +136,7 @@ _IA_SEARCH_URL = "https://archive.org/advancedsearch.php"
 _IA_META_URL   = "https://archive.org/metadata/{ident}/files"
 
 
-def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
+async def _search_internet_archive(query: str, max_results: int) -> List[dict]:
     """Search Internet Archive for public/downloadable texts in PDF format."""
     clean_query = query.replace('"', '').strip()
     params = {
@@ -144,22 +148,30 @@ def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
         "output": "json",
     }
 
-    client = _get_shared_client()
+    client = await _get_shared_async_client()
     try:
-        resp = _get_with_retry(client, _IA_SEARCH_URL, params=params, retries=1)
+        resp = await _get_with_retry(client, _IA_SEARCH_URL, params=params, retries=1)
         if not resp:
             return []
         docs = resp.json().get("response", {}).get("docs", [])
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.warning("Internet Archive search failed: %s", e)
         return []
 
-    def _resolve_pdf(doc: dict) -> Optional[dict]:
+    if not docs:
+        return []
+
+    meta_sem = asyncio.Semaphore(6)
+
+    async def _resolve_pdf(doc: dict) -> Optional[dict]:
         ident = doc.get("identifier")
         if not ident:
             return None
         try:
-            meta_resp = client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
+            async with meta_sem:
+                meta_resp = await client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
             if meta_resp.status_code != 200:
                 return None
             files = meta_resp.json().get("result", [])
@@ -189,15 +201,20 @@ def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
                     "file_ext":     ".pdf",
                     "book_id":      ident,
                 }
+        except asyncio.CancelledError:
+            raise
         except Exception:
             pass
         return None
 
+    resolved = await asyncio.gather(
+        *(_resolve_pdf(doc) for doc in docs),
+        return_exceptions=True,
+    )
     books: List[dict] = []
-    with ThreadPoolExecutor(max_workers=min(len(docs) or 1, 6)) as pool:
-        for item in pool.map(_resolve_pdf, docs):
-            if item:
-                books.append(item)
+    for item in resolved:
+        if isinstance(item, dict):
+            books.append(item)
             if len(books) >= max_results:
                 break
     return books
@@ -207,26 +224,27 @@ def _search_internet_archive_sync(query: str, max_results: int) -> List[dict]:
 # SOURCE 2: Project Gutenberg (Direct Web Search & EPUBs)
 # ──────────────────────────────────────────────────────────────────────────────
 _GUTENBERG_SEARCH_URL = "https://www.gutenberg.org/ebooks/search/"
+_GUTENBERG_PATTERN = re.compile(
+    r'<li class="booklink">.*?href="/ebooks/(\d+)".*?'
+    r'<span class="title">(.*?)</span>.*?'
+    r'<span class="subtitle">(.*?)</span>',
+    re.DOTALL,
+)
 
 
-def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
+async def _search_gutenberg(query: str, max_results: int) -> List[dict]:
     """Search Gutenberg directly on www.gutenberg.org without Cloudflare blocks."""
     url = f"{_GUTENBERG_SEARCH_URL}?query={urllib.parse.quote_plus(query)}"
-    books = []
-    client = _get_shared_client()
+    books: List[dict] = []
+    client = await _get_shared_async_client()
     try:
-        resp = _get_with_retry(client, url, retries=1)
+        resp = await _get_with_retry(client, url, retries=1)
         if not resp:
             return []
-        pattern = (
-            r'<li class="booklink">.*?href="/ebooks/(\d+)".*?'
-            r'<span class="title">(.*?)</span>.*?'
-            r'<span class="subtitle">(.*?)</span>'
-        )
-        items = re.findall(pattern, resp.text, re.DOTALL)
+        items = _GUTENBERG_PATTERN.findall(resp.text)
         for book_id, raw_title, raw_author in items[:max_results]:
-            title = re.sub(r'<.*?>', '', raw_title).strip()
-            author = re.sub(r'<.*?>', '', raw_author).strip()
+            title = re.sub(r"<.*?>", "", raw_title).strip()
+            author = re.sub(r"<.*?>", "", raw_author).strip()
             books.append({
                 "title":        title[:80] or "نامشخص",
                 "author":       author[:60] or "نامشخص",
@@ -242,6 +260,8 @@ def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
                 "file_ext":     ".epub",
                 "book_id":      book_id,
             })
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.warning("Gutenberg search error: %s", e)
     return books
@@ -253,10 +273,10 @@ def _search_gutenberg_sync(query: str, max_results: int) -> List[dict]:
 _OL_SEARCH = "https://openlibrary.org/search.json"
 
 
-def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
+async def _search_openlibrary(query: str, max_results: int) -> List[dict]:
     """Lightweight search on Open Library for book catalog metadata."""
-    client = _get_shared_client()
-    resp = _get_with_retry(
+    client = await _get_shared_async_client()
+    resp = await _get_with_retry(
         client,
         _OL_SEARCH,
         params={
@@ -273,7 +293,7 @@ def _search_openlibrary_sync(query: str, max_results: int) -> List[dict]:
     except Exception:
         return []
 
-    books = []
+    books: List[dict] = []
     for doc in data.get("docs", []):
         raw_ia = doc.get("ia") or []
         ia_list = [item for item in raw_ia if item and isinstance(item, str)]
@@ -311,15 +331,17 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
     per_source = max(4, max_results // 2 + 1)
 
     tasks = [
-        asyncio.create_task(asyncio.to_thread(_search_internet_archive_sync, query, per_source)),
-        asyncio.create_task(asyncio.to_thread(_search_gutenberg_sync, query, per_source)),
-        asyncio.create_task(asyncio.to_thread(_search_openlibrary_sync, query, per_source)),
+        asyncio.create_task(_search_internet_archive(query, per_source)),
+        asyncio.create_task(_search_gutenberg(query, per_source)),
+        asyncio.create_task(_search_openlibrary(query, per_source)),
     ]
 
     done, pending = await asyncio.wait(tasks, timeout=_SEARCH_DEADLINE)
     for t in pending:
         t.cancel()
         logger.warning("A book source timed out during search")
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
     combined: List[dict] = []
     for t in done:
@@ -352,7 +374,6 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
 # ──────────────────────────────────────────────────────────────────────────────
 def _is_valid_file(path: str) -> bool:
     """Check the finished file is complete (not truncated / corrupt)."""
-    import zipfile
     if not os.path.exists(path) or os.path.getsize(path) < 10000:
         return False
     try:
@@ -376,81 +397,86 @@ def _safe_unlink(path: str) -> None:
             pass
 
 
-def _download_url_sync(
+async def _download_url_async(
     download_url: str,
     dest_path: str,
     *,
     verify: bool = True,
 ) -> bool:
     """Stream-download *download_url* to *dest_path*. Returns True on success."""
-    client = _get_shared_client(verify=verify)
-    if True:
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                with client.stream("GET", download_url) as stream:
-                    if stream.status_code != 200:
-                        logger.info("Download URL returned HTTP %d: %s", stream.status_code, download_url)
-                        _safe_unlink(dest_path)
-                        return False
+    client = await _get_shared_async_client(verify=verify)
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            async with client.stream("GET", download_url) as stream:
+                if stream.status_code != 200:
+                    logger.info("Download URL returned HTTP %d: %s", stream.status_code, download_url)
+                    _safe_unlink(dest_path)
+                    return False
 
-                    content_type = stream.headers.get("content-type", "").lower()
-                    if "text/html" in content_type or "application/xhtml+xml" in content_type:
-                        logger.warning("Download URL returned HTML content: %s", download_url)
-                        _safe_unlink(dest_path)
-                        return False
+                content_type = stream.headers.get("content-type", "").lower()
+                if "text/html" in content_type or "application/xhtml+xml" in content_type:
+                    logger.warning("Download URL returned HTML content: %s", download_url)
+                    _safe_unlink(dest_path)
+                    return False
 
-                    downloaded = 0
-                    first_chunk = True
-                    with open(dest_path, "wb") as fh:
-                        for chunk in stream.iter_bytes(chunk_size=65536):
-                            if first_chunk:
-                                first_chunk = False
-                                chunk_start = chunk[:512].lower()
-                                if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
-                                    logger.warning("Downloaded payload is HTML page: %s", download_url)
-                                    fh.close()
-                                    _safe_unlink(dest_path)
-                                    return False
+                cl_header = stream.headers.get("content-length")
+                if cl_header and cl_header.isdigit() and int(cl_header) > MAX_BOOK_BYTES:
+                    logger.warning("File too large via Content-Length (>50 MB): %s", download_url)
+                    _safe_unlink(dest_path)
+                    return False
 
-                                if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
-                                    logger.warning("File missing PDF magic bytes: %s", download_url)
-                                    fh.close()
-                                    _safe_unlink(dest_path)
-                                    return False
-                                elif dest_path.endswith(".epub") and b"PK\x03\x04" not in chunk[:128]:
-                                    logger.warning("File missing EPUB magic bytes: %s", download_url)
-                                    fh.close()
-                                    _safe_unlink(dest_path)
-                                    return False
-
-                            fh.write(chunk)
-                            downloaded += len(chunk)
-                            if downloaded > MAX_BOOK_BYTES:
-                                logger.warning("File too large (>50 MB): %s", download_url)
+                downloaded = 0
+                first_chunk = True
+                with open(dest_path, "wb") as fh:
+                    async for chunk in stream.aiter_bytes(chunk_size=65536):
+                        if first_chunk:
+                            first_chunk = False
+                            chunk_start = chunk[:512].lower()
+                            if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
+                                logger.warning("Downloaded payload is HTML page: %s", download_url)
                                 fh.close()
                                 _safe_unlink(dest_path)
                                 return False
 
-                if _is_valid_file(dest_path):
-                    return True
-                logger.warning("Downloaded file invalid/corrupt: %s", download_url)
-                _safe_unlink(dest_path)
-                return False
-            except Exception as e:
-                _safe_unlink(dest_path)
-                if attempt < _MAX_RETRIES:
-                    logger.info("Download retry %d/%d — %s: %s", attempt + 1, _MAX_RETRIES, download_url, e)
-                    time.sleep(_RETRY_DELAY)
-                else:
-                    logger.warning("Download failed after retries — %s: %s", download_url, e)
+                            if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
+                                logger.warning("File missing PDF magic bytes: %s", download_url)
+                                fh.close()
+                                _safe_unlink(dest_path)
+                                return False
+                            elif dest_path.endswith(".epub") and b"PK\x03\x04" not in chunk[:128]:
+                                logger.warning("File missing EPUB magic bytes: %s", download_url)
+                                fh.close()
+                                _safe_unlink(dest_path)
+                                return False
+
+                        fh.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded > MAX_BOOK_BYTES:
+                            logger.warning("File too large (>50 MB): %s", download_url)
+                            fh.close()
+                            _safe_unlink(dest_path)
+                            return False
+
+            if await asyncio.to_thread(_is_valid_file, dest_path):
+                return True
+            logger.warning("Downloaded file invalid/corrupt: %s", download_url)
+            _safe_unlink(dest_path)
+            return False
+        except asyncio.CancelledError:
+            _safe_unlink(dest_path)
+            raise
+        except Exception as e:
+            _safe_unlink(dest_path)
+            if attempt < _MAX_RETRIES:
+                logger.info("Download retry %d/%d — %s: %s", attempt + 1, _MAX_RETRIES, download_url, e)
+                await asyncio.sleep(_RETRY_DELAY)
+            else:
+                logger.warning("Download failed after retries — %s: %s", download_url, e)
     return False
 
 
-def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
-    """
-    Download the book described by *book* dict to *dest_dir*.
-    Returns local file path on success, None otherwise.
-    """
+async def download_book(book: dict, dest_dir: str) -> Optional[str]:
+    """Download a book dict to dest_dir asynchronously. Returns local path or None."""
     Path(dest_dir).mkdir(parents=True, exist_ok=True)
 
     urls_to_try: List[tuple[str, str]] = []  # (url, file_ext)
@@ -460,12 +486,10 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
     if download_url:
         urls_to_try.append((download_url, ext))
 
-    # Add any fallback URLs provided by the source
     for fallback in book.get("fallback_urls", []):
         if (fallback, ext) not in urls_to_try:
             urls_to_try.append((fallback, ext))
 
-    # For Open Library books with ia_list, try top candidates
     ia_list = book.get("ia_list") or []
     if book.get("source") == SRC_OL and ia_list:
         for ia_id in ia_list[:2]:
@@ -477,21 +501,17 @@ def _download_book_sync(book: dict, dest_dir: str) -> Optional[str]:
         logger.info("No download URLs available for book: %s", book.get("title"))
         return None
 
-    for url, file_ext in urls_to_try:
-        safe_name = _safe_filename(book.get("title", "book"), file_ext)
-        dest_path = os.path.join(dest_dir, safe_name)
+    async with _BOOK_DOWNLOAD_SEMAPHORE:
+        for url, file_ext in urls_to_try:
+            safe_name = _safe_filename(book.get("title", "book"), file_ext)
+            dest_path = os.path.join(dest_dir, safe_name)
 
-        success = _download_url_sync(url, dest_path)
-        if success and os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
-            return dest_path
-        _safe_unlink(dest_path)
+            success = await _download_url_async(url, dest_path)
+            if success and os.path.exists(dest_path) and os.path.getsize(dest_path) >= 10000:
+                return dest_path
+            _safe_unlink(dest_path)
 
     return None
-
-
-async def download_book(book: dict, dest_dir: str) -> Optional[str]:
-    """Async wrapper: download a book dict to dest_dir. Returns local path or None."""
-    return await asyncio.to_thread(_download_book_sync, book, dest_dir)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

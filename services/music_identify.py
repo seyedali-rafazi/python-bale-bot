@@ -1,5 +1,6 @@
 # services/music_identify.py
 
+import asyncio
 import os
 import subprocess
 from typing import Optional, Tuple
@@ -79,10 +80,47 @@ def probe_media_duration_sec(file_path: str) -> Optional[float]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=20,
         )
         if result.returncode != 0:
             return None
         value = float(result.stdout.strip())
+        return value if value > 0 else None
+    except Exception as e:
+        print(f"ffprobe duration error: {e}")
+        return None
+
+
+async def async_probe_media_duration_sec(file_path: str) -> Optional[float]:
+    """Async ffprobe duration check without blocking ThreadPoolExecutor."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=20.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return None
+        if proc.returncode != 0 or not stdout_b:
+            return None
+        value = float(stdout_b.decode("utf-8", errors="replace").strip())
         return value if value > 0 else None
     except Exception as e:
         print(f"ffprobe duration error: {e}")
@@ -117,8 +155,48 @@ def extract_audio_to_mp3(input_path: str, output_path: str, max_seconds: int = M
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            timeout=60,
         )
         return result.returncode == 0 and os.path.exists(output_path)
+    except Exception as e:
+        print(f"ffmpeg extract audio error: {e}")
+        return False
+
+
+async def async_extract_audio_to_mp3(
+    input_path: str, output_path: str, max_seconds: int = MAX_DURATION_SEC
+) -> bool:
+    """Async ffmpeg audio extraction with timeout protection."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-t",
+        str(max_seconds),
+        "-vn",
+        "-acodec",
+        "libmp3lame",
+        "-q:a",
+        "4",
+        output_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return False
+        return proc.returncode == 0 and os.path.exists(output_path)
     except Exception as e:
         print(f"ffmpeg extract audio error: {e}")
         return False
@@ -185,8 +263,11 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
         return None
 
     try:
-        with open(file_path, "rb") as audio_file:
-            file_bytes = audio_file.read()
+        def _read_bytes():
+            with open(file_path, "rb") as audio_file:
+                return audio_file.read()
+
+        file_bytes = await asyncio.to_thread(_read_bytes)
 
         session = await get_http_session()
         form = aiohttp.FormData()

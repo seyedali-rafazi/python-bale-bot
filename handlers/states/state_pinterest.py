@@ -18,6 +18,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from core.state_manager import StateCache, set_state
+from core.task_utils import track_task
 
 from core.database import (
     get_pinterest_downloads,
@@ -192,39 +193,50 @@ async def send_image_batch(
     context: ContextTypes.DEFAULT_TYPE,
     urls: List[str],
 ) -> int:
+    """Download and send up to 10 images incrementally, closing each BytesIO buffer right after upload."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0.0.0 "
+            "Safari/537.36"
+        ),
+        "Referer": "https://www.pinterest.com/",
+    }
 
-    images: List[BytesIO] = []
+    session = await get_http_session()
+    tasks = [
+        asyncio.create_task(get_image_bytes(session, url, headers=headers))
+        for url in urls[:10]
+    ]
+
+    sent = 0
     try:
-        images = await fetch_image_bytes(urls)
-
-        if not images:
-            return 0
-
-        sent = 0
-
-        for img in images[:10]:
+        for done_task in asyncio.as_completed(tasks):
+            img: Optional[BytesIO] = None
             try:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=img,
-                )
-
-                sent += 1
-
+                img = await done_task
+                if isinstance(img, BytesIO):
+                    await context.bot.send_photo(chat_id=chat_id, photo=img)
+                    sent += 1
             except Exception as e:
                 print(f"send photo error: {e}")
-
+            finally:
+                if isinstance(img, BytesIO):
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
         return sent
-
     except Exception as e:
         print(f"send_image_batch error: {e}")
-        return 0
+        return sent
     finally:
-        for img in images:
-            try:
-                img.close()
-            except Exception:
-                pass
+        for t in tasks:
+            if not t.done():
+                t.cancel()
 
 
 async def process_pinterest_search(
@@ -408,7 +420,7 @@ async def handle_pinterest_state(
 
     # مهم:
     # handler فوری آزاد می‌شود
-    asyncio.create_task(
+    track_task(
         process_pinterest_search(
             update=update,
             context=context,
@@ -416,7 +428,8 @@ async def handle_pinterest_state(
             chat_id=chat_id,
             user_id=user_id,
             loading_message_id=msg.message_id,
-        )
+        ),
+        name=f"pinterest_search_{chat_id}",
     )
 
 
@@ -502,9 +515,10 @@ async def handle_more_pins_callback(
 
     await query.answer()
 
-    asyncio.create_task(
+    track_task(
         process_more_pins(
             update,
             context,
-        )
+        ),
+        name=f"pinterest_more_{query.message.chat_id}",
     )

@@ -2,6 +2,8 @@ import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state, async_get_state, clear_state
+from core.task_utils import track_task
+from services.rate_limiter import user_action_lock
 from core.keyboards import (
     get_yt_quality_telegram_keyboard,
     get_yt_quality_server_keyboard,
@@ -151,71 +153,93 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     quality = data.split("_")[1]
+    user_id = str(query.from_user.id) if query.from_user else chat_id
 
-    user_state = await async_get_state(chat_id)
-    if not user_state or user_state.get("step") not in [
-        "waiting_yt_quality",
-        "processing_yt_quality",
-    ]:
-        await query.edit_message_text(
-            "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
+    async with user_action_lock(user_id, "yt_qual", timeout_sec=30) as acquired:
+        if not acquired:
+            await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
+            return
+
+        user_state = await async_get_state(chat_id)
+        if not user_state or user_state.get("step") not in [
+            "waiting_yt_quality",
+            "processing_yt_quality",
+        ]:
+            await query.edit_message_text(
+                "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
+            )
+            return
+
+        if user_state.get("step") == "processing_yt_quality":
+            await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
+            return
+
+        url = user_state.get("yt_url")
+        format_type = user_state.get("format")
+        destination = user_state.get("destination")
+        delivery_mode = user_state.get("delivery_mode", "zip")
+
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        set_state(
+            chat_id,
+            "processing_yt_quality",
+            yt_url=url,
+            format=format_type,
+            destination=destination,
+            delivery_mode=delivery_mode,
         )
-        return
 
-    if user_state.get("step") == "processing_yt_quality":
-        await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
-        return
+        try:
+            await query.edit_message_text(
+                "⏳ در حال بررسی کیفیت، لطفا صبر کنید...", reply_markup=None
+            )
+        except Exception:
+            pass
 
-    url = user_state.get("yt_url")
-    format_type = user_state.get("format")
-    destination = user_state.get("destination")
-    delivery_mode = user_state.get("delivery_mode", "zip")
+        try:
+            if format_type == "video":
+                estimated_size = await get_video_filesize_cached(url, quality)
+            else:
+                estimated_size = await get_video_filesize_cached(url, "bestaudio")
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+            limit = 1 * 1024 * 1024 * 1024
 
-    set_state(
-        chat_id,
-        "processing_yt_quality",
-        yt_url=url,
-        format=format_type,
-        destination=destination,
-        delivery_mode=delivery_mode,
-    )
+            if estimated_size and estimated_size > limit:
+                size_mb = round(estimated_size / (1024 * 1024), 1)
 
-    try:
-        await query.edit_message_text(
-            "⏳ در حال بررسی کیفیت، لطفا صبر کنید...", reply_markup=None
-        )
-    except Exception:
-        pass
+                if destination == "telegram":
+                    msg = (
+                        f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
+                        "لطفاً کیفیت پایین‌تری انتخاب کنید."
+                    )
+                    keyboard = get_yt_quality_telegram_keyboard()
+                else:
+                    msg = (
+                        f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
+                        "لطفاً کیفیت پایین‌تری انتخاب کنید."
+                    )
+                    keyboard = get_yt_quality_server_keyboard()
 
-    try:
-        if format_type == "video":
-            estimated_size = await get_video_filesize_cached(url, quality)
-        else:
-            estimated_size = await get_video_filesize_cached(url, "bestaudio")
-
-        limit = 1 * 1024 * 1024 * 1024
-
-        if estimated_size and estimated_size > limit:
-            size_mb = round(estimated_size / (1024 * 1024), 1)
-
-            if destination == "telegram":
-                msg = (
-                    f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
-                    "لطفاً کیفیت پایین‌تری انتخاب کنید."
+                set_state(
+                    chat_id,
+                    "waiting_yt_quality",
+                    yt_url=url,
+                    format=format_type,
+                    destination=destination,
+                    delivery_mode=delivery_mode,
                 )
+                await query.edit_message_text(msg, reply_markup=keyboard)
+                return
+        except Exception as e:
+            print(f"⚠️ Error checking filesize: {e}")
+            if destination == "telegram":
                 keyboard = get_yt_quality_telegram_keyboard()
             else:
-                msg = (
-                    f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
-                    "لطفاً کیفیت پایین‌تری انتخاب کنید."
-                )
                 keyboard = get_yt_quality_server_keyboard()
-
             set_state(
                 chat_id,
                 "waiting_yt_quality",
@@ -224,48 +248,33 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                 destination=destination,
                 delivery_mode=delivery_mode,
             )
-            await query.edit_message_text(msg, reply_markup=keyboard)
+            await query.edit_message_text(
+                "⚠️ خطا در محاسبه حجم فایل. لطفا دوباره یک کیفیت انتخاب کنید.",
+                reply_markup=keyboard,
+            )
             return
-    except Exception as e:
-        print(f"⚠️ Error checking filesize: {e}")
-        if destination == "telegram":
-            keyboard = get_yt_quality_telegram_keyboard()
-        else:
-            keyboard = get_yt_quality_server_keyboard()
-        set_state(
-            chat_id,
-            "waiting_yt_quality",
-            yt_url=url,
-            format=format_type,
-            destination=destination,
-            delivery_mode=delivery_mode,
+
+        await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
+
+        clear_state(chat_id)
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔙 بازگشت به منوی اصلی",
+            reply_markup=get_main_menu_keyboard(),
         )
-        await query.edit_message_text(
-            "⚠️ خطا در محاسبه حجم فایل. لطفا دوباره یک کیفیت انتخاب کنید.",
-            reply_markup=keyboard,
+
+        await increment_yt_downloads(chat_id)
+
+        track_task(
+            background_yt_download(
+                context,
+                url,
+                chat_id,
+                format_type,
+                destination,
+                quality=quality,
+                delivery_mode=delivery_mode,
+            ),
+            name=f"yt_dl_{chat_id}",
         )
-        return
-
-    await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
-
-    clear_state(chat_id)
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text="🔙 بازگشت به منوی اصلی",
-        reply_markup=get_main_menu_keyboard(),
-    )
-
-    await increment_yt_downloads(chat_id)
-
-    asyncio.create_task(
-        background_yt_download(
-            context,
-            url,
-            chat_id,
-            format_type,
-            destination,
-            quality=quality,
-            delivery_mode=delivery_mode,
-        )
-    )

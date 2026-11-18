@@ -18,6 +18,7 @@ from telegram.ext import ContextTypes
 
 
 from core.state_manager import clear_state
+from core.task_utils import remove_file_async, track_task
 from services.http_client import get_http_session
 
 # کنترل تعداد درخواست‌های همزمان برای جلوگیری از پر شدن منابع و مسدود شدن IP
@@ -60,8 +61,7 @@ async def background_download(chat_id, bot, download_url, filename, caption):
     except Exception as e:
         await bot.send_message(chat_id, f"❌ خطای غیرمنتظره در دانلود: {e}")
     finally:
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
+        await remove_file_async(temp_filepath)
         clear_state(chat_id)
 
 
@@ -91,14 +91,15 @@ async def handle_programming_state(
                 f"?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
             )
 
-            asyncio.create_task(
+            track_task(
                 background_download(
                     chat_id,
                     context.bot,
                     download_url,
                     f"chrome_{ext_id}.crx",
                     "🌐 افزونه کروم.\nنصب: Developer Mode کروم را روشن کرده و فایل را رها کنید.",
-                )
+                ),
+                name=f"prog_chrome_{chat_id}",
             )
         else:
             await update.message.reply_text(
@@ -170,14 +171,15 @@ async def handle_programming_state(
                         file_url = addon["current_version"]["file"]["url"]
                         filename = f"{addon['slug']}.xpi"
 
-                        asyncio.create_task(
+                        track_task(
                             background_download(
                                 chat_id,
                                 context.bot,
                                 file_url,
                                 filename,
                                 f"🦊 افزونه فایرفاکس: {addon.get('name', {}).get('en-US', text)}",
-                            )
+                            ),
+                            name=f"prog_firefox_{chat_id}",
                         )
                     else:
                         await update.message.reply_text("❌ یافت نشد.")
@@ -208,14 +210,15 @@ async def handle_programming_state(
             "Microsoft.VisualStudio.Services.VSIXPackage"
         )
 
-        asyncio.create_task(
+        track_task(
             background_download(
                 chat_id,
                 context.bot,
                 download_url,
                 f"{text}.vsix",
                 "💻 افزونه VS Code.\nنصب: از بخش Extensions > Install from VSIX.",
-            )
+            ),
+            name=f"prog_vscode_{chat_id}",
         )
 
 
@@ -237,12 +240,13 @@ async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"?response=redirect&prodversion=114.0.0.0&acceptformat=crx2,crx3&x=id%3D{ext_id}%26uc"
         )
 
-        asyncio.create_task(
+        track_task(
             background_download(
                 chat_id,
                 context.bot,
                 download_url,
                 f"chrome_{ext_id}.crx",
                 "🌐 فایل افزونه کروم.",
-            )
+            ),
+            name=f"prog_chrome_cb_{chat_id}",
         )

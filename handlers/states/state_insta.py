@@ -4,7 +4,9 @@ import os
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
+from core.task_utils import remove_file_async, track_task
 from services.instagram import download_instagram
+from services.rate_limiter import user_action_lock
 from core.database import (
     get_available_cloud_mb,
     reduce_cloud_storage,
@@ -161,11 +163,7 @@ async def background_download_insta_link(
             await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
             await log_upload_failed("instagram", chat_id)
         finally:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except Exception:
-                    pass
+            await remove_file_async(file_path)
 
 
 async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,17 +175,30 @@ async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     data = query.data
     chat_id = str(update.effective_chat.id)
+    user_id = str(update.effective_user.id)
 
-    if data.startswith("ig_dl_tel_"):
-        link = data.split("ig_dl_tel_", 1)[1]
-        asyncio.create_task(
-            background_download_insta_link(
-                context, chat_id, link, destination="telegram"
+    async with user_action_lock(user_id, "insta_dl", timeout_sec=10) as acquired:
+        if not acquired:
+            await query.message.reply_text("⏳ درخواست شما در حال پردازش است. لطفاً صبر کنید.")
+            return
+
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        if data.startswith("ig_dl_tel_"):
+            link = data.split("ig_dl_tel_", 1)[1]
+            track_task(
+                background_download_insta_link(
+                    context, chat_id, link, destination="telegram"
+                ),
+                name=f"insta_tel_{chat_id}",
             )
-        )
 
-    elif data.startswith("ig_dl_cloud_"):
-        link = data.split("ig_dl_cloud_", 1)[1]
-        asyncio.create_task(
-            background_download_insta_link(context, chat_id, link, destination="server")
-        )
+        elif data.startswith("ig_dl_cloud_"):
+            link = data.split("ig_dl_cloud_", 1)[1]
+            track_task(
+                background_download_insta_link(context, chat_id, link, destination="server"),
+                name=f"insta_cloud_{chat_id}",
+            )

@@ -46,8 +46,9 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 # Async Worker Queue
 # ──────────────────────────────────────────────────────────────────────────────
-_kaggle_queue: asyncio.Queue = asyncio.Queue()
-_workers_started: bool = False
+_KAGGLE_QUEUE_MAXSIZE = max(10, int(os.getenv("KAGGLE_QUEUE_MAXSIZE", "100")))
+_kaggle_queue: asyncio.Queue = asyncio.Queue(maxsize=_KAGGLE_QUEUE_MAXSIZE)
+_worker_tasks: list[asyncio.Task] = []
 _NUM_WORKERS = 3
 
 
@@ -57,6 +58,8 @@ async def _kaggle_worker():
         func, args = await _kaggle_queue.get()
         try:
             await func(*args)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("Kaggle worker error")
         finally:
@@ -65,16 +68,30 @@ async def _kaggle_worker():
 
 def _ensure_workers_started():
     """Lazily start worker tasks the first time a job is enqueued."""
-    global _workers_started
-    if not _workers_started:
+    if not _worker_tasks:
         for _ in range(_NUM_WORKERS):
-            asyncio.create_task(_kaggle_worker())
-        _workers_started = True
+            _worker_tasks.append(asyncio.create_task(_kaggle_worker()))
+
+
+async def stop_kaggle_workers() -> None:
+    for task in _worker_tasks:
+        if not task.done():
+            task.cancel()
+    if _worker_tasks:
+        await asyncio.gather(*_worker_tasks, return_exceptions=True)
+    _worker_tasks.clear()
 
 
 async def _enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: str, ref: str, user_id: str):
     """Add a download job to the queue and inform the user."""
     _ensure_workers_started()
+    if _kaggle_queue.full():
+        await context.bot.send_message(
+            chat_id,
+            "🔴 صف دانلود کاگل در حال حاضر پر است. لطفاً چند لحظه دیگر تلاش کنید.",
+        )
+        return
+
     position = _kaggle_queue.qsize()
     if position > 0:
         await context.bot.send_message(
@@ -85,9 +102,15 @@ async def _enqueue(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: 
     else:
         await context.bot.send_message(chat_id, "⏳ شروع دانلود از کاگل...")
 
-    await _kaggle_queue.put(
-        (process_kaggle_download, (context, chat_id, ref, user_id))
-    )
+    try:
+        _kaggle_queue.put_nowait(
+            (process_kaggle_download, (context, chat_id, ref, user_id))
+        )
+    except asyncio.QueueFull:
+        await context.bot.send_message(
+            chat_id,
+            "🔴 صف دانلود کاگل در حال حاضر پر است. لطفاً چند لحظه دیگر تلاش کنید.",
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,7 +160,9 @@ async def process_kaggle_download(
             return
 
         # ── Step 2: Check if anything was downloaded ──
-        total_files = sum(len(files) for _, _, files in os.walk(dl_dir))
+        total_files = await asyncio.to_thread(
+            lambda: sum(len(files) for _, _, files in os.walk(dl_dir))
+        )
         if total_files == 0:
             await context.bot.send_message(
                 chat_id,
@@ -204,7 +229,7 @@ async def process_kaggle_download(
             await log_upload_failed("kaggle", user_id)
 
     finally:
-        cleanup_temp(dl_dir)
+        await asyncio.to_thread(cleanup_temp, dl_dir)
         clear_state(chat_id)
 
 

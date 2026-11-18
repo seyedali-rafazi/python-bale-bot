@@ -9,6 +9,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
+from core.task_utils import track_task
 from core.database import can_user_ask_ai, increment_ai_question, log_upload_success
 
 from services.ai import (
@@ -219,13 +220,14 @@ async def handle_ai_state(
                 "⏳ درخواست شما در صف پردازش قرار گرفت..."
             )
 
-            context.application.create_task(
+            track_task(
                 process_ai_chat(
                     context=context,
                     chat_id=chat_id,
                     message_id=msg.message_id,
                     text=text,
-                )
+                ),
+                name=f"ai_chat_{chat_id}",
             )
 
             return
@@ -237,13 +239,14 @@ async def handle_ai_state(
         elif step == "waiting_ai_tts":
             msg = await update.message.reply_text("⏳ در حال تولید صدا...")
 
-            context.application.create_task(
+            track_task(
                 process_ai_tts(
                     context=context,
                     chat_id=chat_id,
                     message_id=msg.message_id,
                     text=text,
-                )
+                ),
+                name=f"ai_tts_{chat_id}",
             )
 
             return
@@ -255,13 +258,14 @@ async def handle_ai_state(
         elif step == "waiting_ai_image":
             msg = await update.message.reply_text("⏳ در حال تولید تصویر...")
 
-            context.application.create_task(
+            track_task(
                 process_ai_image(
                     context=context,
                     chat_id=chat_id,
                     message_id=msg.message_id,
                     text=text,
-                )
+                ),
+                name=f"ai_image_{chat_id}",
             )
 
             return

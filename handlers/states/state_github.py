@@ -5,12 +5,15 @@ from services.http_client import get_http_session
 from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip, log_upload_success
 from core.state_manager import clear_state
+from core.task_utils import remove_file_async
 import uuid
 import os
 
 # ==================== سیستم صف ====================
 GITHUB_WORKERS = max(1, int(os.getenv("GITHUB_WORKERS", "3")))
-download_queue = asyncio.Queue()
+GITHUB_QUEUE_MAXSIZE = max(10, int(os.getenv("GITHUB_QUEUE_MAXSIZE", "100")))
+GITHUB_TEMP_DIR = os.path.join("downloads", "github")
+download_queue: asyncio.Queue = asyncio.Queue(maxsize=GITHUB_QUEUE_MAXSIZE)
 _worker_tasks: list[asyncio.Task] = []
 
 
@@ -20,10 +23,21 @@ async def download_worker():
         func, args = await download_queue.get()
         try:
             await func(*args)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print(f"Queue Worker Error: {e}")
         finally:
             download_queue.task_done()
+
+
+async def stop_github_workers() -> None:
+    for task in _worker_tasks:
+        if not task.done():
+            task.cancel()
+    if _worker_tasks:
+        await asyncio.gather(*_worker_tasks, return_exceptions=True)
+    _worker_tasks.clear()
 
 
 async def enqueue_download(
@@ -34,15 +48,27 @@ async def enqueue_download(
         for _ in range(GITHUB_WORKERS):
             _worker_tasks.append(asyncio.create_task(download_worker()))
 
+    if download_queue.full():
+        await context.bot.send_message(
+            chat_id,
+            "🔴 صف دانلود گیت‌هاب در حال حاضر پر است. لطفاً چند لحظه دیگر تلاش کنید.",
+        )
+        return
+
     position = download_queue.qsize()
     await context.bot.send_message(
         chat_id, f"⏳ درخواست شما در صف قرار گرفت. (نفرات قبل از شما: $ {position} $)"
     )
 
-    # ارسال به صف
-    await download_queue.put(
-        (process_github_download, (update, context, chat_id, repo_path, user_id))
-    )
+    try:
+        download_queue.put_nowait(
+            (process_github_download, (update, context, chat_id, repo_path, user_id))
+        )
+    except asyncio.QueueFull:
+        await context.bot.send_message(
+            chat_id,
+            "🔴 صف دانلود گیت‌هاب در حال حاضر پر است. لطفاً چند لحظه دیگر تلاش کنید.",
+        )
 
 
 # ==================================================
@@ -148,8 +174,9 @@ async def process_github_download(
         f"https://image.thum.io/get/width/1080/crop/800/https://github.com/{repo_path}"
     )
 
+    os.makedirs(GITHUB_TEMP_DIR, exist_ok=True)
     file_name = f"{repo_path.replace('/', '_')}.zip"
-    temp_path = f"temp_{uuid.uuid4().hex}_{file_name}"
+    temp_path = os.path.join(GITHUB_TEMP_DIR, f"temp_{uuid.uuid4().hex}_{file_name}")
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -213,8 +240,7 @@ async def process_github_download(
         await context.bot.send_message(chat_id, "❌ خطا در پردازش یا آپلود فایل.")
         print(f"GitHub Error: {e}")
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        await remove_file_async(temp_path)
         clear_state(chat_id)
 
 

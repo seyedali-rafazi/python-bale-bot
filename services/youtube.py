@@ -154,8 +154,141 @@ def extract_yt_id_fast(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _parse_video_info_json(raw_stdout: str) -> dict | None:
+    data = json.loads(raw_stdout)
+    return {
+        "title": data.get("title", "بدون عنوان"),
+        "thumbnail": data.get("thumbnail"),
+        "duration": data.get("duration", 0),
+        "uploader": data.get("uploader") or data.get("channel") or "ناشناس",
+        "channel": data.get("channel"),
+        "channel_id": data.get("channel_id"),
+        "uploader_id": data.get("channel_id") or data.get("uploader_id"),
+        "channel_url": data.get("channel_url") or data.get("uploader_url"),
+        "uploader_url": data.get("uploader_url"),
+        "upload_date": data.get("upload_date"),
+        "timestamp": data.get("timestamp") or data.get("release_timestamp"),
+    }
+
+
+def _normalize_format_selector(format_selector) -> str:
+    if isinstance(format_selector, str) and format_selector.isdigit():
+        quality = format_selector
+        if quality == "720":
+            return "136+140/bestvideo[height<=720]+bestaudio/best[height<=720]"
+        if quality == "480":
+            return "135+140/bestvideo[height<=480]+bestaudio/best[height<=480]"
+        if quality == "360":
+            return "134+140/bestvideo[height<=360]+bestaudio/best[height<=360]"
+        return (
+            f"bv*[height<={quality}][ext=mp4]+ba[ext=m4a]/"
+            f"bv*[height<={quality}]+ba/"
+            f"b[height<={quality}]"
+        )
+    return str(format_selector)
+
+
+def _parse_filesize_stdout(stdout_text: str) -> int | None:
+    lines = [x.strip() for x in stdout_text.splitlines() if x.strip()]
+    if not lines:
+        return None
+    size_text = lines[-1].strip()
+    if size_text.upper() in {"NA", "N/A", "NONE"}:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", size_text)
+    if not match:
+        return None
+    size = int(float(match.group(1)))
+    print(f"📦 Estimated size: {size / (1024 * 1024):.2f} MB")
+    return size
+
+
+async def _run_async_subprocess(
+    cmd: list[str],
+    timeout_sec: float = 60.0,
+) -> tuple[int, str, str]:
+    """Run a subprocess asynchronously without occupying ThreadPoolExecutor slots."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout_sec,
+        )
+        return (
+            proc.returncode if proc.returncode is not None else -1,
+            stdout_b.decode("utf-8", errors="replace") if stdout_b else "",
+            stderr_b.decode("utf-8", errors="replace") if stderr_b else "",
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise
+
+
+_inflight_info: dict[str, asyncio.Future] = {}
+_inflight_size: dict[str, asyncio.Future] = {}
+
+
+async def async_get_video_duration(file_path: str) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
+    try:
+        rc, out, _ = await _run_async_subprocess(cmd, timeout_sec=20.0)
+        if rc == 0 and out.strip():
+            return float(out.strip())
+    except Exception as e:
+        print(f"Error getting duration: {e}")
+    return 0
+
+
+async def async_get_video_info(url: str) -> dict | None:
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(["--dump-json", "--skip-download", url])
+    try:
+        rc, out, _ = await _run_async_subprocess(cmd, timeout_sec=60.0)
+        if rc == 0 and out.strip():
+            return _parse_video_info_json(out)
+    except Exception as e:
+        print(f"Error getting video info: {e}")
+    return None
+
+
+async def async_get_video_filesize(
+    url: str,
+    format_selector="best[height<=480][ext=mp4]/best[height<=480]/best",
+) -> int | None:
+    selector = _normalize_format_selector(format_selector)
+    cmd = _base_ytdlp_cmd()
+    cmd.extend(["-f", selector, "--print", "%(filesize,filesize_approx)s", "--skip-download", url])
+    try:
+        rc, out, err = await _run_async_subprocess(cmd, timeout_sec=60.0)
+        if rc != 0:
+            print("❌ Failed getting filesize")
+            print(err)
+            return None
+        return _parse_filesize_stdout(out)
+    except Exception as e:
+        print(f"❌ Error getting filesize: {e}")
+        return None
+
+
 async def get_video_info_cached(url: str) -> dict | None:
-    """Fetch YouTube video info with 6-hour Redis/memory caching."""
+    """Fetch YouTube video info with 6-hour Redis/memory caching and singleflight dedup."""
     from services.cache_service import cache_get, cache_set
 
     vid = extract_yt_id_fast(url)
@@ -165,17 +298,44 @@ async def get_video_info_cached(url: str) -> dict | None:
         if isinstance(cached, dict) and cached.get("title"):
             return cached
 
-    info = await asyncio.to_thread(get_video_info, url)
-    if info and cache_key:
-        await cache_set(cache_key, info, ttl_sec=21600)
-    return info
+    async def _fetch():
+        if get_video_info is not _ORIG_GET_VIDEO_INFO:
+            info = await asyncio.to_thread(get_video_info, url)
+        else:
+            info = await async_get_video_info(url)
+        if info and cache_key:
+            await cache_set(cache_key, info, ttl_sec=21600)
+        return info
+
+    if not cache_key:
+        return await _fetch()
+
+    existing = _inflight_info.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _inflight_info[cache_key] = fut
+    try:
+        res = await _fetch()
+        if not fut.done():
+            fut.set_result(res)
+        return res
+    except BaseException as exc:
+        if not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        if _inflight_info.get(cache_key) is fut:
+            _inflight_info.pop(cache_key, None)
 
 
 async def get_video_filesize_cached(
     url: str,
     format_selector: str = "best[height<=480][ext=mp4]/best[height<=480]/best",
 ) -> int | None:
-    """Fetch estimated filesize with 1-hour Redis/memory caching."""
+    """Fetch estimated filesize with 1-hour Redis/memory caching and singleflight dedup."""
     import hashlib
     from services.cache_service import cache_get, cache_set
 
@@ -187,10 +347,37 @@ async def get_video_filesize_cached(
         if isinstance(cached, int) and cached > 0:
             return cached
 
-    size = await asyncio.to_thread(get_video_filesize, url, format_selector)
-    if size and cache_key:
-        await cache_set(cache_key, int(size), ttl_sec=3600)
-    return size
+    async def _fetch():
+        if get_video_filesize is not _ORIG_GET_VIDEO_FILESIZE:
+            size = await asyncio.to_thread(get_video_filesize, url, format_selector)
+        else:
+            size = await async_get_video_filesize(url, format_selector)
+        if size and cache_key:
+            await cache_set(cache_key, int(size), ttl_sec=3600)
+        return size
+
+    if not cache_key:
+        return await _fetch()
+
+    existing = _inflight_size.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _inflight_size[cache_key] = fut
+    try:
+        res = await _fetch()
+        if not fut.done():
+            fut.set_result(res)
+        return res
+    except BaseException as exc:
+        if not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        if _inflight_size.get(cache_key) is fut:
+            _inflight_size.pop(cache_key, None)
 
 
 def get_video_info(url: str):
@@ -513,7 +700,7 @@ async def split_video_if_needed(original_file_path):
             final_valid_parts.append(current_file)
             continue
 
-        duration = await asyncio.to_thread(get_video_duration, current_file)
+        duration = await async_get_video_duration(current_file)
 
         if not duration or duration <= 0:
             final_valid_parts.append(current_file)
@@ -722,6 +909,71 @@ def download_youtube_audio(video_id_or_url: str, max_filesize=MAX_DOWNLOAD_SIZE)
     return final_file
 
 
+def _parse_yt_search_stdout(stdout_text: str, max_results: int) -> list[dict]:
+    results = []
+    for line in stdout_text.splitlines():
+        line = line.strip()
+        if not line or "|||" not in line:
+            continue
+        title, video_id = line.split("|||", 1)
+        if video_id:
+            results.append(
+                {
+                    "title": title or "Unknown",
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                }
+            )
+    return results[:max_results]
+
+
+async def async_search_yt_videos(query: str, max_results: int = 5) -> list[dict]:
+    """Async YouTube search using create_subprocess_exec + 15-min Redis/memory cache."""
+    import hashlib
+    from services.cache_service import cache_get, cache_set
+
+    clean_q = (query or "").strip()
+    if not clean_q:
+        return []
+
+    q_hash = hashlib.md5(f"{clean_q.lower()}:{max_results}".encode("utf-8")).hexdigest()[:16]
+    cache_key = f"yt_search:{q_hash}"
+    cached = await cache_get(cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
+
+    search_query = (
+        f"ytsearch{max_results}:{clean_q}" if not clean_q.startswith("http") else clean_q
+    )
+    cmd = get_base_search_cmd()
+    cmd.extend(
+        [
+            "--flat-playlist",
+            "--print",
+            "%(title)s|||%(id)s",
+            "--skip-download",
+            search_query,
+        ]
+    )
+
+    try:
+        rc, out, err = await _run_async_subprocess(cmd, timeout_sec=45.0)
+        if rc != 0:
+            print("❌ Error searching YT:")
+            print(err)
+            return []
+        results = _parse_yt_search_stdout(out, max_results)
+        if results:
+            await cache_set(cache_key, results, ttl_sec=900)
+        return results
+    except Exception as e:
+        print(f"Error searching YT: {e}")
+        return []
+
+
+_ORIG_GET_VIDEO_INFO = get_video_info
+_ORIG_GET_VIDEO_FILESIZE = get_video_filesize
+
+
 def search_yt_videos(query, max_results=5):
     search_query = (
         f"ytsearch{max_results}:{query}" if not query.startswith("http") else query
@@ -753,28 +1005,7 @@ def search_yt_videos(query, max_results=5):
             print(result.stderr)
             return []
 
-        results = []
-
-        for line in result.stdout.splitlines():
-            line = line.strip()
-
-            if not line:
-                continue
-
-            if "|||" not in line:
-                continue
-
-            title, video_id = line.split("|||", 1)
-
-            if video_id:
-                results.append(
-                    {
-                        "title": title or "Unknown",
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                    }
-                )
-
-        return results[:max_results]
+        return _parse_yt_search_stdout(result.stdout, max_results)
 
     except Exception as e:
         print(f"Error searching YT: {e}")

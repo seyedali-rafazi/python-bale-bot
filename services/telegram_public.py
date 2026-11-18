@@ -11,6 +11,7 @@ import aiohttp
 from bs4 import Tag
 from telegram import Bot
 
+from core.task_utils import remove_file_async
 from services.http_client import get_http_session
 
 MAX_MEDIA_BYTES = 50 * 1024 * 1024
@@ -246,18 +247,15 @@ async def download_media(
                     downloaded += len(chunk)
                     if downloaded > max_bytes:
                         f.close()
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
+                        await remove_file_async(temp_path)
                         return None, "over_20mb"
                     f.write(chunk)
             if downloaded == 0:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                await remove_file_async(temp_path)
                 return None, "empty"
             return temp_path, None
     except Exception:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        await remove_file_async(temp_path)
         return None, "download_failed"
 
 
@@ -320,8 +318,7 @@ async def _send_item(
     except Exception:
         return False, "send_failed"
     finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+        await remove_file_async(temp_path)
 
 
 async def send_parsed_message(

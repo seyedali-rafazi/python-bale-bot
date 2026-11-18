@@ -18,24 +18,25 @@ from core.database import (
     log_upload_success,
     log_upload_failed,
 )
+from core.task_utils import remove_file_async, track_task
 from services.music import (
-    search_track,
-    search_album,
+    async_search_track,
+    async_search_album,
     search_artist,
-    search_playlist,
-    get_album_tracks,
-    get_playlist_tracks,
-    get_artist_top_tracks,
+    async_search_playlist,
+    async_get_album_tracks,
+    async_get_playlist_tracks,
+    async_get_artist_top_tracks,
 )
 from services.music_identify import (
     IDENTIFY_DIR,
     MAX_DURATION_SEC,
-    extract_audio_to_mp3,
+    async_extract_audio_to_mp3,
     format_duration_fa,
     format_identified_info_message,
     get_api_duration_sec,
     get_message_media,
-    probe_media_duration_sec,
+    async_probe_media_duration_sec,
     recognize_music_from_file,
 )
 from services.youtube import download_youtube_audio
@@ -198,11 +199,7 @@ async def background_download_task(
 
     finally:
         # تضمین پاک شدن فایل از روی هارد سرور در هر شرایطی (حتی در صورت کرش یا قطعی اینترنت)
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                print(f"Failed to remove file {file_path}: {e}")
+        await remove_file_async(file_path)
 
 
 # ----------------------------------------------------------------
@@ -252,7 +249,7 @@ async def handle_music_identify_media(
         await tg_file.download_to_drive(raw_path)
         paths_to_remove.append(raw_path)
 
-        real_duration = await asyncio.to_thread(probe_media_duration_sec, raw_path)
+        real_duration = await async_probe_media_duration_sec(raw_path)
         if real_duration is not None and real_duration > MAX_DURATION_SEC:
             await status_msg.edit_text(
                 f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(real_duration)}."
@@ -270,8 +267,8 @@ async def handle_music_identify_media(
 
         recognize_path = raw_path
         if is_video or not raw_path.lower().endswith((".mp3", ".ogg", ".m4a", ".wav")):
-            ok = await asyncio.to_thread(
-                extract_audio_to_mp3, raw_path, audio_path, MAX_DURATION_SEC
+            ok = await async_extract_audio_to_mp3(
+                raw_path, audio_path, MAX_DURATION_SEC
             )
             if not ok:
                 await status_msg.edit_text("❌ استخراج صدا از فایل ناموفق بود.")
@@ -288,7 +285,7 @@ async def handle_music_identify_media(
             return
 
         query = f"{identified['title']} {identified['artist']}".strip()
-        results = await asyncio.to_thread(search_track, query, 5)
+        results = await async_search_track(query, 5)
 
         try:
             await status_msg.delete()
@@ -320,7 +317,7 @@ async def handle_music_identify_media(
         )
         safe_filename = _make_safe_filename(dl_title, dl_performer)
 
-        asyncio.create_task(
+        track_task(
             background_download_task(
                 context,
                 chat_id,
@@ -329,7 +326,8 @@ async def handle_music_identify_media(
                 dl_performer,
                 safe_filename,
                 destination="telegram",
-            )
+            ),
+            name=f"music_identify_dl_{chat_id}",
         )
 
     except Exception as e:
@@ -341,11 +339,7 @@ async def handle_music_identify_media(
 
     finally:
         for path in paths_to_remove:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    print(f"Failed to remove {path}: {e}")
+            await remove_file_async(path)
 
 
 async def handle_music_state(
@@ -357,7 +351,7 @@ async def handle_music_state(
     state_data: dict,
 ):
     if step == "waiting_music_track":
-        results = await asyncio.to_thread(search_track, text)
+        results = await async_search_track(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -378,7 +372,7 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_album":
-        results = await asyncio.to_thread(search_album, text)
+        results = await async_search_album(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -398,7 +392,7 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_artist":
-        results = await asyncio.to_thread(search_artist, text)
+        results = search_artist(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -418,7 +412,7 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_playlist":
-        results = await asyncio.to_thread(search_playlist, text)
+        results = await async_search_playlist(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -450,7 +444,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data.startswith("album_"):
         album_id = data.split("_", 1)[1]
-        tracks = await asyncio.to_thread(get_album_tracks, album_id)
+        tracks = await async_get_album_tracks(album_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این آلبوم یافت نشد.")
             return
@@ -465,7 +459,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("playlist_"):
         playlist_id = data.split("_", 1)[1]
-        tracks = await asyncio.to_thread(get_playlist_tracks, playlist_id)
+        tracks = await async_get_playlist_tracks(playlist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این پلی‌لیست یافت نشد.")
             return
@@ -495,7 +489,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("toptracks_"):
         artist_id = data.split("_", 1)[1]
-        tracks = await asyncio.to_thread(get_artist_top_tracks, artist_id)
+        tracks = await async_get_artist_top_tracks(artist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی برای این خواننده یافت نشد.")
             return
@@ -515,7 +509,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         track_id = data.split("_", 3)[2]
         track_info = context.user_data.get(f"track_{track_id}", {})
 
-        asyncio.create_task(
+        track_task(
             background_download_task(
                 context,
                 chat_id,
@@ -524,14 +518,15 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 track_info.get("performer", "Unknown"),
                 track_info.get("safe_filename", "track"),
                 destination="telegram",
-            )
+            ),
+            name=f"music_dl_tel_{chat_id}",
         )
 
     elif data.startswith("dltrack_cloud_"):
         track_id = data.split("_", 3)[2]
         track_info = context.user_data.get(f"track_{track_id}", {})
 
-        asyncio.create_task(
+        track_task(
             background_download_task(
                 context,
                 chat_id,
@@ -540,7 +535,8 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 track_info.get("performer", "Unknown"),
                 track_info.get("safe_filename", "track"),
                 destination="server",
-            )
+            ),
+            name=f"music_dl_cloud_{chat_id}",
         )
 
     # ===================================

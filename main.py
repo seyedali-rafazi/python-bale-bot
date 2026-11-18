@@ -16,6 +16,7 @@ from telegram.ext import (
 
 from core.database import init_db, close_db
 from core.admin import stop_broadcast
+from core.task_utils import cancel_tracked_tasks
 
 from services.http_client import (
     init_http_session,
@@ -113,6 +114,7 @@ DOWNLOAD_CLEANUP_DIRS = [
     "downloads",
     "ig_downloads",
     "tg_downloads",
+    "kaggle_temp",
 ]
 
 
@@ -201,12 +203,8 @@ async def on_startup(app):
 
     await init_ai_client()
 
-    from core.database.youtube import (
-        drop_legacy_user_youtube_archive_table,
-        purge_incomplete_youtube_cache,
-    )
+    from core.database.youtube import purge_incomplete_youtube_cache
 
-    await drop_legacy_user_youtube_archive_table()
     removed = await purge_incomplete_youtube_cache()
     if removed > 0:
         logger.info("YT cache: removed %s incomplete/ناشناس rows", removed)
@@ -237,12 +235,18 @@ async def on_shutdown(app):
     except Exception:
         logger.exception("Error stopping broadcast task on shutdown")
 
-    # 3. Stop Pinterest queue worker tasks
+    # 3. Stop queue worker tasks & tracked background tasks
     try:
+        from handlers.states.state_github import stop_github_workers
+        from handlers.states.state_kaggle import stop_kaggle_workers
+
         await stop_pinterest_workers()
-        logger.info("✅ Pinterest workers stopped on shutdown")
+        await stop_github_workers()
+        await stop_kaggle_workers()
+        await cancel_tracked_tasks(timeout=10.0)
+        logger.info("✅ Queue workers and background tasks stopped on shutdown")
     except Exception:
-        logger.exception("Error stopping Pinterest workers on shutdown")
+        logger.exception("Error stopping queue workers/tasks on shutdown")
 
     # 4. Clean up Playwright browser instances
     try:
@@ -258,7 +262,7 @@ async def on_shutdown(app):
         from services.book import close_book_clients
 
         await close_software_httpx_client()
-        close_book_clients()
+        await close_book_clients()
         logger.info("✅ HTTP session closed on shutdown")
     except Exception:
         logger.exception("HTTP session cleanup on shutdown failed")
@@ -301,7 +305,7 @@ def main():
         .connection_pool_size(int(os.getenv("BALE_HTTP_POOL_SIZE", "64")))
         .get_updates_connection_pool_size(8)
         .pool_timeout(30.0)
-        .concurrent_updates(True)
+        .concurrent_updates(int(os.getenv("BALE_CONCURRENT_UPDATES", "64")))
         .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()

@@ -9,7 +9,9 @@ from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 from core.state_manager import set_state
+from core.task_utils import remove_file_async, track_task
 from core.constants import BTN_BACK
+from services.rate_limiter import user_action_lock
 from services.tiktok import (
     download_tiktok_video,
     search_tiktok_videos,
@@ -116,11 +118,8 @@ async def background_tt_download(
         )
         await log_upload_failed("tiktok", user_id)
     finally:
-        if "file_path" in locals() and file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
+        if "file_path" in locals() and file_path:
+            await remove_file_async(file_path)
 
 
 async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -160,16 +159,19 @@ async def handle_tiktok_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        # فقط چک میکنیم، اما کسر نمیکنیم
-        if not await check_tt_dl_limit(update, user_id_str):
-            return
+        async with user_action_lock(user_id_str, "tiktok_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+                return
+            if not await check_tt_dl_limit(update, user_id_str):
+                return
 
-        asyncio.create_task(
-            # ارسال user_id_str به عنوان آرگومان
-            background_tt_download(
-                context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
+            track_task(
+                background_tt_download(
+                    context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
+                ),
+                name=f"tiktok_link_{chat_id}",
             )
-        )
         return
 
     elif step == "waiting_tt_search":
@@ -211,21 +213,24 @@ async def handle_tiktok_state(
                     )
                     return
 
-                # فقط چک میکنیم، کسر نمیکنیم
-                if not await check_tt_dl_limit(update, user_id_str):
-                    return
+                async with user_action_lock(user_id_str, "tiktok_dl", timeout_sec=10) as acquired:
+                    if not acquired:
+                        await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+                        return
+                    if not await check_tt_dl_limit(update, user_id_str):
+                        return
 
-                selected_video = videos[index]
-                asyncio.create_task(
-                    # ارسال user_id_str به عنوان آرگومان
-                    background_tt_download(
-                        context,
-                        selected_video["url"],
-                        chat_id,
-                        user_id_str,
-                        selected_video["title"],
+                    selected_video = videos[index]
+                    track_task(
+                        background_tt_download(
+                            context,
+                            selected_video["url"],
+                            chat_id,
+                            user_id_str,
+                            selected_video["title"],
+                        ),
+                        name=f"tiktok_sel_{chat_id}",
                     )
-                )
 
             except ValueError:
                 await update.message.reply_text("❌ فرمت شماره اشتباه است.")

@@ -1,6 +1,7 @@
 # services/web_scraper.py
 
 import asyncio
+from functools import lru_cache
 import json
 import os
 import shutil
@@ -68,8 +69,9 @@ def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
             pass
 
 
-def _get_singlefile_executable() -> Optional[str]:
-    """Locate the single-file CLI binary from env, PATH, or common npm paths."""
+@lru_cache(maxsize=1)
+def _find_singlefile_executable_cached() -> Optional[str]:
+    """Locate the single-file CLI binary from env, PATH, or common npm paths (cached)."""
     for key in ("SINGLEFILE_PATH", "SINGLEFILE_BIN", "SINGLEFILE_CLI_PATH"):
         p = os.environ.get(key, "").strip()
         if p and os.path.isfile(p) and (sys.platform == "win32" or os.access(p, os.X_OK)):
@@ -95,11 +97,13 @@ def _get_singlefile_executable() -> Optional[str]:
     return None
 
 
-def _get_singlefile_browser_executable() -> Optional[str]:
-    """
-    مسیر اجرایی کروم/کرومیوم برای single-file-cli.
-    بدون مرورگر سیستمی، بستهٔ npm گاهی Chromium را درست اجرا نمی‌کند و با کد ۲۱ خارج می‌شود.
-    """
+def _get_singlefile_executable() -> Optional[str]:
+    """Locate the single-file CLI binary from env, PATH, or common npm paths."""
+    return _find_singlefile_executable_cached()
+
+
+@lru_cache(maxsize=1)
+def _find_singlefile_browser_executable_cached() -> Optional[str]:
     for key in (
         "SINGLEFILE_BROWSER_PATH",
         "SINGLEFILE_CHROME_PATH",
@@ -133,6 +137,14 @@ def _get_singlefile_browser_executable() -> Optional[str]:
             return path
 
     return None
+
+
+def _get_singlefile_browser_executable() -> Optional[str]:
+    """
+    مسیر اجرایی کروم/کرومیوم برای single-file-cli.
+    بدون مرورگر سیستمی، بستهٔ npm گاهی Chromium را درست اجرا نمی‌کند و با کد ۲۱ خارج می‌شود.
+    """
+    return _find_singlefile_browser_executable_cached()
 
 
 def search_web(query, max_results=10, max_attempts=3):
@@ -177,11 +189,10 @@ async def _fetch_stylesheet_text(
         return None
 
 
-async def _inline_stylesheets_and_prepare_html(
+def _prepare_soup_and_collect_css(
     html_content: str, base_url: str
-) -> str:
-    """Prepare a standalone HTML snapshot by stripping scripts, setting <base>, and inlining CSS."""
-    soup = await asyncio.to_thread(BeautifulSoup, html_content, "html.parser")
+) -> tuple[BeautifulSoup, list[tuple[object, str]]]:
+    soup = BeautifulSoup(html_content, "html.parser")
 
     for script_tag in soup.find_all("script"):
         script_tag.decompose()
@@ -211,27 +222,50 @@ async def _inline_stylesheets_and_prepare_html(
             if len(css_links) >= _MAX_INLINED_STYLESHEETS:
                 break
 
+    return soup, css_links
+
+
+def _apply_css_and_serialize(
+    soup: BeautifulSoup,
+    css_links: list[tuple[object, str]],
+    fetched_styles: list,
+) -> str:
+    total_css_bytes = 0
+    for (link_tag, href), css_text in zip(css_links, fetched_styles):
+        if not isinstance(css_text, str) or not css_text.strip():
+            continue
+        css_size = len(css_text.encode("utf-8", errors="replace"))
+        if total_css_bytes + css_size > _MAX_TOTAL_CSS_BYTES:
+            continue
+        total_css_bytes += css_size
+        safe_css = css_text.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE")
+        style_tag = soup.new_tag("style")
+        style_tag["data-source-href"] = href
+        style_tag.string = safe_css
+        link_tag.replace_with(style_tag)
+
+    return str(soup)
+
+
+async def _inline_stylesheets_and_prepare_html(
+    html_content: str, base_url: str
+) -> str:
+    """Prepare a standalone HTML snapshot by stripping scripts, setting <base>, and inlining CSS."""
+    soup, css_links = await asyncio.to_thread(
+        _prepare_soup_and_collect_css, html_content, base_url
+    )
+
     if css_links:
         session = await get_http_session()
         fetched_styles = await asyncio.gather(
             *(_fetch_stylesheet_text(session, href) for _, href in css_links),
             return_exceptions=True,
         )
-        total_css_bytes = 0
-        for (link_tag, href), css_text in zip(css_links, fetched_styles):
-            if not isinstance(css_text, str) or not css_text.strip():
-                continue
-            css_size = len(css_text.encode("utf-8", errors="replace"))
-            if total_css_bytes + css_size > _MAX_TOTAL_CSS_BYTES:
-                continue
-            total_css_bytes += css_size
-            safe_css = css_text.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE")
-            style_tag = soup.new_tag("style")
-            style_tag["data-source-href"] = href
-            style_tag.string = safe_css
-            link_tag.replace_with(style_tag)
+        return await asyncio.to_thread(
+            _apply_css_and_serialize, soup, css_links, fetched_styles
+        )
 
-    return str(soup)
+    return await asyncio.to_thread(str, soup)
 
 
 async def _create_single_file_with_playwright(
@@ -278,11 +312,14 @@ async def _create_single_file_with_playwright(
             standalone_html = await _inline_stylesheets_and_prepare_html(
                 html_content, final_url
             )
-            parent_dir = os.path.dirname(output_path)
-            if parent_dir:
-                os.makedirs(parent_dir, exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(standalone_html)
+            def _write_html_sync():
+                parent_dir = os.path.dirname(output_path)
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    f.write(standalone_html)
+
+            await asyncio.to_thread(_write_html_sync)
 
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                 return True

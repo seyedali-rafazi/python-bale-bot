@@ -21,7 +21,8 @@ from core.constants import (
     BTN_YT_CACHE_SEARCH_CHANNEL,
 )
 from core.keyboards import get_yt_archive_menu_keyboard, get_youtube_menu_keyboard
-from core.state_manager import set_state, clear_state
+from core.state_manager import StateCache, set_state, clear_state
+from core.task_utils import track_task
 from core.database import (
     count_user_archive,
     get_user_archive_limit,
@@ -419,6 +420,28 @@ async def _send_archive_video(
     await increment_yt_video_view(entry["video_id"])
 
 
+_backfill_inflight = StateCache(max_capacity=500, default_ttl=600.0)
+
+
+def _schedule_missing_upload_date_backfill(videos: list) -> None:
+    missing_rows = []
+    for row in videos:
+        try:
+            existing = row["uploaded_at"]
+            vid = row["video_id"]
+        except (KeyError, IndexError, TypeError):
+            continue
+        if (not existing or not str(existing).strip()) and vid not in _backfill_inflight:
+            _backfill_inflight[vid] = 1
+            missing_rows.append(dict(row))
+
+    if missing_rows:
+        track_task(
+            backfill_upload_dates_for_cache_rows(missing_rows),
+            name="yt_archive_upload_date_backfill",
+        )
+
+
 async def _show_channel_videos(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -431,10 +454,7 @@ async def _show_channel_videos(
         channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE
     )
     if videos:
-        await backfill_upload_dates_for_cache_rows(videos)
-        videos = await get_channel_videos_page(
-            channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE
-        )
+        _schedule_missing_upload_date_backfill(videos)
     total = await count_channel_videos(channel_name)
     total_pages = max(1, (total + VIDEOS_PAGE_SIZE - 1) // VIDEOS_PAGE_SIZE)
 

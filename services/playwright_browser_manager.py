@@ -28,6 +28,7 @@ class PlaywrightBrowserManager:
         self._init_lock = asyncio.Lock()
 
         self._usage_count = 0
+        self._active_context_ids: set[int] = set()
         self._max_usages_before_restart = max(
             3, int(os.getenv("CHROMIUM_MAX_USES_BEFORE_RESTART", "8"))
         )
@@ -51,6 +52,11 @@ class PlaywrightBrowserManager:
 
     async def force_restart(self):
         async with self._init_lock:
+            if self._active_context_ids and self._is_browser_alive():
+                print(
+                    f"⚠️ Skipping force_restart while {len(self._active_context_ids)} context(s) active"
+                )
+                return
             self._usage_count = 0
             await self._restart_browser()
 
@@ -60,6 +66,10 @@ class PlaywrightBrowserManager:
                 if not self._is_browser_alive():
                     print("⚠️ Browser crashed, restarting...")
                     await self._restart_browser()
+
+                elif self._active_context_ids:
+                    # Another concurrent worker holds an open context; defer recycle until idle
+                    pass
 
                 elif self._usage_count >= self._max_usages_before_restart:
                     print(
@@ -145,7 +155,18 @@ class PlaywrightBrowserManager:
 
                 self._last_context_time = time.time()
                 self._usage_count += 1
+                ctx_id = id(context)
+                self._active_context_ids.add(ctx_id)
 
+                orig_close = context.close
+
+                async def _tracked_close():
+                    try:
+                        return await orig_close()
+                    finally:
+                        self._active_context_ids.discard(ctx_id)
+
+                context.close = _tracked_close
                 return context
 
             except Exception as e:
@@ -175,6 +196,7 @@ class PlaywrightBrowserManager:
 
         self._usage_count = 0
         self._browser_started_at = 0.0
+        self._active_context_ids.clear()
 
 
 _browser_manager: Optional[PlaywrightBrowserManager] = None
