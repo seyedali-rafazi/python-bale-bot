@@ -5,6 +5,7 @@ import glob
 import uuid
 import math
 import asyncio
+import logging
 import subprocess
 import shutil
 import sys
@@ -18,6 +19,7 @@ import json
 import re
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = "downloads"
 COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
@@ -344,8 +346,12 @@ async def _run_async_subprocess(
         raise
 
 
-_inflight_info: dict[str, asyncio.Future] = {}
-_inflight_size: dict[str, asyncio.Future] = {}
+_inflight_info: dict[str, asyncio.Task] = {}
+_inflight_size: dict[str, asyncio.Task] = {}
+_inflight_search: dict[str, asyncio.Task] = {}
+_YTDLP_INFO_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("YTDLP_INFO_CONCURRENT", "6"))))
+_YTDLP_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("YTDLP_DOWNLOAD_CONCURRENT", "6"))))
+_FFMPEG_SPLIT_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("FFMPEG_SPLIT_CONCURRENT", "2"))))
 
 
 async def async_get_video_duration(file_path: str) -> float:
@@ -379,11 +385,12 @@ async def _async_get_video_info_with_sizes(url: str) -> tuple[dict | None, dict[
     cmd = _base_ytdlp_cmd()
     cmd.extend(["--dump-json", "--skip-download", url])
     try:
-        rc, out, _ = await _run_async_subprocess(cmd, timeout_sec=60.0)
+        async with _YTDLP_INFO_SEMAPHORE:
+            rc, out, _ = await _run_async_subprocess(cmd, timeout_sec=60.0)
         if rc == 0 and out.strip():
             return _parse_video_info_and_sizes_json(out)
     except Exception as e:
-        print(f"Error getting video info: {e}")
+        logger.warning("Error getting video info: %s", e)
     return None, {}
 
 
@@ -400,19 +407,19 @@ async def async_get_video_filesize(
     cmd = _base_ytdlp_cmd()
     cmd.extend(["-f", selector, "--print", "%(filesize,filesize_approx)s", "--skip-download", url])
     try:
-        rc, out, err = await _run_async_subprocess(cmd, timeout_sec=60.0)
+        async with _YTDLP_INFO_SEMAPHORE:
+            rc, out, err = await _run_async_subprocess(cmd, timeout_sec=60.0)
         if rc != 0:
-            print("❌ Failed getting filesize")
-            print(err)
+            logger.warning("Failed getting filesize: %s", err[:250])
             return None
         return _parse_filesize_stdout(out)
     except Exception as e:
-        print(f"❌ Error getting filesize: {e}")
+        logger.warning("Error getting filesize: %s", e)
         return None
 
 
 async def get_video_info_cached(url: str) -> dict | None:
-    """Fetch YouTube video info with 6-hour Redis/memory caching and singleflight dedup."""
+    """Fetch YouTube video info with 6-hour Redis/memory caching and shielded singleflight dedup."""
     from services.cache_service import cache_get, cache_set
 
     vid = extract_yt_id_fast(url)
@@ -449,34 +456,27 @@ async def get_video_info_cached(url: str) -> dict | None:
     if existing is not None and not existing.done():
         return await asyncio.shield(existing)
 
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future = loop.create_future()
-    _inflight_info[cache_key] = fut
-    try:
-        res = await _fetch()
-        if not fut.done():
-            fut.set_result(res)
-        return res
-    except asyncio.CancelledError as exc:
-        if not fut.done():
-            fut.cancel()
-        raise
-    except Exception as exc:
-        if not fut.done():
-            fut.set_exception(exc)
-            # Mark exception retrieved so single-caller failures don't emit Future warning
-            fut.exception()
-        raise
-    finally:
-        if _inflight_info.get(cache_key) is fut:
+    task = asyncio.create_task(_fetch())
+    _inflight_info[cache_key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_info.get(cache_key) is done_task:
             _inflight_info.pop(cache_key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 async def get_video_filesize_cached(
     url: str,
     format_selector: str = "best[height<=480][ext=mp4]/best[height<=480]/best",
 ) -> int | None:
-    """Fetch estimated filesize with 1-hour Redis/memory caching and singleflight dedup."""
+    """Fetch estimated filesize with 1-hour Redis/memory caching and shielded singleflight dedup."""
     from services.cache_service import cache_get, cache_set
 
     vid = extract_yt_id_fast(url)
@@ -502,26 +502,20 @@ async def get_video_filesize_cached(
     if existing is not None and not existing.done():
         return await asyncio.shield(existing)
 
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future = loop.create_future()
-    _inflight_size[cache_key] = fut
-    try:
-        res = await _fetch()
-        if not fut.done():
-            fut.set_result(res)
-        return res
-    except asyncio.CancelledError:
-        if not fut.done():
-            fut.cancel()
-        raise
-    except Exception as exc:
-        if not fut.done():
-            fut.set_exception(exc)
-            fut.exception()
-        raise
-    finally:
-        if _inflight_size.get(cache_key) is fut:
+    task = asyncio.create_task(_fetch())
+    _inflight_size[cache_key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_size.get(cache_key) is done_task:
             _inflight_size.pop(cache_key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 def get_video_info(url: str):
@@ -826,14 +820,15 @@ def _run_subprocess_and_capture(
 
 
 def _find_downloaded_file(video_id, req_id, preferred_ext=None):
+    prefix = video_id or "*"
     if preferred_ext:
-        pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.{preferred_ext}")
+        pattern = os.path.join(DOWNLOAD_DIR, f"{prefix}_{req_id}.{preferred_ext}")
         files = glob.glob(pattern)
 
         if files:
             return files[0]
 
-    pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}_{req_id}.*")
+    pattern = os.path.join(DOWNLOAD_DIR, f"{prefix}_{req_id}.*")
 
     files = glob.glob(pattern)
 
@@ -952,21 +947,22 @@ async def split_video_if_needed(original_file_path):
         ]
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            async with _FFMPEG_SPLIT_SEMAPHORE:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
 
-            try:
-                await asyncio.wait_for(process.communicate(), timeout=300)
-            except asyncio.TimeoutError:
                 try:
-                    process.kill()
-                    await process.wait()
-                except Exception:
-                    pass
-                raise RuntimeError("ffmpeg segment timed out")
+                    await asyncio.wait_for(process.communicate(), timeout=300)
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except Exception:
+                        pass
+                    raise RuntimeError("ffmpeg segment timed out")
 
             if process.returncode == 0:
                 new_parts = await asyncio.to_thread(
@@ -1146,17 +1142,6 @@ async def async_download_youtube_video(
     """Native async YouTube video download without occupying ThreadPoolExecutor slots."""
     req_id = uuid.uuid4().hex
     video_id = extract_yt_id_fast(url)
-    if not video_id:
-        rc, out, _ = await _run_async_subprocess(
-            _base_ytdlp_cmd() + ["--print", "%(id)s", "--skip-download", url],
-            timeout_sec=60.0,
-        )
-        lines = [x.strip() for x in out.splitlines() if x.strip()] if rc == 0 else []
-        video_id = lines[-1] if lines else None
-
-    if not video_id:
-        print("❌ Could not detect video id")
-        return None
 
     output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
     format_selector = _normalize_format_selector(str(quality))
@@ -1176,7 +1161,8 @@ async def async_download_youtube_video(
         ]
     )
 
-    ok, output = await _run_async_subprocess_and_capture(cmd, progress_dict=progress_dict)
+    async with _YTDLP_DOWNLOAD_SEMAPHORE:
+        ok, output = await _run_async_subprocess_and_capture(cmd, progress_dict=progress_dict)
     if not ok:
         if "File is larger than max-filesize" in output or "max-filesize" in output:
             return "TOO_LARGE"
@@ -1184,7 +1170,7 @@ async def async_download_youtube_video(
 
     final_file = await asyncio.to_thread(_find_downloaded_file, video_id, req_id)
     if not final_file or not await asyncio.to_thread(os.path.exists, final_file):
-        print("❌ Download finished but file not found")
+        logger.warning("YouTube video download finished but file not found (req_id=%s)", req_id)
         return None
 
     actual_size = await asyncio.to_thread(os.path.getsize, final_file)
@@ -1210,17 +1196,6 @@ async def async_download_youtube_audio(
 
     req_id = uuid.uuid4().hex
     video_id = extract_yt_id_fast(url)
-    if not video_id:
-        rc, out, _ = await _run_async_subprocess(
-            _base_ytdlp_cmd() + ["--print", "%(id)s", "--skip-download", url],
-            timeout_sec=60.0,
-        )
-        lines = [x.strip() for x in out.splitlines() if x.strip()] if rc == 0 else []
-        video_id = lines[-1] if lines else None
-
-    if not video_id:
-        print("❌ Could not detect video id")
-        return None
 
     output_template = os.path.join(DOWNLOAD_DIR, f"%(id)s_{req_id}.%(ext)s")
     cmd = _base_ytdlp_cmd()
@@ -1242,7 +1217,8 @@ async def async_download_youtube_audio(
         ]
     )
 
-    ok, output = await _run_async_subprocess_and_capture(cmd)
+    async with _YTDLP_DOWNLOAD_SEMAPHORE:
+        ok, output = await _run_async_subprocess_and_capture(cmd)
     if not ok:
         if "File is larger than max-filesize" in output or "max-filesize" in output:
             return "TOO_LARGE"
@@ -1252,7 +1228,7 @@ async def async_download_youtube_audio(
         _find_downloaded_file, video_id, req_id, "mp3"
     )
     if not final_file or not await asyncio.to_thread(os.path.exists, final_file):
-        print("❌ Audio download finished but mp3 file not found")
+        logger.warning("Audio download finished but mp3 file not found (req_id=%s)", req_id)
         return None
 
     actual_size = await asyncio.to_thread(os.path.getsize, final_file)
@@ -1284,7 +1260,7 @@ def _parse_yt_search_stdout(stdout_text: str, max_results: int) -> list[dict]:
 
 
 async def async_search_yt_videos(query: str, max_results: int = 5) -> list[dict]:
-    """Async YouTube search using create_subprocess_exec + 15-min Redis/memory cache."""
+    """Async YouTube search with semaphore, shielded singleflight dedup, and 15-min cache."""
     import hashlib
     from services.cache_service import cache_get, cache_set
 
@@ -1298,33 +1274,53 @@ async def async_search_yt_videos(query: str, max_results: int = 5) -> list[dict]
     if isinstance(cached, list) and cached:
         return cached
 
-    search_query = (
-        f"ytsearch{max_results}:{clean_q}" if not clean_q.startswith("http") else clean_q
-    )
-    cmd = get_base_search_cmd()
-    cmd.extend(
-        [
-            "--flat-playlist",
-            "--print",
-            "%(title)s|||%(id)s",
-            "--skip-download",
-            search_query,
-        ]
-    )
+    existing = _inflight_search.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
 
-    try:
-        rc, out, err = await _run_async_subprocess(cmd, timeout_sec=45.0)
-        if rc != 0:
-            print("❌ Error searching YT:")
-            print(err)
+    async def _search() -> list[dict]:
+        search_query = (
+            f"ytsearch{max_results}:{clean_q}" if not clean_q.startswith("http") else clean_q
+        )
+        cmd = get_base_search_cmd()
+        cmd.extend(
+            [
+                "--flat-playlist",
+                "--print",
+                "%(title)s|||%(id)s",
+                "--skip-download",
+                search_query,
+            ]
+        )
+
+        try:
+            async with _YTDLP_INFO_SEMAPHORE:
+                rc, out, err = await _run_async_subprocess(cmd, timeout_sec=45.0)
+            if rc != 0:
+                logger.warning("Error searching YT: %s", err[:250])
+                return []
+            results = _parse_yt_search_stdout(out, max_results)
+            if results:
+                await cache_set(cache_key, results, ttl_sec=900)
+            return results
+        except Exception as e:
+            logger.warning("Error searching YT: %s", e)
             return []
-        results = _parse_yt_search_stdout(out, max_results)
-        if results:
-            await cache_set(cache_key, results, ttl_sec=900)
-        return results
-    except Exception as e:
-        print(f"Error searching YT: {e}")
-        return []
+
+    task = asyncio.create_task(_search())
+    _inflight_search[cache_key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_search.get(cache_key) is done_task:
+            _inflight_search.pop(cache_key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 _ORIG_GET_VIDEO_INFO = get_video_info

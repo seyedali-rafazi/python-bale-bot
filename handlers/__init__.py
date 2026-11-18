@@ -101,8 +101,6 @@ from core.admin import (
     cmd_blockword,
     cmd_monitor_report,
 )
-import os
-from dotenv import load_dotenv
 from .states.state_programming import handle_chrome_callback
 from .states.state_music import handle_music_callback
 from .states.state_insta import handle_insta_callback
@@ -137,11 +135,6 @@ from handlers.states.state_cloud import (
     cancel_cloud_upload,
     WAIT_FOR_FILE,
 )
-
-
-load_dotenv()
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-CHANNEL_URL = os.getenv("CHANNEL_URL")
 
 
 def register_all_handlers(application):
@@ -318,7 +311,8 @@ def register_all_handlers(application):
         entry_points=[
             MessageHandler(
                 filters.Regex(f"^{re.escape(BTN_UPLOAD_TO_CLOUD)}$"), start_cloud_upload
-            )
+            ),
+            CallbackQueryHandler(start_cloud_upload, pattern="^cloud_upload$"),
         ],
         states={
             WAIT_FOR_FILE: [
@@ -332,6 +326,7 @@ def register_all_handlers(application):
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_cloud_upload)],
+        conversation_timeout=300,
     )
     application.add_handler(cloud_conv)
 
@@ -387,16 +382,6 @@ def register_all_handlers(application):
 
     application.add_handler(
         CallbackQueryHandler(handle_back_main_menu, pattern="^back_main_menu$")
-    )
-
-    # Cloud upload start handler (from callback)
-    async def handle_cloud_upload_callback(
-        update: Update, context: ContextTypes.DEFAULT_TYPE
-    ):
-        await start_cloud_upload(update, context)
-
-    application.add_handler(
-        CallbackQueryHandler(handle_cloud_upload_callback, pattern="^cloud_upload$")
     )
 
     # پردازش ویس / صوت / ویدیو (تشخیص آهنگ و ...) — فقط چت خصوصی

@@ -32,6 +32,8 @@ _kaggle_api = None
 _kaggle_token = None
 _kaggle_api_lock = threading.Lock()
 _kaggle_search_cache = StateCache(max_capacity=200, default_ttl=600.0)
+_KAGGLE_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("KAGGLE_MAX_CONCURRENT", "2"))))
+_inflight_kaggle_search: dict[str, asyncio.Task] = {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -81,27 +83,57 @@ def _list_popular_datasets_sync(max_results: int = 8) -> list:
 
 
 async def search_datasets(query: str, max_results: int = 8) -> list:
-    """Async wrapper: search Kaggle datasets by keyword with 10-min L1 cache."""
+    """Async wrapper: search Kaggle datasets by keyword with 10-min L1 cache and singleflight dedup."""
     cache_key = f"s:{max_results}:{(query or '').strip().lower()}"
     cached = _kaggle_search_cache.get(cache_key)
     if cached is not None:
         return cached
-    res = await asyncio.to_thread(_search_datasets_sync, query, max_results)
-    if res:
-        _kaggle_search_cache[cache_key] = res
-    return res
+
+    existing = _inflight_kaggle_search.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    async def _fetch():
+        res = await asyncio.to_thread(_search_datasets_sync, query, max_results)
+        if res:
+            _kaggle_search_cache[cache_key] = res
+        return res
+
+    task = asyncio.create_task(_fetch())
+    _inflight_kaggle_search[cache_key] = task
+    task.add_done_callback(
+        lambda t: _inflight_kaggle_search.pop(cache_key, None)
+        if _inflight_kaggle_search.get(cache_key) is t
+        else None
+    )
+    return await asyncio.shield(task)
 
 
 async def list_popular_datasets(max_results: int = 8) -> list:
-    """Async wrapper: list most-voted datasets with 10-min L1 cache."""
+    """Async wrapper: list most-voted datasets with 10-min L1 cache and singleflight dedup."""
     cache_key = f"pop:{max_results}"
     cached = _kaggle_search_cache.get(cache_key)
     if cached is not None:
         return cached
-    res = await asyncio.to_thread(_list_popular_datasets_sync, max_results)
-    if res:
-        _kaggle_search_cache[cache_key] = res
-    return res
+
+    existing = _inflight_kaggle_search.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    async def _fetch():
+        res = await asyncio.to_thread(_list_popular_datasets_sync, max_results)
+        if res:
+            _kaggle_search_cache[cache_key] = res
+        return res
+
+    task = asyncio.create_task(_fetch())
+    _inflight_kaggle_search[cache_key] = task
+    task.add_done_callback(
+        lambda t: _inflight_kaggle_search.pop(cache_key, None)
+        if _inflight_kaggle_search.get(cache_key) is t
+        else None
+    )
+    return await asyncio.shield(task)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -146,8 +178,9 @@ def _download_dataset_sync(ref: str, dest_dir: str) -> str:
 
 
 async def download_dataset(ref: str, dest_dir: str) -> str:
-    """Async wrapper: download and unzip a dataset."""
-    return await asyncio.to_thread(_download_dataset_sync, ref, dest_dir)
+    """Async wrapper: download and unzip a dataset under bounded concurrency."""
+    async with _KAGGLE_DOWNLOAD_SEMAPHORE:
+        return await asyncio.to_thread(_download_dataset_sync, ref, dest_dir)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -221,8 +254,9 @@ def split_into_20mb_zips(src_dir: str, out_dir: str, base_name: str) -> List[str
 async def split_into_20mb_zips_async(
     src_dir: str, out_dir: str, base_name: str
 ) -> List[str]:
-    """Async wrapper for split_into_20mb_zips."""
-    return await asyncio.to_thread(split_into_20mb_zips, src_dir, out_dir, base_name)
+    """Async wrapper for split_into_20mb_zips under bounded concurrency."""
+    async with _KAGGLE_DOWNLOAD_SEMAPHORE:
+        return await asyncio.to_thread(split_into_20mb_zips, src_dir, out_dir, base_name)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 
 from telegram import InputFile
+from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 
 from core.database import get_monitoring_report_data, get_total_users, get_total_vip_users
@@ -112,11 +113,20 @@ async def send_monitoring_report_document(
     payload = BytesIO(report_text.encode("utf-8"))
     payload.name = filename
 
-    await context.bot.send_document(
-        chat_id=chat_id,
-        document=InputFile(payload, filename=filename),
-        caption=caption,
-    )
+    try:
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(payload, filename=filename),
+            caption=caption,
+        )
+    except RetryAfter as exc:
+        await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+        payload.seek(0)
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(payload, filename=filename),
+            caption=caption,
+        )
 
 
 async def send_hourly_monitoring_report(
@@ -145,14 +155,16 @@ async def send_hourly_monitoring_report(
         if also_send_to and also_send_to not in targets:
             targets.append(also_send_to)
 
-        for chat_id in targets:
-            await send_monitoring_report_document(context, chat_id, report, data)
+        async def _send_one(cid: str):
+            await send_monitoring_report_document(context, cid, report, data)
             logger.info(
                 "Monitoring report document sent to %s (%s–%s)",
-                chat_id,
+                cid,
                 data["hour_start"],
                 data["hour_end"],
             )
+
+        await asyncio.gather(*(_send_one(cid) for cid in targets))
 
         deleted = await purge_old_monitoring_events(days=14)
         if deleted:

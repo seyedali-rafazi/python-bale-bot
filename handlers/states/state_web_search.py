@@ -6,7 +6,7 @@ import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import async_get_state, set_state, clear_state
-from core.task_utils import bounded_large_upload, load_input_file, remove_file_async
+from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, track_task
 from services.rate_limiter import user_action_lock
 from services.web_scraper import async_search_web, create_single_file
 import asyncio
@@ -114,16 +114,19 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     target_url = urls[index]
-    await _download_and_send_webpage(
-        query.message,
-        context,
-        chat_id,
-        update.effective_user.id,
-        target_url,
-        filename=f"WebPage_{index + 1}.html",
-        caption_label="🔗 لینک اصلی",
-        wait_text="⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)...",
-        fail_text="❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد)",
+    track_task(
+        _download_and_send_webpage(
+            query.message,
+            context,
+            chat_id,
+            update.effective_user.id,
+            target_url,
+            filename=f"WebPage_{index + 1}.html",
+            caption_label="🔗 لینک اصلی",
+            wait_text="⏳ در حال پردازش و دریافت کل صفحه (ممکن است کمی طول بکشد)...",
+            fail_text="❌ متاسفانه دریافت این صفحه با مشکل مواجه شد. (ممکن است سایت محافظت شده باشد)",
+        ),
+        name=f"web_search_cb_{chat_id}",
     )
 
 
@@ -200,8 +203,9 @@ async def handle_web_search_state(
             )
             return
 
-        try:
-            await _download_and_send_webpage(
+        clear_state(chat_id)
+        track_task(
+            _download_and_send_webpage(
                 update.message,
                 context,
                 chat_id,
@@ -211,6 +215,6 @@ async def handle_web_search_state(
                 caption_label="🔗 لینک",
                 wait_text="⏳ در حال پردازش و دریافت صفحه (ممکن است کمی طول بکشد)...",
                 fail_text="❌ متاسفانه دریافت این صفحه با مشکل مواجه شد.\n\n(ممکن است سایت محافظت شده باشد یا لینک اشتباه باشد)",
-            )
-        finally:
-            clear_state(chat_id)
+            ),
+            name=f"web_search_link_{chat_id}",
+        )

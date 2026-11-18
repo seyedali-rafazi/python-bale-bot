@@ -1,5 +1,6 @@
 # core/database/yt_blacklist.py
 
+import re
 import time
 from .connection import get_db
 from .utils import get_tehran_now_full
@@ -8,6 +9,9 @@ _CHANNEL_BLACKLIST_CACHE_KEY = "yt_blacklist:channels"
 _BLOCKED_WORDS_CACHE_KEY = "yt_blacklist:words"
 _L1_TTL_SEC = 60.0
 _l1_lists: dict[str, tuple[list[str], float]] = {}
+_compiled_bl_ref: list[str] | None = None
+_compiled_bl_exact: frozenset[str] = frozenset()
+_compiled_bl_sub_re: re.Pattern | None = None
 
 
 def _l1_get(key: str) -> list[str] | None:
@@ -72,14 +76,16 @@ async def remove_channel_blacklist(channel: str) -> bool:
     return False
 
 
-async def list_channel_blacklist():
+async def list_channel_blacklist(limit: int = 100):
     pool = await get_db()
     return await pool.fetch(
         """
         SELECT channel_key, display_name, added_at
         FROM yt_channel_blacklist
         ORDER BY added_at DESC
-        """
+        LIMIT $1
+        """,
+        int(limit),
     )
 
 
@@ -103,19 +109,34 @@ async def get_all_channel_blacklist_keys() -> list[str]:
     return keys
 
 
+def _get_compiled_channel_blacklist(keys: list[str]) -> tuple[frozenset[str], re.Pattern | None]:
+    global _compiled_bl_ref, _compiled_bl_exact, _compiled_bl_sub_re
+    if keys is _compiled_bl_ref:
+        return _compiled_bl_exact, _compiled_bl_sub_re
+
+    exact = frozenset(keys)
+    subs = [k for k in keys if len(k) >= 4]
+    sub_re = re.compile("|".join(re.escape(k) for k in subs)) if subs else None
+    _compiled_bl_ref = keys
+    _compiled_bl_exact = exact
+    _compiled_bl_sub_re = sub_re
+    return exact, sub_re
+
+
 async def is_channel_blacklisted(*names: str) -> bool:
     keys = await get_all_channel_blacklist_keys()
     if not keys:
         return False
+    exact, sub_re = _get_compiled_channel_blacklist(keys)
     for raw in names:
         if not raw:
             continue
         norm = normalize_channel_key(raw)
         compact = raw.strip().lower()
-        for bl in keys:
-            if bl == norm or (norm and len(bl) >= 4 and bl in norm):
-                return True
-            if bl == compact or (compact and len(bl) >= 4 and bl in compact):
+        if norm in exact or compact in exact:
+            return True
+        if sub_re is not None:
+            if (norm and sub_re.search(norm)) or (compact and sub_re.search(compact)):
                 return True
     return False
 
@@ -157,10 +178,11 @@ async def remove_blocked_word(word: str) -> bool:
     return False
 
 
-async def list_blocked_words():
+async def list_blocked_words(limit: int = 100):
     pool = await get_db()
     return await pool.fetch(
-        "SELECT word, added_at FROM yt_blocked_words ORDER BY word ASC"
+        "SELECT word, added_at FROM yt_blocked_words ORDER BY word ASC LIMIT $1",
+        int(limit),
     )
 
 
@@ -186,21 +208,22 @@ async def get_all_blocked_words() -> list[str]:
 
 async def seed_default_blocked_words(default_words: list[str]):
     now = get_tehran_now_full()
-    records = [
-        (word.strip().lower(), now)
+    words = [
+        word.strip().lower()
         for word in default_words
         if len(word.strip()) >= 2
     ]
-    if not records:
+    if not words:
         return
     pool = await get_db()
-    await pool.executemany(
+    await pool.execute(
         """
         INSERT INTO yt_blocked_words (word, added_at)
-        VALUES ($1, $2)
+        SELECT UNNEST($1::text[]), $2
         ON CONFLICT (word) DO NOTHING
         """,
-        records,
+        words,
+        now,
     )
     from services.cache_service import cache_delete
 

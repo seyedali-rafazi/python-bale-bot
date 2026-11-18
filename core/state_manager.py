@@ -35,7 +35,7 @@ class StateCache(MutableMapping):
 
     def __init__(self, max_capacity: int = 10000, default_ttl: float = 7200.0, on_evict=None):
         self._data: OrderedDict = OrderedDict()
-        self._expires: dict = {}
+        self._expires: OrderedDict = OrderedDict()
         self._max_capacity = max_capacity
         self._default_ttl = default_ttl
         self._on_evict = on_evict
@@ -54,7 +54,7 @@ class StateCache(MutableMapping):
         evicted_val = None
         expired = False
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             if key not in self._data:
                 raise KeyError(key)
             if now > self._expires.get(key, 0):
@@ -70,12 +70,13 @@ class StateCache(MutableMapping):
     def __setitem__(self, key, value):
         evicted: list = []
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             if key not in self._data and len(self._data) >= self._max_capacity:
                 evicted = self._evict_over_capacity(now)
             self._data[key] = value
             self._data.move_to_end(key)
             self._expires[key] = now + self._default_ttl
+            self._expires.move_to_end(key)
         self._notify_evicted(evicted)
 
     def __delitem__(self, key):
@@ -105,7 +106,7 @@ class StateCache(MutableMapping):
         evicted_val = None
         expired = False
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             if key not in self._data:
                 return False
             if now > self._expires.get(key, 0):
@@ -138,11 +139,14 @@ class StateCache(MutableMapping):
         return val
 
     def _purge_expired(self) -> list:
-        now = time.time()
-        expired = [k for k, exp in self._expires.items() if now > exp]
+        now = time.monotonic()
         evicted = []
-        for k in expired:
-            evicted.append((k, self._remove_key(k)))
+        # _expires is strictly ordered by write/TTL time via move_to_end(key) in __setitem__
+        while self._expires:
+            oldest_key, exp = next(iter(self._expires.items()))
+            if now <= exp:
+                break
+            evicted.append((oldest_key, self._remove_key(oldest_key)))
         return evicted
 
     def _evict_over_capacity(self, now: float) -> list:
@@ -231,10 +235,12 @@ def set_state(chat_id, step, **kwargs):
     state_data.update(kwargs)
     user_states[key] = state_data
     version = _next_version(key)
-    serialized = json.dumps(state_data, ensure_ascii=False, default=str)
 
     loop = _get_running_loop_or_none()
     if loop is not None:
+        if get_async_redis() is None:
+            return
+        serialized = json.dumps(state_data, ensure_ascii=False, default=str)
         _schedule_async_task(loop, _persist_state_async(key, serialized, version))
         return
 
@@ -242,6 +248,7 @@ def set_state(chat_id, step, **kwargs):
     sync_redis = get_sync_redis()
     if sync_redis is not None:
         try:
+            serialized = json.dumps(state_data, ensure_ascii=False, default=str)
             sync_redis.set(_make_key(key), serialized, ex=STATE_TTL_SECONDS)
         except Exception as e:
             logger.debug("Failed to persist state to Redis for %s: %s", key, e)

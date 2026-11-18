@@ -38,6 +38,8 @@ _ai_client_lock = asyncio.Lock()
 # مهم‌ترین بخش
 # فقط AI interaction serialize میشه
 _ai_chat_lock = asyncio.Lock()
+_TTS_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("TTS_MAX_CONCURRENT", "4"))))
+_IMAGE_GEN_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("IMAGE_GEN_MAX_CONCURRENT", "3"))))
 
 _ai_connected = False
 
@@ -158,9 +160,12 @@ async def ask_chatbot(text: str) -> str:
             except asyncio.TimeoutError:
                 # Single fallback check in case update delivery lagged behind RPC
                 if sent_msg is not None:
-                    messages = await client.get_messages(
-                        CHATGPT_BOT_USERNAME,
-                        limit=5,
+                    messages = await asyncio.wait_for(
+                        client.get_messages(
+                            CHATGPT_BOT_USERNAME,
+                            limit=5,
+                        ),
+                        timeout=10.0,
                     )
                     for msg in messages or []:
                         if msg.id <= sent_msg.id or msg.out:
@@ -270,10 +275,11 @@ def _sync_tts(text: str):
 async def text_to_speech(text: str):
 
     try:
-        return await asyncio.to_thread(
-            _sync_tts,
-            text,
-        )
+        async with _TTS_SEMAPHORE:
+            return await asyncio.to_thread(
+                _sync_tts,
+                text,
+            )
 
     except Exception:
         logger.exception("text_to_speech failed")
@@ -300,28 +306,29 @@ async def generate_image(prompt: str):
 
         session = await get_http_session()
 
-        async with session.get(
-            url,
-            timeout=timeout,
-        ) as response:
-            if response.status != 200:
-                return None
-
-            max_image_bytes = 25 * 1024 * 1024
-            cl = response.headers.get("Content-Length")
-            if cl and cl.isdigit() and int(cl) > max_image_bytes:
-                logger.warning("generate_image response too large: %s bytes", cl)
-                return None
-
-            buf = bytearray()
-            async for chunk in response.content.iter_chunked(65536):
-                buf.extend(chunk)
-                if len(buf) > max_image_bytes:
-                    logger.warning("generate_image stream exceeded %s bytes", max_image_bytes)
+        async with _IMAGE_GEN_SEMAPHORE:
+            async with session.get(
+                url,
+                timeout=timeout,
+            ) as response:
+                if response.status != 200:
                     return None
-            image_bytes = bytes(buf)
 
-        fp = io.BytesIO(image_bytes)
+                max_image_bytes = 25 * 1024 * 1024
+                cl = response.headers.get("Content-Length")
+                if cl and cl.isdigit() and int(cl) > max_image_bytes:
+                    logger.warning("generate_image response too large: %s bytes", cl)
+                    return None
+
+                fp = io.BytesIO()
+                total_len = 0
+                async for chunk in response.content.iter_chunked(65536):
+                    total_len += len(chunk)
+                    if total_len > max_image_bytes:
+                        logger.warning("generate_image stream exceeded %s bytes", max_image_bytes)
+                        fp.close()
+                        return None
+                    fp.write(chunk)
 
         fp.seek(0)
 

@@ -105,10 +105,10 @@ async def btn_kaggle_popular_req(update: Update, context: ContextTypes.DEFAULT_T
                 )
             ])
 
-        await msg.edit_text(text, parse_mode="Markdown")
-        await update.message.reply_text(
-            "👇 برای دانلود روی دکمه کلیک کنید:",
+        await msg.edit_text(
+            text + "\n👇 برای دانلود روی دکمه کلیک کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
         )
     except Exception as e:
         logger.exception("Kaggle popular fetch failed")

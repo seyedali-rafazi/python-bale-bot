@@ -137,7 +137,9 @@ async def process_kaggle_download(
         )
         return
 
-    await context.bot.send_message(chat_id, f"🔄 نوبت شما رسید! در حال دانلود «{ref}» از کاگل...")
+    status_msg = await context.bot.send_message(
+        chat_id, f"🔄 نوبت شما رسید! در حال دانلود «{ref}» از کاگل..."
+    )
 
     dl_dir, zip_dir = await asyncio.to_thread(make_temp_dirs)
     safe_name = ref.replace("/", "_")
@@ -148,8 +150,7 @@ async def process_kaggle_download(
             await download_dataset(ref, dl_dir)
         except Exception as e:
             logger.exception("Kaggle download failed: %s", ref)
-            await context.bot.send_message(
-                chat_id,
+            await status_msg.edit_text(
                 f"❌ خطا در دانلود دیتاست از کاگل.\n"
                 f"مطمئن شوید نام دیتاست صحیح است: `{ref}`\n"
                 f"جزئیات: {type(e).__name__}",
@@ -163,26 +164,23 @@ async def process_kaggle_download(
             lambda: sum(len(files) for _, _, files in os.walk(dl_dir))
         )
         if total_files == 0:
-            await context.bot.send_message(
-                chat_id,
+            await status_msg.edit_text(
                 "❌ فایلی برای دانلود یافت نشد. ممکن است دیتاست خصوصی باشد یا آدرس اشتباه باشد.",
             )
             return
 
-        await context.bot.send_message(
-            chat_id,
-            f"✅ دانلود کامل شد! در حال تقسیم‌بندی فایل‌ها (حداکثر ۱۹ مگابایت هر قسمت)..."
+        await status_msg.edit_text(
+            "✅ دانلود کامل شد! در حال تقسیم‌بندی فایل‌ها (حداکثر ۱۹ مگابایت هر قسمت)..."
         )
 
         # ── Step 3: Split into ≤19 MB ZIPs ──
         parts = await split_into_20mb_zips_async(dl_dir, zip_dir, safe_name)
         if not parts:
-            await context.bot.send_message(chat_id, "❌ خطا در آماده‌سازی فایل‌ها.")
+            await status_msg.edit_text("❌ خطا در آماده‌سازی فایل‌ها.")
             return
 
         total_parts = len(parts)
-        await context.bot.send_message(
-            chat_id,
+        await status_msg.edit_text(
             f"📦 دیتاست به {total_parts} قسمت تقسیم شد. در حال ارسال..."
         )
 
@@ -278,10 +276,10 @@ async def handle_kaggle_state(
                 )
             ])
 
-        await update.message.reply_text(msg_text, parse_mode="Markdown")
         await update.message.reply_text(
-            "👇 برای دانلود روی دکمه کلیک کنید:",
+            msg_text + "👇 برای دانلود روی دکمه کلیک کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
         )
         clear_state(chat_id)
 

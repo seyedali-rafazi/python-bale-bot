@@ -167,8 +167,14 @@ async def send_image_batch(
     }
 
     session = await get_http_session()
+    dl_sem = asyncio.Semaphore(3)
+
+    async def _bounded_fetch(url: str):
+        async with dl_sem:
+            return await get_image_bytes(session, url, headers=headers)
+
     tasks = [
-        asyncio.create_task(get_image_bytes(session, url, headers=headers))
+        asyncio.create_task(_bounded_fetch(url))
         for url in urls[:10]
     ]
 

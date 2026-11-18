@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _tracked_tasks: Set[asyncio.Task] = set()
 MAX_CONCURRENT_LARGE_UPLOADS = max(
-    2, int(os.getenv("MAX_CONCURRENT_LARGE_UPLOADS", "8"))
+    2, int(os.getenv("MAX_CONCURRENT_LARGE_UPLOADS", "4"))
 )
 _large_upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_LARGE_UPLOADS)
 
@@ -164,6 +164,17 @@ async def stream_aiohttp_to_file(
     f = await asyncio.to_thread(open, dest_path, "wb")
     downloaded = 0
     buf = bytearray()
+    failed = False
+
+    def _close_and_cleanup(fh, path: str, remove_file: bool) -> None:
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+        if remove_file:
+            _remove_sync(path)
+
     try:
         async for chunk in resp.content.iter_chunked(chunk_size):
             if not chunk:
@@ -182,10 +193,11 @@ async def stream_aiohttp_to_file(
             await asyncio.to_thread(f.write, payload)
         return downloaded
     except BaseException:
-        await asyncio.to_thread(f.close)
-        f = None
-        await remove_file_async(dest_path)
+        failed = True
         raise
     finally:
-        if f is not None:
-            await asyncio.to_thread(f.close)
+        fh_to_close = f
+        f = None
+        await asyncio.shield(
+            asyncio.to_thread(_close_and_cleanup, fh_to_close, dest_path, failed)
+        )

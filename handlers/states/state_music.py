@@ -2,11 +2,15 @@
 
 
 import os
+import re
 import asyncio
+import logging
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
+
+logger = logging.getLogger(__name__)
 
 from core.database import (
     is_vip,
@@ -21,7 +25,7 @@ from core.database import (
 )
 from core.state_manager import StateCache
 from core.limits import get_limit
-from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, remove_files_async, track_task
 from services.rate_limiter import user_action_lock
 from services.music import (
     async_search_track,
@@ -54,6 +58,7 @@ except ImportError:
 # صف دانلود برای جلوگیری از فشار به سرور و محدودیت‌های یوتیوب
 MAX_MUSIC_CONCURRENT = 3
 music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
+_MUSIC_IDENTIFY_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("MUSIC_IDENTIFY_CONCURRENT", "3"))))
 _music_track_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 
 
@@ -246,66 +251,55 @@ async def _can_download_music(chat_id: str) -> tuple[bool, int]:
     return current_downloads < limit, limit
 
 
-async def handle_music_identify_media(
+async def _run_music_identify_bg(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-):
-    chat_id = str(update.effective_chat.id)
-    media = get_message_media(update.message)
-    if not media:
-        await update.message.reply_text(
-            "❌ لطفاً ویس، فایل صوتی یا ویدیو (حداکثر ۳ دقیقه) ارسال کنید."
-        )
-        return
-
-    file_obj, filename = media
-    api_duration = get_api_duration_sec(file_obj)
-    if api_duration is not None and api_duration > MAX_DURATION_SEC:
-        await update.message.reply_text(
-            f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(api_duration)}."
-        )
-        return
-
-    status_msg = await update.message.reply_text("🔎 در حال تشخیص آهنگ...")
-
+    chat_id: str,
+    file_obj,
+    filename: str,
+    status_msg,
+) -> None:
+    safe_orig = re.sub(r"[^\w.\-]", "_", os.path.basename(filename or "media.bin")) or "media.bin"
     req_id = uuid.uuid4().hex[:8]
-    raw_path = os.path.join(IDENTIFY_DIR, f"{chat_id}_{req_id}_{filename}")
+    raw_path = os.path.join(IDENTIFY_DIR, f"{chat_id}_{req_id}_{safe_orig[:60]}")
     audio_path = os.path.join(IDENTIFY_DIR, f"{chat_id}_{req_id}_identify.mp3")
     paths_to_remove = []
 
     try:
-        tg_file = await context.bot.get_file(file_obj.file_id)
-        await tg_file.download_to_drive(raw_path)
-        paths_to_remove.append(raw_path)
+        async with _MUSIC_IDENTIFY_SEMAPHORE:
+            tg_file = await context.bot.get_file(file_obj.file_id)
+            await tg_file.download_to_drive(raw_path)
+            paths_to_remove.append(raw_path)
 
-        real_duration = await async_probe_media_duration_sec(raw_path)
-        if real_duration is not None and real_duration > MAX_DURATION_SEC:
-            await status_msg.edit_text(
-                f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(real_duration)}."
-            )
-            return
-
-        is_video = (
-            update.message.video is not None
-            or update.message.video_note is not None
-            or (
-                update.message.document
-                and (update.message.document.mime_type or "").startswith("video/")
-            )
-        )
-
-        recognize_path = raw_path
-        if is_video or not raw_path.lower().endswith((".mp3", ".ogg", ".m4a", ".wav")):
-            ok = await async_extract_audio_to_mp3(
-                raw_path, audio_path, MAX_DURATION_SEC
-            )
-            if not ok:
-                await status_msg.edit_text("❌ استخراج صدا از فایل ناموفق بود.")
+            real_duration = await async_probe_media_duration_sec(raw_path)
+            if real_duration is not None and real_duration > MAX_DURATION_SEC:
+                await status_msg.edit_text(
+                    f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(real_duration)}."
+                )
                 return
-            recognize_path = audio_path
-            paths_to_remove.append(audio_path)
 
-        identified = await recognize_music_from_file(recognize_path)
+            is_video = (
+                update.message.video is not None
+                or update.message.video_note is not None
+                or (
+                    update.message.document
+                    and (update.message.document.mime_type or "").startswith("video/")
+                )
+            )
+
+            recognize_path = raw_path
+            if is_video or not raw_path.lower().endswith((".mp3", ".ogg", ".m4a", ".wav")):
+                ok = await async_extract_audio_to_mp3(
+                    raw_path, audio_path, MAX_DURATION_SEC
+                )
+                if not ok:
+                    await status_msg.edit_text("❌ استخراج صدا از فایل ناموفق بود.")
+                    return
+                recognize_path = audio_path
+                paths_to_remove.append(audio_path)
+
+            identified = await recognize_music_from_file(recognize_path)
+
         if not identified:
             await status_msg.edit_text(
                 "❌ آهنگی شناسایی نشد.\n"
@@ -360,15 +354,47 @@ async def handle_music_identify_media(
         )
 
     except Exception as e:
-        print(f"Music identify error: {e}")
+        logger.warning("Music identify error: %s", e)
         try:
             await status_msg.edit_text("❌ خطایی در تشخیص آهنگ رخ داد.")
         except BadRequest:
             await update.message.reply_text("❌ خطایی در تشخیص آهنگ رخ داد.")
 
     finally:
-        for path in paths_to_remove:
-            await remove_file_async(path)
+        await remove_files_async(paths_to_remove)
+
+
+async def handle_music_identify_media(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    chat_id = str(update.effective_chat.id)
+    media = get_message_media(update.message)
+    if not media:
+        await update.message.reply_text(
+            "❌ لطفاً ویس، فایل صوتی یا ویدیو (حداکثر ۳ دقیقه) ارسال کنید."
+        )
+        return
+
+    file_obj, filename = media
+    api_duration = get_api_duration_sec(file_obj)
+    if api_duration is not None and api_duration > MAX_DURATION_SEC:
+        await update.message.reply_text(
+            f"❌ حداکثر مدت مجاز ۳ دقیقه است. مدت فایل شما: {format_duration_fa(api_duration)}."
+        )
+        return
+
+    async with user_action_lock(chat_id, "music_identify", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست تشخیص قبلی شما در حال پردازش است.")
+            return
+        status_msg = await update.message.reply_text("🔎 در حال تشخیص آهنگ...")
+        track_task(
+            _run_music_identify_bg(
+                update, context, chat_id, file_obj, filename, status_msg
+            ),
+            name=f"music_identify_{chat_id}",
+        )
 
 
 async def handle_music_state(
@@ -380,7 +406,11 @@ async def handle_music_state(
     state_data: dict,
 ):
     if step == "waiting_music_track":
-        results = await async_search_track(text)
+        async with user_action_lock(chat_id, "music_search", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است.")
+                return
+            results = await async_search_track(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -421,7 +451,7 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_artist":
-        results = await asyncio.to_thread(search_artist, text)
+        results = search_artist(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return

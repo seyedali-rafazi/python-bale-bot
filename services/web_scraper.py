@@ -2,6 +2,7 @@
 
 import asyncio
 from functools import lru_cache
+import importlib.util
 import json
 import logging
 import os
@@ -35,6 +36,10 @@ _PLAYWRIGHT_USER_AGENT = (
 _MAX_INLINED_STYLESHEETS = 20
 _MAX_STYLESHEET_BYTES = 512 * 1024
 _MAX_TOTAL_CSS_BYTES = 4 * 1024 * 1024
+_MAX_SNAPSHOT_HTML_CHARS = 2_500_000
+_BS4_PARSER = "lxml" if importlib.util.find_spec("lxml") is not None else "html.parser"
+_DDGS_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("DDGS_MAX_CONCURRENT", "4"))))
+_inflight_web_search: dict[str, asyncio.Task] = {}
 
 # آرگومان‌های مرورگر برای سرور لینوکس / Docker (کاهش خروج Chromium با کد ۲۱)
 _DEFAULT_BROWSER_ARGS: List[str] = [
@@ -176,7 +181,7 @@ _ORIG_SEARCH_WEB = search_web
 
 
 async def async_search_web(query: str, max_results: int = 10, max_attempts: int = 3) -> list:
-    """Async cached web search with non-blocking retries and timeout protection."""
+    """Async cached web search with semaphore, shielded singleflight dedup, and timeout protection."""
     import hashlib
     from services.cache_service import cache_get, cache_set
 
@@ -189,40 +194,65 @@ async def async_search_web(query: str, max_results: int = 10, max_attempts: int 
         if isinstance(cached, list) and cached:
             return cached
 
-    if search_web is not _ORIG_SEARCH_WEB:
-        results = await asyncio.wait_for(
-            asyncio.to_thread(search_web, query, max_results, max_attempts),
-            timeout=35.0,
-        )
-    else:
-        results = []
-        deadline = asyncio.get_running_loop().time() + 35.0
-        for attempt in range(max_attempts):
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                break
-            try:
+    async def _run_search() -> list:
+        if search_web is not _ORIG_SEARCH_WEB:
+            async with _DDGS_SEMAPHORE:
                 results = await asyncio.wait_for(
-                    asyncio.to_thread(_search_web_once, query, max_results),
-                    timeout=remaining,
+                    asyncio.to_thread(search_web, query, max_results, max_attempts),
+                    timeout=35.0,
                 )
-                if results:
+        else:
+            results = []
+            deadline = asyncio.get_running_loop().time() + 35.0
+            for attempt in range(max_attempts):
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
                     break
-            except asyncio.TimeoutError:
-                break
-            except Exception as e:
-                logger.warning(
-                    "Search Error (attempt %s/%s): %s", attempt + 1, max_attempts, e
-                )
-            if attempt < max_attempts - 1:
-                delay = min(1.0 * (attempt + 1), max(0.0, deadline - asyncio.get_running_loop().time()))
-                if delay <= 0:
+                try:
+                    async with _DDGS_SEMAPHORE:
+                        results = await asyncio.wait_for(
+                            asyncio.to_thread(_search_web_once, query, max_results),
+                            timeout=remaining,
+                        )
+                    if results:
+                        break
+                except asyncio.TimeoutError:
                     break
-                await asyncio.sleep(delay)
+                except Exception as e:
+                    logger.warning(
+                        "Search Error (attempt %s/%s): %s", attempt + 1, max_attempts, e
+                    )
+                if attempt < max_attempts - 1:
+                    delay = min(1.0 * (attempt + 1), max(0.0, deadline - asyncio.get_running_loop().time()))
+                    if delay <= 0:
+                        break
+                    await asyncio.sleep(delay)
 
-    if cache_key and results:
-        await cache_set(cache_key, results, ttl_sec=900)
-    return results
+        if cache_key and results:
+            await cache_set(cache_key, results, ttl_sec=900)
+        return results
+
+    if not cache_key:
+        return await _run_search()
+
+    existing = _inflight_web_search.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    task = asyncio.create_task(_run_search())
+    _inflight_web_search[cache_key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_web_search.get(cache_key) is done_task:
+            _inflight_web_search.pop(cache_key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 def _remove_file_if_exists(path: str) -> None:
@@ -253,7 +283,9 @@ async def _fetch_stylesheet_text(
 def _prepare_soup_and_collect_css(
     html_content: str, base_url: str
 ) -> tuple[BeautifulSoup, list[tuple[object, str]]]:
-    soup = BeautifulSoup(html_content, "html.parser")
+    if len(html_content) > _MAX_SNAPSHOT_HTML_CHARS:
+        html_content = html_content[:_MAX_SNAPSHOT_HTML_CHARS]
+    soup = BeautifulSoup(html_content, _BS4_PARSER)
 
     for script_tag in soup.find_all("script"):
         script_tag.decompose()
@@ -274,11 +306,13 @@ def _prepare_soup_and_collect_css(
         head.insert(0, soup.new_tag("meta", charset="utf-8"))
 
     css_links = []
+    seen_css_urls: set[str] = set()
     for link in soup.find_all("link", href=True):
         rel_values = [r.lower() for r in (link.get("rel") or [])]
         if "stylesheet" in rel_values:
             abs_href = urljoin(base_url, link["href"])
-            if abs_href.startswith(("http://", "https://")):
+            if abs_href.startswith(("http://", "https://")) and abs_href not in seen_css_urls:
+                seen_css_urls.add(abs_href)
                 css_links.append((link, abs_href))
             if len(css_links) >= _MAX_INLINED_STYLESHEETS:
                 break
@@ -357,7 +391,7 @@ async def _create_single_file_with_playwright(
                         timeout=_PLAYWRIGHT_PAGE_TIMEOUT_MS,
                     )
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=5000)
+                        await page.wait_for_load_state("networkidle", timeout=2500)
                     except Exception:
                         pass
 
@@ -444,23 +478,28 @@ async def _run_singlefile_cli(
                     process.communicate(),
                     timeout=_SINGLEFILE_COMMUNICATE_TIMEOUT,
                 )
-                if process.returncode == 0 and await asyncio.to_thread(os.path.exists, output_path):
+                if process.returncode == 0 and await asyncio.to_thread(
+                    lambda: os.path.exists(output_path) and os.path.getsize(output_path) > 0
+                ):
                     return True
                 err_msg = (
                     stderr.decode(errors="replace") if stderr else "Unknown Error"
                 )
                 out_msg = stdout.decode(errors="replace") if stdout else ""
                 if out_msg.strip():
-                    print(f"SingleFile stdout: {out_msg[:2000]}")
-                print(
-                    f"SingleFile failed (attempt {attempt + 1}/{max_attempts}, "
-                    f"browser={browser_exe or 'default bundled'}). Error: {err_msg}"
+                    logger.debug("SingleFile stdout: %s", out_msg[:2000])
+                logger.warning(
+                    "SingleFile failed (attempt %s/%s, browser=%s). Error: %s",
+                    attempt + 1,
+                    max_attempts,
+                    browser_exe or "default bundled",
+                    err_msg[:300],
                 )
             except FileNotFoundError:
                 if not _SINGLEFILE_MISSING_LOGGED:
-                    print(
-                        f"SingleFile binary not found at '{singlefile_exe}'. "
-                        "Falling back to Playwright."
+                    logger.warning(
+                        "SingleFile binary not found at '%s'. Falling back to Playwright.",
+                        singlefile_exe,
                     )
                     _SINGLEFILE_MISSING_LOGGED = True
                 await asyncio.to_thread(_remove_file_if_exists, output_path)
@@ -481,7 +520,7 @@ async def _run_singlefile_cli(
                         await asyncio.wait_for(process.wait(), timeout=3.0)
                     except Exception:
                         pass
-                print(f"SingleFile timeout for URL: {url} (attempt {attempt + 1})")
+                logger.warning("SingleFile timeout for URL: %s (attempt %s)", url, attempt + 1)
             except Exception as e:
                 if process is not None and process.returncode is None:
                     _terminate_process_tree(process)
@@ -489,7 +528,7 @@ async def _run_singlefile_cli(
                         await asyncio.wait_for(process.wait(), timeout=3.0)
                     except Exception:
                         pass
-                print(f"SingleFile error: {e}")
+                logger.warning("SingleFile error: %s", e)
 
             await asyncio.to_thread(_remove_file_if_exists, output_path)
 

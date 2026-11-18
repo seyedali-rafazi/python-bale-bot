@@ -5,18 +5,19 @@ Provides atomic rate limiting, user action locking (preventing double-click/spam
 anti-flood checks, and daily usage caching.
 """
 
+from collections import OrderedDict
 import time
 import uuid
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
-from services.redis_client import get_async_redis
+from services.redis_client import get_async_redis, mark_redis_failure
 
 logger = logging.getLogger(__name__)
 
-# Fallback locks in memory if Redis is absent: { lock_key: (token, expire_ts) }
-_local_locks: dict[str, tuple[str, float]] = {}
-_local_flood_tracker: dict[str, list[float]] = {}
+# Fallback locks in memory if Redis is absent: OrderedDict[lock_key, (token, expire_ts)]
+_local_locks: OrderedDict[str, tuple[str, float]] = OrderedDict()
+_local_flood_tracker: OrderedDict[str, list[float]] = OrderedDict()
 
 _RELEASE_LOCK_LUA = """
 if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -54,23 +55,26 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
                 res = await redis.set(lock_key, lock_token, nx=True, ex=timeout_sec)
                 acquired = bool(res)
             except Exception as e:
+                mark_redis_failure(e)
                 logger.debug("Redis user_action_lock error for %s, falling back to local: %s", lock_key, e)
                 redis = None
 
         if redis is None:
-            # In-memory lock fallback with TTL expiration and hard capacity cap
+            # In-memory lock fallback with O(1) incremental TTL/LRU eviction
             now = time.monotonic()
             if len(_local_locks) > 5000:
-                expired_keys = [k for k, (_, exp) in _local_locks.items() if now >= exp]
-                for k in expired_keys:
-                    _local_locks.pop(k, None)
-                if len(_local_locks) > 5000:
-                    overflow = len(_local_locks) - 4500
-                    for k in list(_local_locks.keys())[:overflow]:
-                        _local_locks.pop(k, None)
+                for _ in range(min(128, len(_local_locks))):
+                    _, (_, exp) = next(iter(_local_locks.items()))
+                    if now >= exp:
+                        _local_locks.popitem(last=False)
+                    else:
+                        break
+                while len(_local_locks) > 4500:
+                    _local_locks.popitem(last=False)
             existing = _local_locks.get(lock_key)
             if existing is None or now >= existing[1]:
                 _local_locks[lock_key] = (lock_token, now + timeout_sec)
+                _local_locks.move_to_end(lock_key)
                 acquired = True
             else:
                 acquired = False
@@ -105,6 +109,7 @@ async def check_anti_flood(user_id: str | int, max_messages: int = 5, window_sec
             count = int(await redis.eval(_ANTI_FLOOD_LUA, 1, flood_key, window_sec))
             return count <= max_messages
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis anti-flood check error: %s", e)
 
     # Local fallback
@@ -113,16 +118,18 @@ async def check_anti_flood(user_id: str | int, max_messages: int = 5, window_sec
     valid_timestamps = [t for t in timestamps if t > cutoff]
     valid_timestamps.append(now)
     _local_flood_tracker[uid_str] = valid_timestamps
+    _local_flood_tracker.move_to_end(uid_str)
 
-    # Clean old keys and enforce hard memory bound
+    # Incremental head purge + LRU bound in O(1)
     if len(_local_flood_tracker) > 5000:
-        for k in list(_local_flood_tracker.keys()):
-            if not _local_flood_tracker[k] or _local_flood_tracker[k][-1] < cutoff:
-                _local_flood_tracker.pop(k, None)
-        if len(_local_flood_tracker) > 5000:
-            overflow = len(_local_flood_tracker) - 4500
-            for k in list(_local_flood_tracker.keys())[:overflow]:
-                _local_flood_tracker.pop(k, None)
+        for _ in range(min(128, len(_local_flood_tracker))):
+            _, ts_list = next(iter(_local_flood_tracker.items()))
+            if not ts_list or ts_list[-1] < cutoff:
+                _local_flood_tracker.popitem(last=False)
+            else:
+                break
+        while len(_local_flood_tracker) > 4500:
+            _local_flood_tracker.popitem(last=False)
 
     return len(valid_timestamps) <= max_messages
 

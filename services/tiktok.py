@@ -26,6 +26,8 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
+_TIKTOK_YTDLP_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("TIKTOK_YTDLP_CONCURRENT", "3"))))
+_TIKTOK_MAX_BYTES = int(os.getenv("TIKTOK_MAX_BYTES", str(512 * 1024 * 1024)))
 _tikwm_last_call = 0.0
 _tikwm_rate_lock = asyncio.Lock()
 
@@ -118,7 +120,7 @@ async def _download_stream_to_file(
                 return False
 
             downloaded = await stream_aiohttp_to_file(
-                resp, output_path, chunk_size=512 * 1024
+                resp, output_path, chunk_size=512 * 1024, max_bytes=_TIKTOK_MAX_BYTES
             )
 
         if downloaded > 1024:
@@ -135,6 +137,7 @@ async def _fetch_tikwm_video_info(
     url: str,
     proxy: str | None = None,
     allow_solver: bool = True,
+    solver_only: bool = False,
 ) -> dict | None:
     """دریافت متادیتا و لینک‌های مستقیم دانلود از TikWM API"""
     clean_url = url.strip()
@@ -151,38 +154,41 @@ async def _fetch_tikwm_video_info(
 
     cf_blocked = False
 
-    for endpoint in endpoints:
-        # روش اول: درخواست POST
-        try:
-            post_data = {"url": clean_url, "hd": "1"}
-            async with session.post(endpoint, data=post_data, **kwargs) as resp:
-                if resp.status == 200:
-                    text_data = await resp.text()
-                    data = _extract_json_data(text_data)
-                    if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
-                        return data.get("data")
-                elif resp.status == 403:
-                    cf_blocked = True
-        except Exception as e:
-            logger.warning("[TikTok] TikWM POST error on %s: %s", endpoint, e)
+    if not solver_only:
+        async with TIKWM_API_SEMAPHORE:
+            await _pace_tikwm_request()
+            for endpoint in endpoints:
+                # روش اول: درخواست POST
+                try:
+                    post_data = {"url": clean_url, "hd": "1"}
+                    async with session.post(endpoint, data=post_data, **kwargs) as resp:
+                        if resp.status == 200:
+                            text_data = await resp.text()
+                            data = _extract_json_data(text_data)
+                            if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
+                                return data.get("data")
+                        elif resp.status == 403:
+                            cf_blocked = True
+                except Exception as e:
+                    logger.warning("[TikTok] TikWM POST error on %s: %s", endpoint, e)
 
-        # روش دوم: درخواست GET
-        try:
-            encoded_url = urllib.parse.quote(clean_url)
-            get_url = f"{endpoint}?url={encoded_url}&hd=1"
-            async with session.get(get_url, **kwargs) as resp:
-                if resp.status == 200:
-                    text_data = await resp.text()
-                    data = _extract_json_data(text_data)
-                    if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
-                        return data.get("data")
-                elif resp.status == 403:
-                    cf_blocked = True
-        except Exception as e:
-            logger.warning("[TikTok] TikWM GET error on %s: %s", endpoint, e)
+                # روش دوم: درخواست GET
+                try:
+                    encoded_url = urllib.parse.quote(clean_url)
+                    get_url = f"{endpoint}?url={encoded_url}&hd=1"
+                    async with session.get(get_url, **kwargs) as resp:
+                        if resp.status == 200:
+                            text_data = await resp.text()
+                            data = _extract_json_data(text_data)
+                            if isinstance(data, dict) and data.get("code") == 0 and data.get("data"):
+                                return data.get("data")
+                        elif resp.status == 403:
+                            cf_blocked = True
+                except Exception as e:
+                    logger.warning("[TikTok] TikWM GET error on %s: %s", endpoint, e)
 
     # روش سوم: دور زدن کلادفلر با Byparr / FlareSolverr در صورت 403
-    if cf_blocked and allow_solver:
+    if (cf_blocked or solver_only) and allow_solver:
         logger.info("[TikTok] TikWM blocked by Cloudflare (403), attempting Byparr/FlareSolverr...")
         try:
             encoded_url = urllib.parse.quote(clean_url)
@@ -305,6 +311,8 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
         "bv*+ba/b",
         "--merge-output-format",
         "mp4",
+        "--max-filesize",
+        str(_TIKTOK_MAX_BYTES),
         "-o",
         output_template,
         "--no-playlist",
@@ -322,36 +330,59 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
 
     cmd.append(url)
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180.0)
-        except asyncio.TimeoutError:
+    def _cleanup_tt_req():
+        for p in glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}*")):
             try:
-                process.kill()
-                await process.wait()
-            except Exception:
+                os.remove(p)
+            except OSError:
                 pass
-            logger.warning("[TikTok] yt-dlp timed out after 180s (proxy=%s)", proxy or "none")
-            return None
 
-        if process.returncode != 0:
-            err_msg = stderr.decode("utf-8", errors="ignore")
-            logger.warning("[TikTok] yt-dlp failed (proxy=%s): %s", proxy or "none", err_msg.strip()[:300])
-            return None
+    try:
+        async with _TIKTOK_YTDLP_SEMAPHORE:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
 
-        files = await asyncio.to_thread(
-            glob.glob, os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*")
-        )
-        return files[0] if files else None
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180.0)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+                await asyncio.to_thread(_cleanup_tt_req)
+                logger.warning("[TikTok] yt-dlp timed out after 180s (proxy=%s)", proxy or "none")
+                return None
+            except asyncio.CancelledError:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+                await asyncio.to_thread(_cleanup_tt_req)
+                raise
 
+            if process.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="ignore")
+                logger.warning("[TikTok] yt-dlp failed (proxy=%s): %s", proxy or "none", err_msg.strip()[:300])
+                await asyncio.to_thread(_cleanup_tt_req)
+                return None
+
+            files = [
+                f
+                for f in await asyncio.to_thread(glob.glob, os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
+                if not f.endswith((".part", ".ytdl", ".temp"))
+            ]
+            return files[0] if files else None
+
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception("[TikTok] Exception running yt-dlp (proxy=%s): %s", proxy or "none", e)
+        await asyncio.to_thread(_cleanup_tt_req)
         return None
 
 
@@ -360,11 +391,16 @@ async def _try_tikwm_download(
     output_path: str,
     proxy: str | None,
     allow_solver: bool,
+    solver_only: bool = False,
 ) -> bool:
     """Attempt downloading a TikTok video via TikWM API (optionally via Byparr/FlareSolverr)."""
-    video_data = await _fetch_tikwm_video_info(clean_url, proxy=proxy, allow_solver=allow_solver)
-    if not video_data and proxy:
-        video_data = await _fetch_tikwm_video_info(clean_url, proxy=None, allow_solver=allow_solver)
+    video_data = await _fetch_tikwm_video_info(
+        clean_url, proxy=proxy, allow_solver=allow_solver, solver_only=solver_only
+    )
+    if not video_data and proxy and not solver_only:
+        video_data = await _fetch_tikwm_video_info(
+            clean_url, proxy=None, allow_solver=allow_solver
+        )
 
     if not video_data:
         return False
@@ -434,9 +470,9 @@ async def download_tiktok_video(url: str) -> str | None:
     except Exception as e:
         logger.warning("[TikTok] SaveTik/TikVid download pipeline exception: %s", e)
 
-    # ۳. بای‌پاس TikWM با Byparr / FlareSolverr
+    # ۳. بای‌پاس TikWM با Byparr / FlareSolverr (بدون تکرار درخواست مستقیم ناموفق)
     try:
-        if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=True):
+        if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=True, solver_only=True):
             logger.info("[TikTok] Download completed via Byparr/FlareSolverr (%s bytes)", await asyncio.to_thread(os.path.getsize, output_path))
             return output_path
     except Exception as e:

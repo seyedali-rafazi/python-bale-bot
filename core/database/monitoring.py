@@ -4,10 +4,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from .connection import get_db
 from .utils import TEHRAN_TZ, get_tehran_now_full, get_tehran_today
+
+_PENDING_MONITOR_FLUSH_THRESHOLD = 25
+_pending_monitor_events: list[tuple[str, str, str | None, str]] = []
+_monitor_flush_lock = asyncio.Lock()
+_active_user_hour_seen: OrderedDict[str, str] = OrderedDict()
+_ACTIVE_USER_SEEN_CAP = 20000
 
 SECTION_LABELS = {
     "youtube":          "🎬 یوتیوب",
@@ -33,23 +40,51 @@ SECTION_LABELS = {
 ALL_SECTIONS = list(SECTION_LABELS.keys())
 
 
+async def flush_pending_monitoring_events() -> int:
+    """Flush buffered monitoring events to PostgreSQL in a single UNNEST INSERT."""
+    if not _pending_monitor_events:
+        return 0
+    async with _monitor_flush_lock:
+        if not _pending_monitor_events:
+            return 0
+        batch = _pending_monitor_events.copy()
+        _pending_monitor_events.clear()
+
+        sections = [e[0] for e in batch]
+        event_types = [e[1] for e in batch]
+        user_ids = [e[2] for e in batch]
+        created_ats = [e[3] for e in batch]
+
+        try:
+            pool = await get_db()
+            await pool.execute(
+                """
+                INSERT INTO monitoring_events (section, event_type, user_id, created_at)
+                SELECT UNNEST($1::text[]), UNNEST($2::text[]), UNNEST($3::text[]), UNNEST($4::text[])
+                """,
+                sections,
+                event_types,
+                user_ids,
+                created_ats,
+            )
+            return len(batch)
+        except Exception:
+            # Restore batch on transient DB error
+            _pending_monitor_events[:0] = batch
+            raise
+
+
 async def log_monitor_event(
     section: str,
     user_id: str | None = None,
     event_type: str = "upload_success",
 ) -> None:
-    pool = await get_db()
     uid = str(user_id) if user_id is not None else None
-    await pool.execute(
-        """
-        INSERT INTO monitoring_events (section, event_type, user_id, created_at)
-        VALUES ($1, $2, $3, $4)
-        """,
-        section,
-        event_type,
-        uid,
-        get_tehran_now_full(),
+    _pending_monitor_events.append(
+        (section, event_type, uid, get_tehran_now_full())
     )
+    if len(_pending_monitor_events) >= _PENDING_MONITOR_FLUSH_THRESHOLD:
+        await flush_pending_monitoring_events()
 
 
 async def log_upload_success(section: str, user_id: str | None = None) -> None:
@@ -62,7 +97,16 @@ async def log_upload_failed(section: str, user_id: str | None = None) -> None:
 
 
 async def log_user_active(user_id: str) -> None:
-    await log_monitor_event("bot", user_id, "user_active")
+    uid = str(user_id)
+    hour_key = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H")
+    if _active_user_hour_seen.get(uid) == hour_key:
+        _active_user_hour_seen.move_to_end(uid)
+        return
+    _active_user_hour_seen[uid] = hour_key
+    _active_user_hour_seen.move_to_end(uid)
+    while len(_active_user_hour_seen) > _ACTIVE_USER_SEEN_CAP:
+        _active_user_hour_seen.popitem(last=False)
+    await log_monitor_event("bot", uid, "user_active")
 
 
 async def _count_active_users_between(start: str, end: str) -> int:
@@ -81,6 +125,7 @@ async def _count_active_users_between(start: str, end: str) -> int:
 
 
 async def count_active_users_today() -> int:
+    await flush_pending_monitoring_events()
     today = get_tehran_today()
     today_start = f"{today} 00:00:00"
     tomorrow = (
@@ -116,6 +161,7 @@ def _last_completed_hour_range() -> tuple[str, str, str, str]:
 
 
 async def get_monitoring_report_data() -> dict:
+    await flush_pending_monitoring_events()
     hour_start, hour_end, label_start, label_end = _last_completed_hour_range()
     today = get_tehran_today()
     today_start = f"{today} 00:00:00"

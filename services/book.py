@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import urllib.parse
+import uuid
 import zipfile
 from pathlib import Path
 from typing import List, Optional
@@ -172,20 +173,32 @@ async def _search_internet_archive(query: str, max_results: int) -> List[dict]:
         if not ident:
             return None
         try:
-            async with meta_sem:
-                meta_resp = await client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
-            if meta_resp.status_code != 200:
-                return None
-            files = meta_resp.json().get("result", [])
-            best_pdf = None
-            best_size = 0
-            for f in files:
-                name = f.get("name", "")
-                size = int(f.get("size", 0) or 0)
-                if name.lower().endswith(".pdf") and 50000 < size < MAX_BOOK_BYTES:
-                    if not best_pdf or (size > best_size and not name.endswith("_text.pdf")):
-                        best_pdf = name
-                        best_size = size
+            meta_cache_key = f"book:ia_meta:{ident}"
+            cached_best = await cache_get(meta_cache_key)
+            if isinstance(cached_best, dict):
+                if cached_best.get("_none"):
+                    return None
+                best_pdf = cached_best.get("best_pdf")
+            else:
+                async with meta_sem:
+                    meta_resp = await client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
+                if meta_resp.status_code != 200:
+                    return None
+                files = meta_resp.json().get("result", [])
+                best_pdf = None
+                best_size = 0
+                for f in files:
+                    name = f.get("name", "")
+                    size = int(f.get("size", 0) or 0)
+                    if name.lower().endswith(".pdf") and 50000 < size < MAX_BOOK_BYTES:
+                        if not best_pdf or (size > best_size and not name.endswith("_text.pdf")):
+                            best_pdf = name
+                            best_size = size
+                await cache_set(
+                    meta_cache_key,
+                    {"best_pdf": best_pdf} if best_pdf else {"_none": True},
+                    ttl_sec=3600,
+                )
 
             if best_pdf:
                 creator = doc.get("creator")
@@ -406,7 +419,10 @@ def _is_valid_file(path: str) -> bool:
                 return b"%%EOF" in fh.read()
         if path.endswith(".epub"):
             with zipfile.ZipFile(path) as z:
-                return z.testzip() is None and "META-INF/container.xml" in z.namelist()
+                if "META-INF/container.xml" not in z.namelist():
+                    return False
+                # Read small container XML instead of decompressing/CRC-checking every byte of a 50MB EPUB
+                return bool(z.read("META-INF/container.xml"))
     except Exception:
         return False
     return True
@@ -452,7 +468,7 @@ async def _download_url_async(
                 first_chunk = True
                 write_buf = bytearray()
                 write_threshold = 512 * 1024
-                fh = await asyncio.to_thread(open, dest_path, "wb")
+                fh = None
                 try:
                     async for chunk in stream.aiter_bytes(chunk_size=131072):
                         if first_chunk:
@@ -460,23 +476,16 @@ async def _download_url_async(
                             chunk_start = chunk[:512].lower()
                             if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
                                 logger.warning("Downloaded payload is HTML page: %s", download_url)
-                                await asyncio.to_thread(fh.close)
-                                fh = None
-                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
 
                             if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
                                 logger.warning("File missing PDF magic bytes: %s", download_url)
-                                await asyncio.to_thread(fh.close)
-                                fh = None
-                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
                             elif dest_path.endswith(".epub") and b"PK\x03\x04" not in chunk[:128]:
                                 logger.warning("File missing EPUB magic bytes: %s", download_url)
-                                await asyncio.to_thread(fh.close)
-                                fh = None
-                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
+
+                            fh = await asyncio.to_thread(open, dest_path, "wb")
 
                         downloaded += len(chunk)
                         if downloaded > MAX_BOOK_BYTES:
@@ -490,7 +499,7 @@ async def _download_url_async(
                             payload = bytes(write_buf)
                             write_buf.clear()
                             await asyncio.to_thread(fh.write, payload)
-                    if write_buf:
+                    if fh is not None and write_buf:
                         payload = bytes(write_buf)
                         write_buf.clear()
                         await asyncio.to_thread(fh.write, payload)
@@ -549,7 +558,8 @@ async def download_book(book: dict, dest_dir: str) -> Optional[str]:
     async with _BOOK_DOWNLOAD_SEMAPHORE:
         for url, file_ext in urls_to_try:
             safe_name = _safe_filename(book.get("title", "book"), file_ext)
-            dest_path = os.path.join(dest_dir, safe_name)
+            stem, fext = os.path.splitext(safe_name)
+            dest_path = os.path.join(dest_dir, f"{stem}_{uuid.uuid4().hex[:8]}{fext}")
 
             success = await _download_url_async(url, dest_path)
             if success and await asyncio.to_thread(_is_nonempty_book_file, dest_path):

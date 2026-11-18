@@ -154,8 +154,11 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
 
     meta_key = f"yt_meta:{video_id}"
     cached = await cache_get(meta_key)
-    if isinstance(cached, dict) and "format_type" in cached:
-        return cached
+    if isinstance(cached, dict):
+        if cached.get("_missing"):
+            return None
+        if "format_type" in cached:
+            return cached
 
     pool = await get_db()
     row = await pool.fetchrow(
@@ -167,6 +170,7 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
         video_id,
     )
     if not row:
+        await cache_set(meta_key, {"_missing": True}, ttl_sec=60)
         return None
     meta = {
         "title": row["title"],
@@ -178,6 +182,66 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
     }
     await cache_set(meta_key, meta, ttl_sec=86400 * 7)
     return meta
+
+
+async def get_cached_video_with_meta(video_id: str) -> tuple[list, dict | None]:
+    """Fetch both file_ids list and row metadata in one DB round-trip on cache miss."""
+    from services.cache_service import cache_get, cache_set
+
+    video_key = f"yt_video:{video_id}"
+    meta_key = f"yt_meta:{video_id}"
+    cached_files, cached_meta = await asyncio.gather(
+        cache_get(video_key),
+        cache_get(meta_key),
+    )
+
+    if isinstance(cached_files, list):
+        if not cached_files:
+            return [], None
+        if isinstance(cached_meta, dict) and not cached_meta.get("_missing") and "format_type" in cached_meta:
+            return cached_files, cached_meta
+        # Files cached, only metadata missed
+        meta = await get_cache_row_metadata(video_id)
+        return cached_files, meta
+
+    pool = await get_db()
+    row = await pool.fetchrow(
+        """
+        SELECT file_ids, title, channel_name, yt_video_id, uploaded_at, format_type
+        FROM youtube_cache
+        WHERE video_id = $1
+        """,
+        video_id,
+    )
+    if not row or not row["file_ids"]:
+        await asyncio.gather(
+            cache_set(video_key, [], ttl_sec=60),
+            cache_set(meta_key, {"_missing": True}, ttl_sec=60),
+        )
+        return [], None
+
+    try:
+        parsed = json.loads(row["file_ids"])
+    except Exception:
+        return [], None
+
+    if not parsed:
+        await cache_set(video_key, [], ttl_sec=60)
+        return [], None
+
+    meta = {
+        "title": row["title"],
+        "uploader": row["channel_name"],
+        "channel": row["channel_name"],
+        "yt_video_id": row["yt_video_id"],
+        "uploaded_at": row["uploaded_at"],
+        "format_type": row["format_type"],
+    }
+    await asyncio.gather(
+        cache_set(video_key, parsed, ttl_sec=86400 * 7),
+        cache_set(meta_key, meta, ttl_sec=86400 * 7),
+    )
+    return parsed, meta
 
 
 async def save_cached_video(
@@ -760,12 +824,34 @@ async def count_global_channels() -> int:
     return count
 
 
+async def _get_archive_version() -> str:
+    from services.cache_service import cache_get
+
+    ver = await cache_get("yt_archive:channels_ver")
+    return str(ver) if ver is not None else "0"
+
+
+def _channel_cache_hash(channel_name: str) -> str:
+    import hashlib
+
+    return hashlib.md5(channel_name.encode("utf-8")).hexdigest()[:16]
+
+
 async def get_global_channel_videos_page(
     channel_name: str, offset: int = 0, limit: int = VIDEOS_PAGE_SIZE
 ):
-    """One row per YouTube video (newest cache row per yt_video_id)."""
+    """One row per YouTube video (newest cache row per yt_video_id), version-cached."""
+    from services.cache_service import cache_get, cache_set
+
+    ver = await _get_archive_version()
+    ch_hash = _channel_cache_hash(channel_name)
+    cache_key = f"yt_archive:ch_vids:{ver}:{ch_hash}:{int(offset)}:{int(limit)}"
+    cached = await cache_get(cache_key)
+    if isinstance(cached, list):
+        return cached
+
     pool = await get_db()
-    return await pool.fetch(
+    rows = await pool.fetch(
         f"""
         WITH latest AS (
             SELECT MAX(id) AS latest_id
@@ -785,23 +871,34 @@ async def get_global_channel_videos_page(
         limit,
         offset,
     )
+    serialized = [dict(r) for r in rows]
+    await cache_set(cache_key, serialized, ttl_sec=120)
+    return serialized
 
 
 async def count_global_channel_videos(channel_name: str) -> int:
+    from services.cache_service import cache_get, cache_set
+
+    ver = await _get_archive_version()
+    ch_hash = _channel_cache_hash(channel_name)
+    cache_key = f"yt_archive:ch_cnt:{ver}:{ch_hash}"
+    cached = await cache_get(cache_key)
+    if isinstance(cached, int):
+        return cached
+
     pool = await get_db()
     val = await pool.fetchval(
         f"""
-        SELECT COUNT(*) FROM (
-            SELECT 1
-            FROM youtube_cache
-            WHERE channel_name = $1
-              AND {_CACHE_HAS_FILES_SQL}
-            GROUP BY {_YT_GROUP_KEY_SQL}
-        ) AS sub
+        SELECT COUNT(DISTINCT {_YT_GROUP_KEY_SQL})
+        FROM youtube_cache
+        WHERE channel_name = $1
+          AND {_CACHE_HAS_FILES_SQL}
         """,
         channel_name,
     )
-    return int(val or 0)
+    count = int(val or 0)
+    await cache_set(cache_key, count, ttl_sec=120)
+    return count
 
 
 async def get_cache_variants_for_video(

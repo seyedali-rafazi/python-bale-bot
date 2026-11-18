@@ -1,6 +1,7 @@
 # services/parspack_s3.py
 
 
+import asyncio
 import logging
 import os
 import threading
@@ -24,6 +25,14 @@ MAX_POOL_CONNECTIONS = 100
 MAX_CONCURRENCY = 20
 MULTIPART_THRESHOLD = 5 * 1024 * 1024  # 5 MB
 MULTIPART_CHUNKSIZE = 5 * 1024 * 1024  # 5 MB
+
+_TRANSFER_CONFIG = TransferConfig(
+    multipart_threshold=MULTIPART_THRESHOLD,
+    max_concurrency=MAX_CONCURRENCY,
+    multipart_chunksize=MULTIPART_CHUNKSIZE,
+    use_threads=True,
+)
+_S3_UPLOAD_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("S3_MAX_CONCURRENT_UPLOADS", "4"))))
 
 _s3_client = None
 _s3_client_lock = threading.Lock()
@@ -108,19 +117,12 @@ def upload_to_s3_with_key(
 
     s3 = _get_s3_client()
 
-    transfer_config = TransferConfig(
-        multipart_threshold=MULTIPART_THRESHOLD,
-        max_concurrency=MAX_CONCURRENCY,
-        multipart_chunksize=MULTIPART_CHUNKSIZE,
-        use_threads=True,
-    )
-
     try:
         s3.upload_file(
             file_path,
             ARVAN_BUCKET,
             object_name,
-            Config=transfer_config,
+            Config=_TRANSFER_CONFIG,
             Callback=ProgressPercentage(file_path, progress_dict),
         )
 
@@ -153,3 +155,13 @@ def upload_to_s3(
         file_path, object_name=object_name, progress_dict=progress_dict
     )
     return presigned_url
+
+
+async def async_upload_to_s3_with_key(
+    file_path: str, object_name: str = None, progress_dict: dict = None
+) -> tuple[str | None, str | None]:
+    """Bounded async wrapper for S3 uploads to cap s3transfer thread contention."""
+    async with _S3_UPLOAD_SEMAPHORE:
+        return await asyncio.to_thread(
+            upload_to_s3_with_key, file_path, object_name, progress_dict
+        )

@@ -168,9 +168,8 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
                     quota_reserved=True,
                 )
 
-                # Get updated cloud stats
-                cloud_stats = await get_cloud_usage_stats(user_id)
-                available_gb = (cloud_stats["total_quota"] - cloud_stats["used_quota"]) / 1024
+                # Compute remaining space from already-fetched available_mb without extra COUNT(*) query
+                available_gb = max(0.0, available_mb - actual_size_mb) / 1024
 
                 success_text = f"""
 ✅ **آپلود موفق**

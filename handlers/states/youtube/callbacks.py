@@ -182,11 +182,6 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
         destination = user_state.get("destination")
         delivery_mode = user_state.get("delivery_mode", "zip")
 
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
         set_state(
             chat_id,
             "processing_yt_quality",
@@ -267,6 +262,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                 destination,
                 quality=quality,
                 delivery_mode=delivery_mode,
+                estimated_size=estimated_size,
             ),
             name=f"yt_dl_{chat_id}",
         )

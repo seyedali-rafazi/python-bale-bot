@@ -1,12 +1,11 @@
 # handlers/menus/web_scraper.py
 
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.constants import BTN_BACK
 from core.state_manager import set_state
-from core.keyboards import get_google_search_menu_keyboard
+from core.keyboards import get_google_search_menu_keyboard, get_back_only_keyboard
 from handlers.ensure_membership import ensure_membership
 
 
@@ -30,9 +29,7 @@ async def btn_google_search_subject_req(
     set_state(chat_id, "waiting_google_search_subject")
     await update.message.reply_text(
         "🔍 لطفاً موضوعی که می‌خواهید جستجو کنید را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -45,8 +42,6 @@ async def btn_google_search_link_req(
     set_state(chat_id, "waiting_google_search_link")
     await update.message.reply_text(
         "🔗 لطفاً لینکی از صفحه وب را بفرستید:\n\n(لینک باید با http:// یا https:// شروع شود)",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 

@@ -97,18 +97,18 @@ async def _handle_book_search(
                 )
             ])
 
+    footer = (
+        "\n👇 برای دانلود روی کتاب مورد نظر کلیک کنید:\n"
+        "_(کتاب‌های با آیکون 🔒 فایل دانلودی ندارند)_"
+    )
+    markup = InlineKeyboardMarkup(keyboard)
     try:
-        await msg.edit_text(result_text, parse_mode="Markdown")
+        await msg.edit_text(result_text + footer, reply_markup=markup, parse_mode="Markdown")
     except Exception:
         await msg.delete()
-        await update.message.reply_text(result_text, parse_mode="Markdown")
-
-    await update.message.reply_text(
-        "👇 برای دانلود روی کتاب مورد نظر کلیک کنید:\n"
-        "_(کتاب‌های با آیکون 🔒 فایل دانلودی ندارند)_",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
-    )
+        await update.message.reply_text(
+            result_text + footer, reply_markup=markup, parse_mode="Markdown"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

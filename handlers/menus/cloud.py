@@ -15,6 +15,7 @@ from core.constants import (
 from core.database import get_cloud_usage_stats, get_user_cloud_files
 from core.state_manager import set_state
 from services.parspack_s3 import generate_presigned_url_for_key
+import asyncio
 import os
 from dotenv import load_dotenv
 
@@ -126,8 +127,10 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
 
     try:
-        cloud_stats = await get_cloud_usage_stats(user_id)
-        cloud_files = await get_user_cloud_files(user_id, limit=10)
+        cloud_stats, cloud_files = await asyncio.gather(
+            get_cloud_usage_stats(user_id),
+            get_user_cloud_files(user_id, limit=10),
+        )
 
         if not cloud_files:
             files_text = "📂 **فایل‌های من**\n\nشما هنوز فایلی آپلود نکرده‌اید."
@@ -137,18 +140,24 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
             files_text = "📂 **فایل‌های من**\n\n"
             files_text += f"تعداد فایل‌ها: **{total_count}**\n\n"
 
-            for idx, file_info in enumerate(cloud_files[:10], 1):
-                if len(file_info) >= 6:
-                    _, file_name, file_size_mb, download_link, upload_date, s3_key = file_info[:6]
-                else:
-                    _, file_name, file_size_mb, download_link, upload_date = file_info[:5]
-                    s3_key = None
-                fresh_link = (
-                    generate_presigned_url_for_key(s3_key) if s3_key else None
-                ) or download_link
+            top_files = cloud_files[:10]
+            s3_keys = [
+                (fi[5] if len(fi) >= 6 else None)
+                for fi in top_files
+            ]
+            fresh_links = await asyncio.to_thread(
+                lambda: [
+                    generate_presigned_url_for_key(k) if k else None
+                    for k in s3_keys
+                ]
+            )
+
+            for idx, (file_info, fresh_link) in enumerate(zip(top_files, fresh_links), 1):
+                _, file_name, file_size_mb, download_link, upload_date = file_info[:5]
+                link = fresh_link or download_link
                 files_text += f"{idx}. **{file_name}** ({file_size_mb} MB)\n"
                 files_text += f"   📅 {upload_date}\n"
-                files_text += f"   🔗 [دانلود]({fresh_link})\n\n"
+                files_text += f"   🔗 [دانلود]({link})\n\n"
 
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="cloud_back")]]
 

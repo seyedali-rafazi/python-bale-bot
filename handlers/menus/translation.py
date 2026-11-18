@@ -1,11 +1,10 @@
 # handlers/menus/translation.py
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_BACK
-from core.keyboards import get_translation_menu_keyboard
+from core.keyboards import get_translation_menu_keyboard, get_back_only_keyboard
 from handlers.ensure_membership import ensure_membership
 
 
@@ -25,9 +24,7 @@ async def btn_tr_fa_en_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_tr_fa_en")
     await update.message.reply_text(
         "🇮🇷 لطفاً متن فارسی خود را برای ترجمه به انگلیسی بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -38,7 +35,5 @@ async def btn_tr_en_fa_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_tr_en_fa")
     await update.message.reply_text(
         "🇬🇧 لطفاً متن انگلیسی خود را برای ترجمه به فارسی بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )

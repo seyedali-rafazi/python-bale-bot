@@ -13,7 +13,7 @@ async def init_http_session() -> aiohttp.ClientSession:
     if _http_session is None or _http_session.closed:
         async with _http_session_lock:
             if _http_session is None or _http_session.closed:
-                timeout = aiohttp.ClientTimeout(total=30)
+                timeout = aiohttp.ClientTimeout(total=30, sock_connect=10)
                 connector = aiohttp.TCPConnector(
                     limit=100,
                     limit_per_host=24,

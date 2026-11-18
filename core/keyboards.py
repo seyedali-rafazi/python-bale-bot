@@ -275,3 +275,8 @@ def get_kaggle_menu_keyboard():
         [KeyboardButton(BTN_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+@lru_cache(maxsize=1)
+def get_back_only_keyboard():
+    return ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True)

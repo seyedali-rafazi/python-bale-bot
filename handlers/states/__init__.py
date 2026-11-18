@@ -103,73 +103,62 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _reply_menu_hint(update)
         return
 
-    # 🌟 مسیریابی بر اساس نام step
-
-    if step.startswith("waiting_yt_archive_"):
-        await handle_yt_archive_search_state(update, context, step, text, chat_id)
+    # 🌟 مسیریابی بر اساس نام step (جدول O(1) دقیق + جدول پیشوند مرتب‌شده)
+    exact_handler = _EXACT_TEXT_HANDLERS.get(step)
+    if exact_handler is not None:
+        await exact_handler(update, context)
         return
 
-    if step.startswith("waiting_yt"):
-        await handle_youtube_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_ig"):
-        await handle_insta_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_ai"):
-        await handle_ai_state(update, context, step, text, chat_id, state_data)
-
-    elif step in ["waiting_music_search", "waiting_spotify_link"]:
+    if step in ("waiting_music_search", "waiting_spotify_link"):
         await handle_music_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_tg"):
-        await handle_telegram_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_tr"):
-        await handle_translation_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_weather"):
-        await handle_weather_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_prog"):
-        await handle_programming_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_music_"):
-        await handle_music_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_pinterest"):
-        await handle_pinterest_state(update, context, text, chat_id)
-
-    elif step.startswith("waiting_tt"):
-        await handle_tiktok_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_gh"):
-        await handle_github_state(update, context, step, text, chat_id, state_data)
-
-    elif step.startswith("waiting_google_search"):
-        await handle_web_search_state(update, context, text, chat_id, state_data=state_data)
         return
 
-    elif step == "img_create_pdf":
-        await handle_img_create_pdf(update, context)
-    elif step == "img_convert_format":
-        await handle_img_convert_format(update, context)
-    elif step == "img_resize":
-        await handle_img_resize(update, context)
-    elif step == "img_remove_bg":
-        await handle_img_remove_bg(update, context)
-    elif step == "img_video_to_gif":
-        await handle_img_video_to_gif(update, context)
-    elif step == "img_extract_audio":
-        await handle_img_extract_audio(update, context)
+    for prefix, handler_fn in _PREFIX_TEXT_HANDLERS:
+        if step.startswith(prefix):
+            await handler_fn(update, context, step, text, chat_id, state_data)
+            return
 
-    elif step.startswith("waiting_kaggle"):
-        await handle_kaggle_state(update, context, step, text, chat_id, state_data)
 
-    elif step.startswith("waiting_book"):
-        await handle_book_state(update, context, step, text, chat_id, state_data)
+_EXACT_TEXT_HANDLERS = {
+    "img_create_pdf": handle_img_create_pdf,
+    "img_convert_format": handle_img_convert_format,
+    "img_resize": handle_img_resize,
+    "img_remove_bg": handle_img_remove_bg,
+    "img_video_to_gif": handle_img_video_to_gif,
+    "img_extract_audio": handle_img_extract_audio,
+}
 
-    elif step.startswith("waiting_software_"):
-        await handle_software_state(update, context, step, text, chat_id, state_data)
+
+async def _handle_yt_archive_wrap(update, context, step, text, chat_id, _state_data):
+    await handle_yt_archive_search_state(update, context, step, text, chat_id)
+
+
+async def _handle_pinterest_wrap(update, context, _step, text, chat_id, _state_data):
+    await handle_pinterest_state(update, context, text, chat_id)
+
+
+async def _handle_web_search_wrap(update, context, _step, text, chat_id, state_data):
+    await handle_web_search_state(update, context, text, chat_id, state_data=state_data)
+
+
+_PREFIX_TEXT_HANDLERS = (
+    ("waiting_yt_archive_", _handle_yt_archive_wrap),
+    ("waiting_yt", handle_youtube_state),
+    ("waiting_ig", handle_insta_state),
+    ("waiting_ai", handle_ai_state),
+    ("waiting_tg", handle_telegram_state),
+    ("waiting_tr", handle_translation_state),
+    ("waiting_weather", handle_weather_state),
+    ("waiting_prog", handle_programming_state),
+    ("waiting_music_", handle_music_state),
+    ("waiting_pinterest", _handle_pinterest_wrap),
+    ("waiting_tt", handle_tiktok_state),
+    ("waiting_gh", handle_github_state),
+    ("waiting_google_search", _handle_web_search_wrap),
+    ("waiting_kaggle", handle_kaggle_state),
+    ("waiting_book", handle_book_state),
+    ("waiting_software_", handle_software_state),
+)
 
 
 async def process_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

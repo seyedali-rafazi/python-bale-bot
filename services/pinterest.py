@@ -80,31 +80,32 @@ class PinterestService:
 
     def _parse_image_urls(self, html_text: str, max_results: int) -> List[str]:
         raw_urls = self._extract_pinimg_urls(html_text)
-        best_by_image: Dict[str, str] = {}
+        best_by_image: Dict[str, tuple[int, str]] = {}
         verified_originals: set[str] = set()
 
         for clean_url in raw_urls:
-            image_key = self._get_image_key(clean_url)
-            if not image_key:
+            parsed_path = clean_url.split("i.pinimg.com", 1)[-1]
+            m = _REAL_PIN_PATH_RE.match(parsed_path)
+            if not m:
                 continue
+            size_dir = m.group(1).lower()
+            image_key = m.group(2).lower()
 
-            lower_url = clean_url.lower()
-            if "/originals/" in lower_url or "/1200x/" in lower_url:
+            if size_dir in ("originals", "1200x"):
                 verified_originals.add(image_key)
 
-            candidates = self._build_quality_candidates(clean_url, already_clean=True)
-            for candidate in candidates:
-                current = best_by_image.get(image_key)
-                if not current or self._quality_score(candidate) < self._quality_score(current):
-                    best_by_image[image_key] = candidate
+            best_candidate = _PIN_SIZE_PATH_RE.sub("/originals/", clean_url, count=1)
+            cand_score = self._quality_score(best_candidate)
+            current = best_by_image.get(image_key)
+            if current is None or cand_score < current[0]:
+                best_by_image[image_key] = (cand_score, best_candidate)
 
-        # پین‌هایی که نسخه اصلی یا سایز بزرگ‌تر داشته‌اند در اولویت می‌مانند؛ همه نتایج با کیفیت بالا هستند
         sorted_urls = sorted(
             best_by_image.items(),
-            key=lambda kv: (0 if kv[0] in verified_originals else 1, self._quality_score(kv[1])),
+            key=lambda kv: (0 if kv[0] in verified_originals else 1, kv[1][0]),
         )
 
-        return [u for _, u in sorted_urls[:max_results]]
+        return [kv[1][1] for kv in sorted_urls[:max_results]]
 
     # این متد به دلیل تعامل با Playwright باید async باشد
     async def _load_search_page(
@@ -155,14 +156,37 @@ class PinterestService:
                 )
 
                 try:
-                    await page.wait_for_timeout(1500)
-                    for scroll_attempt in range(2):
-                        await page.mouse.wheel(0, 2000)
+                    try:
+                        await page.wait_for_selector("img[src*='i.pinimg.com']", timeout=4000)
+                    except Exception:
                         await page.wait_for_timeout(800)
+                    for _ in range(2):
+                        await page.mouse.wheel(0, 2000)
+                        await page.wait_for_timeout(500)
                 except Exception as wait_err:
                     logger.debug("Wait/scroll error (non-critical): %s", wait_err)
 
-                content = await page.content()
+                content = ""
+                try:
+                    extracted = await page.evaluate(
+                        """() => {
+                            const out = new Set();
+                            for (const img of document.querySelectorAll('img[src*="pinimg.com"]')) {
+                                if (img.src) out.add(img.src);
+                            }
+                            const bodyHtml = document.body ? document.body.innerHTML : '';
+                            const m = bodyHtml.match(/https?:\\\\?\\/\\\\?\\/i\\.pinimg\\.com[^"'\\s<>\\\\)]+/gi);
+                            if (m) for (const u of m) out.add(u);
+                            return Array.from(out).join('\\n');
+                        }"""
+                    )
+                    if isinstance(extracted, str) and "i.pinimg.com" in extracted:
+                        content = extracted
+                except Exception:
+                    content = ""
+
+                if not content:
+                    content = await page.content()
                 if len(content) > _MAX_HTML_FOR_PARSE:
                     content = content[:_MAX_HTML_FOR_PARSE]
                 return content
@@ -175,9 +199,7 @@ class PinterestService:
                     timeout_err,
                 )
                 if attempt < max_retries - 1:
-                    if allow_restart:
-                        await manager.force_restart()
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(1.0 * (attempt + 1))
                     continue
                 return None
 
@@ -189,9 +211,10 @@ class PinterestService:
                     err,
                 )
                 if attempt < max_retries - 1:
-                    if allow_restart:
+                    err_low = str(err).lower()
+                    if allow_restart and any(k in err_low for k in ("closed", "crashed", "disconnected", "target")):
                         await manager.force_restart()
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(1.0 * (attempt + 1))
                     continue
                 return None
 

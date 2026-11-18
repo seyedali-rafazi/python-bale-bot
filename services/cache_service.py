@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from typing import Any, Optional
-from services.redis_client import get_async_redis, is_redis_available
+from services.redis_client import get_async_redis, is_redis_available, mark_redis_failure
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,15 @@ _local_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
 
 
 def _cleanup_local_cache():
-    """Remove expired keys and enforce MAX_LOCAL_CACHE_SIZE in O(1) LRU order."""
-    now = time.time()
-    expired = [k for k, (_, exp) in _local_cache.items() if exp < now]
-    for k in expired:
-        _local_cache.pop(k, None)
+    """Incrementally sample expired head entries and enforce MAX_LOCAL_CACHE_SIZE in O(1) LRU order."""
+    now = time.monotonic()
+    # Sample up to 64 oldest-used keys from the front instead of scanning all 5000 entries
+    for _ in range(min(64, len(_local_cache))):
+        k, (_, exp) = next(iter(_local_cache.items()))
+        if exp < now:
+            _local_cache.popitem(last=False)
+        else:
+            break
     if len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
         overflow = len(_local_cache) - MAX_LOCAL_CACHE_SIZE + max(1, MAX_LOCAL_CACHE_SIZE // 10)
         for _ in range(min(overflow, len(_local_cache))):
@@ -45,12 +49,13 @@ async def cache_get(key: str) -> Optional[Any]:
                 except Exception:
                     return val
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis cache_get error for %s: %s", key, e)
 
     # Local fallback
     if key in _local_cache:
         val, exp = _local_cache[key]
-        if exp > time.time():
+        if exp > time.monotonic():
             _local_cache.move_to_end(key)
             return val
         else:
@@ -68,12 +73,13 @@ async def cache_set(key: str, value: Any, ttl_sec: int = 3600) -> bool:
             await redis.set(f"bale:cache:{key}", serialized, ex=max(1, ttl_sec))
             return True
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis cache_set error for %s: %s", key, e)
 
     # Local fallback
     if key not in _local_cache and len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
         _cleanup_local_cache()
-    _local_cache[key] = (value, time.time() + ttl_sec)
+    _local_cache[key] = (value, time.monotonic() + ttl_sec)
     _local_cache.move_to_end(key)
     return True
 
@@ -87,6 +93,7 @@ async def cache_delete(key: str) -> bool:
             await redis.delete(f"bale:cache:{key}")
             return True
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis cache_delete error for %s: %s", key, e)
     return True
 
@@ -105,5 +112,6 @@ async def cache_delete_many(keys: list[str]) -> bool:
                 await redis.delete(*prefixed[i : i + 500])
             return True
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis cache_delete_many error: %s", e)
     return True

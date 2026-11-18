@@ -36,14 +36,19 @@ def _normalize_search_text(text: str) -> str:
 
 
 _compiled_matcher_key: tuple[str, ...] | None = None
+_compiled_words_ref: list[str] | None = None
 _compiled_single_words: frozenset[str] = frozenset()
 _compiled_phrase_re: re.Pattern | None = None
 
 
 def _get_compiled_blocked_matcher(words: list[str]) -> tuple[frozenset[str], re.Pattern | None]:
-    global _compiled_matcher_key, _compiled_single_words, _compiled_phrase_re
+    global _compiled_matcher_key, _compiled_words_ref, _compiled_single_words, _compiled_phrase_re
+    if words is _compiled_words_ref and _compiled_matcher_key is not None:
+        return _compiled_single_words, _compiled_phrase_re
+
     cleaned = tuple(w.strip().lower() for w in words if w and w.strip())
     if cleaned == _compiled_matcher_key:
+        _compiled_words_ref = words
         return _compiled_single_words, _compiled_phrase_re
 
     singles = frozenset(w for w in cleaned if " " not in w)
@@ -53,22 +58,11 @@ def _get_compiled_blocked_matcher(words: list[str]) -> tuple[frozenset[str], re.
         if phrases
         else None
     )
+    _compiled_words_ref = words
     _compiled_matcher_key = cleaned
     _compiled_single_words = singles
     _compiled_phrase_re = phrase_re
     return singles, phrase_re
-
-
-def _blocked_word_matches(blocked: str, normalized: str, tokens: set[str]) -> bool:
-    """Match whole words/tokens only — avoids e.g. کس matching inside پادکست."""
-    b = blocked.strip().lower()
-    if not b:
-        return False
-    if " " in b:
-        return bool(
-            re.search(rf"(?:^|\s){re.escape(b)}(?:\s|$)", normalized)
-        )
-    return b in tokens
 
 
 async def is_search_query_blocked(query: str) -> bool:

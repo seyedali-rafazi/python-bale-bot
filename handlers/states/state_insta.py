@@ -2,9 +2,15 @@
 
 import os
 import asyncio
+import logging
+import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
+from core.state_manager import StateCache, clear_state
 from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
+
+logger = logging.getLogger(__name__)
+_ig_link_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 from services.instagram import async_download_instagram
 from services.rate_limiter import user_action_lock
 from core.database import (
@@ -37,11 +43,15 @@ async def handle_insta_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
+        token = uuid.uuid4().hex[:12]
+        _ig_link_cache[token] = text.strip()
+        clear_state(chat_id)
+
         keyboard = [
             [
-                InlineKeyboardButton("📱 بله", callback_data=f"ig_dl_tel_{text}"),
+                InlineKeyboardButton("📱 بله", callback_data=f"ig_dl_tel_{token}"),
                 InlineKeyboardButton(
-                    "☁️ فضای ابری", callback_data=f"ig_dl_cloud_{text}"
+                    "☁️ فضای ابری", callback_data=f"ig_dl_cloud_{token}"
                 ),
             ]
         ]
@@ -195,8 +205,16 @@ async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
 
+        def _resolve_ig_link(raw_payload: str) -> str | None:
+            if raw_payload.startswith(("http://", "https://")):
+                return raw_payload
+            return _ig_link_cache.get(raw_payload)
+
         if data.startswith("ig_dl_tel_"):
-            link = data.split("ig_dl_tel_", 1)[1]
+            link = _resolve_ig_link(data.split("ig_dl_tel_", 1)[1])
+            if not link:
+                await query.message.reply_text("❌ نشست منقضی شده است. لطفاً لینک را دوباره بفرستید.")
+                return
             track_task(
                 background_download_insta_link(
                     context, chat_id, link, destination="telegram"
@@ -205,7 +223,10 @@ async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
         elif data.startswith("ig_dl_cloud_"):
-            link = data.split("ig_dl_cloud_", 1)[1]
+            link = _resolve_ig_link(data.split("ig_dl_cloud_", 1)[1])
+            if not link:
+                await query.message.reply_text("❌ نشست منقضی شده است. لطفاً لینک را دوباره بفرستید.")
+                return
             track_task(
                 background_download_insta_link(context, chat_id, link, destination="server"),
                 name=f"insta_cloud_{chat_id}",

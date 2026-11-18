@@ -163,6 +163,7 @@ def reap_stale_headless_chromium(
 
     my_pid = os.getpid()
     killed = 0
+    win_pids: list[int] = []
 
     for pid, etimes, cmd in processes:
         if pid == my_pid or pid <= 1:
@@ -178,22 +179,33 @@ def reap_stale_headless_chromium(
             killed += 1
             continue
 
-        try:
-            if sys.platform == "win32":
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/F"],
-                    check=False,
-                    timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            else:
+        if sys.platform == "win32":
+            win_pids.append(pid)
+        else:
+            try:
                 os.kill(pid, 15)
-            killed += 1
-            logger.info("Reaped stale headless chromium pid=%s", pid)
-        except ProcessLookupError:
-            pass
+                killed += 1
+                logger.info("Reaped stale headless chromium pid=%s", pid)
+            except ProcessLookupError:
+                pass
+            except OSError as e:
+                logger.warning("Could not reap pid=%s: %s", pid, e)
+
+    if win_pids and not dry_run:
+        cmd = ["taskkill", "/F"]
+        for pid in win_pids:
+            cmd.extend(["/PID", str(pid)])
+        try:
+            subprocess.run(
+                cmd,
+                check=False,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            killed += len(win_pids)
+            logger.info("Reaped %d stale headless chromium pid(s): %s", len(win_pids), win_pids)
         except OSError as e:
-            logger.warning("Could not reap pid=%s: %s", pid, e)
+            logger.warning("Could not reap windows pids=%s: %s", win_pids, e)
 
     return killed
 

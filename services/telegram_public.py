@@ -22,6 +22,7 @@ from core.task_utils import (
 from services.http_client import get_http_session
 
 MAX_MEDIA_BYTES = 50 * 1024 * 1024
+_TG_PUBLIC_DL_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("TG_PUBLIC_DL_CONCURRENT", "4"))))
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -83,17 +84,12 @@ def _collect_cdn_urls(root: Tag) -> list[str]:
             val = el.get(attr, "")
             if "telesco.pe" in val or "telegram-cdn" in val:
                 found.append(val)
-    html = str(root)
-    for m in CDN_URL_RE.finditer(html):
-        found.append(m.group(0))
+    if not found:
+        html = str(root)
+        for m in CDN_URL_RE.finditer(html):
+            found.append(m.group(0))
     # preserve order, dedupe
-    seen = set()
-    out = []
-    for u in found:
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
+    return list(dict.fromkeys(found))
 
 
 def _photo_urls(msg: Tag) -> list[str]:
@@ -215,32 +211,42 @@ def caption_for(text: str, use: bool) -> str:
     return text if len(text) <= 1024 else ""
 
 
+def _sanitize_tg_filename(filename: str) -> str:
+    base = os.path.basename(filename or "file.bin")
+    cleaned = re.sub(r'[\\/*?:"<>|\x00-\x1f]', "_", base).strip()
+    if len(cleaned) > 100:
+        stem, ext = os.path.splitext(cleaned)
+        cleaned = f"{stem[:80]}{ext[:20]}"
+    return cleaned or "file.bin"
+
+
 async def download_media(
     url: str, filename: str, max_bytes: int = MAX_MEDIA_BYTES
 ) -> tuple[Optional[str], Optional[str]]:
     """Download to temp file. Returns (path, error_message)."""
-    safe_name = os.path.basename(filename or "file.bin")
+    safe_name = _sanitize_tg_filename(filename)
     temp_path = os.path.join("downloads", f"tgpub_{uuid.uuid4().hex}_{safe_name}")
     session = await get_http_session()
     headers = {"User-Agent": USER_AGENT}
 
     try:
-        async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=120)
-        ) as resp:
-            if resp.status != 200:
-                return None, f"http_{resp.status}"
-            cl = resp.headers.get("Content-Length")
-            if cl and cl.isdigit() and int(cl) > max_bytes:
-                return None, "over_20mb"
+        async with _TG_PUBLIC_DL_SEMAPHORE:
+            async with session.get(
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=120)
+            ) as resp:
+                if resp.status != 200:
+                    return None, f"http_{resp.status}"
+                cl = resp.headers.get("Content-Length")
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    return None, "over_20mb"
 
-            downloaded = await stream_aiohttp_to_file(
-                resp, temp_path, chunk_size=512 * 1024, max_bytes=max_bytes
-            )
-            if downloaded == 0:
-                await remove_file_async(temp_path)
-                return None, "empty"
-            return temp_path, None
+                downloaded = await stream_aiohttp_to_file(
+                    resp, temp_path, chunk_size=512 * 1024, max_bytes=max_bytes
+                )
+                if downloaded == 0:
+                    await remove_file_async(temp_path)
+                    return None, "empty"
+                return temp_path, None
     except FileTooLargeError:
         return None, "over_20mb"
     except Exception:
@@ -259,7 +265,7 @@ async def _send_item(
         return False, "over_20mb"
 
     if item.kind in ("photo", "video"):
-        try:
+        async def _send_direct_url():
             if item.kind == "photo":
                 await bot.send_photo(
                     chat_id=chat_id, photo=item.url, caption=cap or None
@@ -268,6 +274,13 @@ async def _send_item(
                 await bot.send_video(
                     chat_id=chat_id, video=item.url, caption=cap or None
                 )
+
+        try:
+            try:
+                await _send_direct_url()
+            except RetryAfter as exc:
+                await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+                await _send_direct_url()
             return True, None
         except Exception:
             pass

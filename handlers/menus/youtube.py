@@ -1,16 +1,18 @@
 import json
 import asyncio
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+import logging
+from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import RetryAfter
 
 from core.state_manager import set_state
-from core.constants import BTN_BACK
-from core.keyboards import get_youtube_menu_keyboard
+from core.keyboards import get_youtube_menu_keyboard, get_back_only_keyboard
 from core.database import get_setting, get_top_cached_videos, get_user_info
 from core.task_utils import track_task
 from handlers.ensure_membership import ensure_membership
 from services.rate_limiter import user_action_lock
+
+logger = logging.getLogger(__name__)
 
 
 async def btn_yt_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -36,9 +38,7 @@ async def btn_yt_last5_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_yt_last5_channel")
     await update.message.reply_text(
         "آیدی یا نام کاربری کانال یوتیوب را بفرستید (مثال: mrbeast@ یا mrbeast):",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -49,9 +49,7 @@ async def btn_yt_ch_search_req(update: Update, context: ContextTypes.DEFAULT_TYP
     set_state(chat_id, "waiting_yt_ch_search_name")
     await update.message.reply_text(
         "ابتدا آیدی کانال مورد نظر را بفرستید (مثال: mrbeast@):",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -62,9 +60,7 @@ async def btn_yt_global_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_yt_global_search")
     await update.message.reply_text(
         "موضوع یا نام ویدیوی مورد نظر خود را برای جستجو بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -75,9 +71,7 @@ async def btn_yt_link_vid_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     set_state(chat_id, "waiting_yt_link", format="video")
     await update.message.reply_text(
         "🔗 لطفاً لینک ویدیو یوتیوب را برای دانلود (تصویری) ارسال کنید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -88,9 +82,7 @@ async def btn_yt_link_mp3_req(update: Update, context: ContextTypes.DEFAULT_TYPE
     set_state(chat_id, "waiting_yt_link", format="audio")
     await update.message.reply_text(
         "🔗 لطفاً لینک ویدیو یوتیوب را برای تبدیل به فایل صوتی (MP3) ارسال کنید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -98,6 +90,7 @@ async def _send_top_videos_task(context: ContextTypes.DEFAULT_TYPE, chat_id, top
     async with user_action_lock(str(chat_id), "yt_top_videos", timeout_sec=60) as acquired:
         if not acquired:
             return
+        total_videos = len(top_videos)
         for index, video in enumerate(top_videos):
             try:
                 file_ids = json.loads(video["file_ids"])
@@ -121,22 +114,22 @@ async def _send_top_videos_task(context: ContextTypes.DEFAULT_TYPE, chat_id, top
                                 f"🔗 آیدی ویدیو: {video_id}"
                             )
 
+                        is_last = (index == total_videos - 1) and (part_index == total_parts - 1)
                         try:
                             await context.bot.send_video(
                                 chat_id=chat_id, video=file_id, caption=caption
                             )
-                            await asyncio.sleep(1.5)
-
                         except RetryAfter as e:
-                            print(f"Rate limited! Sleeping for {e.retry_after} seconds...")
+                            logger.warning("Rate limited! Sleeping for %ss", e.retry_after)
                             await asyncio.sleep(e.retry_after)
                             await context.bot.send_video(
                                 chat_id=chat_id, video=file_id, caption=caption
                             )
+                        if not is_last:
                             await asyncio.sleep(1.5)
 
             except Exception as e:
-                print(f"Error sending top video {video.get('video_id', 'Unknown')}: {e}")
+                logger.warning("Error sending top video %s: %s", video.get("video_id", "Unknown"), e)
                 continue
 
 

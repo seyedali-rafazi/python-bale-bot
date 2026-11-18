@@ -1,7 +1,9 @@
 # services/music.py
 
+import asyncio
 import hashlib
 import logging
+import os
 import subprocess
 from services.cache_service import cache_get, cache_set
 from services.youtube import _run_async_subprocess, get_base_search_cmd
@@ -9,6 +11,8 @@ from services.youtube import _run_async_subprocess, get_base_search_cmd
 logger = logging.getLogger(__name__)
 
 _MUSIC_CACHE_TTL_SEC = 900  # 15 minutes
+_MUSIC_SEARCH_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("MUSIC_SEARCH_CONCURRENT", "6"))))
+_inflight_music_search: dict[str, asyncio.Task] = {}
 
 
 def _parse_tracks_output(stdout_text: str, limit: int | None = None) -> list[dict]:
@@ -228,6 +232,27 @@ def _cache_key(prefix: str, text: str, limit: int = 0) -> str:
 # Async API (preferred for bot handlers; zero ThreadPool consumption)
 # ------------------------------------------------------------------
 
+async def _dedup_music_search(key: str, coro_factory):
+    existing = _inflight_music_search.get(key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    task = asyncio.create_task(coro_factory())
+    _inflight_music_search[key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_music_search.get(key) is done_task:
+            _inflight_music_search.pop(key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
+
+
 async def async_search_track(query: str, limit: int = 10) -> list[dict]:
     if not query or not query.strip():
         return []
@@ -237,20 +262,24 @@ async def async_search_track(query: str, limit: int = 10) -> list[dict]:
     if isinstance(cached, list) and cached:
         return cached
 
-    try:
-        rc, out, err = await _run_async_subprocess(
-            _build_track_search_cmd(clean, limit), timeout_sec=45.0
-        )
-        if rc != 0:
-            logger.warning("Error searching music tracks: %s", err)
+    async def _fetch():
+        try:
+            async with _MUSIC_SEARCH_SEMAPHORE:
+                rc, out, err = await _run_async_subprocess(
+                    _build_track_search_cmd(clean, limit), timeout_sec=45.0
+                )
+            if rc != 0:
+                logger.warning("Error searching music tracks: %s", err[:250])
+                return []
+            tracks = _parse_tracks_output(out, limit)
+            if tracks:
+                await cache_set(key, tracks, ttl_sec=_MUSIC_CACHE_TTL_SEC)
+            return tracks
+        except Exception as e:
+            logger.warning("Error in async_search_track: %s", e)
             return []
-        tracks = _parse_tracks_output(out, limit)
-        if tracks:
-            await cache_set(key, tracks, ttl_sec=_MUSIC_CACHE_TTL_SEC)
-        return tracks
-    except Exception as e:
-        logger.warning("Error in async_search_track: %s", e)
-        return []
+
+    return await _dedup_music_search(key, _fetch)
 
 
 async def async_search_album(query: str, limit: int = 5) -> list[dict]:
@@ -262,21 +291,24 @@ async def async_search_album(query: str, limit: int = 5) -> list[dict]:
     if isinstance(cached, list) and cached:
         return cached
 
-    try:
-        rc, out, err = await _run_async_subprocess(
-            _build_album_search_cmd(clean, limit), timeout_sec=45.0
-        )
-        if rc != 0:
-            print("❌ Error searching albums:")
-            print(err)
+    async def _fetch():
+        try:
+            async with _MUSIC_SEARCH_SEMAPHORE:
+                rc, out, err = await _run_async_subprocess(
+                    _build_album_search_cmd(clean, limit), timeout_sec=45.0
+                )
+            if rc != 0:
+                logger.warning("Error searching albums: %s", err[:250])
+                return []
+            albums = _parse_albums_output(out, limit)
+            if albums:
+                await cache_set(key, albums, ttl_sec=_MUSIC_CACHE_TTL_SEC)
+            return albums
+        except Exception as e:
+            logger.warning("Error in async_search_album: %s", e)
             return []
-        albums = _parse_albums_output(out, limit)
-        if albums:
-            await cache_set(key, albums, ttl_sec=_MUSIC_CACHE_TTL_SEC)
-        return albums
-    except Exception as e:
-        print(f"Error in async_search_album: {e}")
-        return []
+
+    return await _dedup_music_search(key, _fetch)
 
 
 async def async_get_album_tracks(album_id: str) -> list[dict]:
@@ -287,17 +319,21 @@ async def async_get_album_tracks(album_id: str) -> list[dict]:
     if isinstance(cached, list) and cached:
         return cached
 
-    try:
-        rc, out, _ = await _run_async_subprocess(
-            _build_collection_tracks_cmd(album_id), timeout_sec=45.0
-        )
-        tracks = _parse_collection_tracks(out if rc == 0 else "", album_id)
-        if tracks:
-            await cache_set(key, tracks, ttl_sec=_MUSIC_CACHE_TTL_SEC)
-        return tracks
-    except Exception as e:
-        print(f"Error in async_get_album_tracks: {e}")
-        return []
+    async def _fetch():
+        try:
+            async with _MUSIC_SEARCH_SEMAPHORE:
+                rc, out, _ = await _run_async_subprocess(
+                    _build_collection_tracks_cmd(album_id), timeout_sec=45.0
+                )
+            tracks = _parse_collection_tracks(out if rc == 0 else "", album_id)
+            if tracks:
+                await cache_set(key, tracks, ttl_sec=_MUSIC_CACHE_TTL_SEC)
+            return tracks
+        except Exception as e:
+            logger.warning("Error in async_get_album_tracks: %s", e)
+            return []
+
+    return await _dedup_music_search(key, _fetch)
 
 
 async def async_get_artist_top_tracks(artist_id: str) -> list[dict]:
@@ -313,21 +349,24 @@ async def async_search_playlist(query: str, limit: int = 5) -> list[dict]:
     if isinstance(cached, list) and cached:
         return cached
 
-    try:
-        rc, out, err = await _run_async_subprocess(
-            _build_playlist_search_cmd(clean, limit), timeout_sec=45.0
-        )
-        if rc != 0:
-            print("❌ Error searching playlists:")
-            print(err)
+    async def _fetch():
+        try:
+            async with _MUSIC_SEARCH_SEMAPHORE:
+                rc, out, err = await _run_async_subprocess(
+                    _build_playlist_search_cmd(clean, limit), timeout_sec=45.0
+                )
+            if rc != 0:
+                logger.warning("Error searching playlists: %s", err[:250])
+                return []
+            playlists = _parse_playlists_output(out, limit)
+            if playlists:
+                await cache_set(key, playlists, ttl_sec=_MUSIC_CACHE_TTL_SEC)
+            return playlists
+        except Exception as e:
+            logger.warning("Error in async_search_playlist: %s", e)
             return []
-        playlists = _parse_playlists_output(out, limit)
-        if playlists:
-            await cache_set(key, playlists, ttl_sec=_MUSIC_CACHE_TTL_SEC)
-        return playlists
-    except Exception as e:
-        print(f"Error in async_search_playlist: {e}")
-        return []
+
+    return await _dedup_music_search(key, _fetch)
 
 
 async def async_get_playlist_tracks(playlist_id: str) -> list[dict]:

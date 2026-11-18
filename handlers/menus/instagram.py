@@ -1,9 +1,8 @@
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_BACK
-from core.keyboards import get_insta_menu_keyboard
+from core.keyboards import get_insta_menu_keyboard, get_back_only_keyboard
 from handlers.ensure_membership import ensure_membership
 
 
@@ -23,7 +22,5 @@ async def btn_ig_link_dl_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
     set_state(chat_id, "waiting_ig_link")
     await update.message.reply_text(
         "🔗 لطفاً لینک پست یا ریلز اینستاگرام را ارسال کنید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )

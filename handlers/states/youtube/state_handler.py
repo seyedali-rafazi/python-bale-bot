@@ -173,6 +173,13 @@ async def handle_youtube_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
+        dl_format = state_data.get("format")
+        if dl_format and not await check_user_limit(chat_id):
+            await update.message.reply_text(
+                "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+            )
+            return
+
         status_msg = await update.message.reply_text("⏳ در حال بررسی لینک...")
 
         try:
@@ -203,19 +210,11 @@ async def handle_youtube_state(
             await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
 
-        dl_format = state_data.get("format")
-
         if not dl_format:
             set_state(chat_id, "waiting_yt_format", yt_url=text)
             await update.message.reply_text(
                 "✅ لینک دریافت شد! فرمت را انتخاب کنید 👇",
                 reply_markup=get_yt_format_keyboard(),
-            )
-            return
-
-        if not await check_user_limit(chat_id):
-            await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
             )
             return
 

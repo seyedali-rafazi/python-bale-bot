@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 import uuid
 from dotenv import load_dotenv
 
@@ -14,8 +15,21 @@ logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = "ig_downloads"
 COOKIES_FILE = "insta_cookies.txt"
+IG_MAX_FILESIZE = os.getenv("IG_MAX_FILESIZE", "1G")
+_IG_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("IG_MAX_CONCURRENT", "4"))))
+_cookies_checked_at = 0.0
+_cookies_exists = False
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+
+def _has_ig_cookies() -> bool:
+    global _cookies_checked_at, _cookies_exists
+    now = time.monotonic()
+    if now - _cookies_checked_at > 60.0:
+        _cookies_exists = os.path.isfile(COOKIES_FILE)
+        _cookies_checked_at = now
+    return _cookies_exists
 
 
 def _get_ytdlp_cmd() -> list[str]:
@@ -52,7 +66,6 @@ def _find_ig_file(req_id: str) -> str | None:
 
 async def async_download_instagram(url: str, timeout_sec: float = 60.0) -> str | None:
     """Download Instagram media via async subprocess so timeouts terminate cleanly without leaking threads/files."""
-    await asyncio.to_thread(os.makedirs, DOWNLOAD_DIR, exist_ok=True)
     req_id = uuid.uuid4().hex
     outtmpl = os.path.join(DOWNLOAD_DIR, f"{req_id}_%(id)s.%(ext)s")
 
@@ -60,6 +73,8 @@ async def async_download_instagram(url: str, timeout_sec: float = 60.0) -> str |
         "--quiet",
         "--no-warnings",
         "--no-playlist",
+        "--max-filesize",
+        IG_MAX_FILESIZE,
         "--sleep-interval",
         "5",
         "--max-sleep-interval",
@@ -67,49 +82,56 @@ async def async_download_instagram(url: str, timeout_sec: float = 60.0) -> str |
         "-o",
         outtmpl,
     ]
-    if os.path.isfile(COOKIES_FILE):
+    if _has_ig_cookies():
         cmd.extend(["--cookies", COOKIES_FILE])
     proxy = os.getenv("IG_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
     if proxy:
         cmd.extend(["--proxy", proxy])
     cmd.append(url)
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        _, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
-        if proc.returncode != 0:
-            err = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
-            logger.warning("Instagram yt-dlp failed (%s): %s", proc.returncode, err[:250])
+    async with _IG_DOWNLOAD_SEMAPHORE:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+            if proc.returncode != 0:
+                err = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
+                logger.warning("Instagram yt-dlp failed (%s): %s", proc.returncode, err[:250])
+                await asyncio.to_thread(_cleanup_ig_prefix, req_id)
+                return None
+            found = await asyncio.to_thread(_find_ig_file, req_id)
+            if not found:
+                await asyncio.to_thread(_cleanup_ig_prefix, req_id)
+            return found
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            await asyncio.to_thread(_cleanup_ig_prefix, req_id)
+            raise
+        except asyncio.CancelledError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            await asyncio.to_thread(_cleanup_ig_prefix, req_id)
+            raise
+        except Exception as e:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            logger.warning("Instagram download error: %s", e)
             await asyncio.to_thread(_cleanup_ig_prefix, req_id)
             return None
-        found = await asyncio.to_thread(_find_ig_file, req_id)
-        if not found:
-            await asyncio.to_thread(_cleanup_ig_prefix, req_id)
-        return found
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
-        await asyncio.to_thread(_cleanup_ig_prefix, req_id)
-        raise
-    except asyncio.CancelledError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
-        await asyncio.to_thread(_cleanup_ig_prefix, req_id)
-        raise
-    except Exception as e:
-        logger.warning("Instagram download error: %s", e)
-        await asyncio.to_thread(_cleanup_ig_prefix, req_id)
-        return None
 
 
 def download_instagram(url):

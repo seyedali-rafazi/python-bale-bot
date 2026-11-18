@@ -61,7 +61,6 @@ CREATE TABLE IF NOT EXISTS youtube_cache (
 
 CREATE INDEX IF NOT EXISTS idx_yt_cache_channel ON youtube_cache(channel_name);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_yt_id ON youtube_cache(yt_video_id);
-CREATE INDEX IF NOT EXISTS idx_yt_cache_views ON youtube_cache(view_count DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_uploaded ON youtube_cache(uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
     ON youtube_cache(channel_name, uploaded_at DESC, id DESC)
@@ -82,8 +81,12 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_incomplete
        OR yt_video_id IS NULL OR TRIM(yt_video_id) = '';
 CREATE INDEX IF NOT EXISTS idx_yt_cache_missing_upload_date
     ON youtube_cache(id DESC)
-    WHERE (uploaded_at IS NULL OR TRIM(uploaded_at) = '')
-      AND yt_video_id IS NOT NULL AND TRIM(yt_video_id) != '';
+    WHERE file_ids IS NOT NULL AND file_ids != '[]'
+      AND (uploaded_at IS NULL OR TRIM(uploaded_at) = '');
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_yt_cache_title_trgm ON youtube_cache USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_trgm ON youtube_cache USING gin (channel_name gin_trgm_ops);
 
 -- 3. جدول اکسپلور اینستاگرام
 CREATE TABLE IF NOT EXISTS instagram_explore (

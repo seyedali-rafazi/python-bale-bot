@@ -39,14 +39,31 @@ _IMG_TMP_DIR = os.path.join("downloads", "img_tmp")
 def _cleanup_evicted_paths(_key, value) -> None:
     if not value:
         return
-    paths = value if isinstance(value, (list, tuple, set)) else [value]
+    paths = [p for p in (value if isinstance(value, (list, tuple, set)) else [value]) if isinstance(p, str) and p]
+    if not paths:
+        return
+    try:
+        asyncio.get_running_loop()
+        track_task(remove_files_async(paths), name="img_cache_evict_cleanup")
+        return
+    except RuntimeError:
+        pass
     for p in paths:
-        if isinstance(p, str) and p:
-            try:
-                if os.path.exists(p):
-                    os.remove(p)
-            except OSError:
-                pass
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def cleanup_user_image_caches(chat_id: str) -> None:
+    """Remove any abandoned temp image files for a chat when leaving image states."""
+    key = str(chat_id)
+    for cache in (_pdf_images_cache, _convert_images_cache, _resize_images_cache):
+        val = cache.pop(key, None)
+        if val:
+            _cleanup_evicted_paths(key, val)
+    _pdf_append_locks.pop(key, None)
 
 
 # Bounded TTL caches storing temp disk paths (never raw image bytes in RAM)
@@ -149,6 +166,11 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
         and (update.message.document.mime_type or "").startswith("image/")
     )
     if update.message.photo or is_img_doc:
+        # Fast pre-check before downloading from Bale; authoritative check remains under lock
+        if len(_pdf_images_cache.get(chat_id) or []) >= 20:
+            await update.message.reply_text("❌ حداکثر 20 عکس می‌توانید ارسال کنید!")
+            return
+
         # Download image to temp file on disk first, then append under per-chat lock
         # so concurrent album uploads never drop photos or leak temp files.
         file_id = (

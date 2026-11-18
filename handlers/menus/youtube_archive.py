@@ -21,7 +21,7 @@ from core.constants import (
     BTN_YT_CACHE_SEARCH_TITLE,
     BTN_YT_CACHE_SEARCH_CHANNEL,
 )
-from core.keyboards import get_yt_archive_menu_keyboard, get_youtube_menu_keyboard
+from core.keyboards import get_yt_archive_menu_keyboard, get_youtube_menu_keyboard, get_back_only_keyboard
 from core.state_manager import StateCache, set_state, clear_state
 from core.task_utils import track_task
 from core.database import (
@@ -92,13 +92,13 @@ def _row_str(row, key: str, default: str = "") -> str:
 
 async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    vip = await is_vip(user_id)
-    total_global, (_, used, limit), channels, total_ch = await asyncio.gather(
+    vip, total_global, channels, total_ch = await asyncio.gather(
+        is_vip(user_id),
         count_user_archive(),
-        can_user_fetch_from_archive(user_id, is_vip_status=vip),
         get_user_channels_page(offset=0, limit=CHANNELS_PAGE_SIZE),
         count_user_channels(),
     )
+    _, used, limit = await can_user_fetch_from_archive(user_id, is_vip_status=vip)
 
     plan = "Pro" if vip == 1 else "رایگان"
     period_label = archive_limit_period_label(vip)
@@ -214,9 +214,7 @@ async def _prompt_archive_search(
     set_state(chat_id, step)
     await update.message.reply_text(
         prompt_text,
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -341,7 +339,9 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if len(variants) == 1:
             _set_ytarc_ui(user_id, pending_rowid=variants[0]["id"])
-            await _send_archive_video(update, context, user_id, variants[0]["id"])
+            await _send_archive_video(
+                update, context, user_id, variants[0]["id"], preloaded_entry=variants[0]
+            )
             return
 
         title = _row_str(entry, "title") or yt_id
@@ -421,6 +421,8 @@ async def _send_archive_video(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: str,
     archive_id: int,
+    *,
+    preloaded_entry=None,
 ):
     from services.rate_limiter import user_action_lock
 
@@ -431,20 +433,24 @@ async def _send_archive_video(
                 await query.answer("⏳ درخواست قبلی شما در حال ارسال است.", show_alert=True)
             return
 
-        entry = await get_archive_entry(archive_id)
+        entry = preloaded_entry if preloaded_entry is not None else await get_archive_entry(archive_id)
         if not entry:
             if query:
                 await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
             return
 
-        if await is_channel_blacklisted(_row_str(entry, "channel_name")):
+        ch_blocked, word_blocked, vip = await asyncio.gather(
+            is_channel_blacklisted(_row_str(entry, "channel_name")),
+            is_search_query_blocked(_row_str(entry, "title")),
+            is_vip(user_id),
+        )
+        if ch_blocked:
             await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
             return
-        if await is_search_query_blocked(_row_str(entry, "title")):
+        if word_blocked:
             await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
             return
 
-        vip = await is_vip(user_id)
         allowed, used, limit = await can_user_fetch_from_archive(
             user_id, is_vip_status=vip
         )

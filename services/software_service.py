@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import httpx
@@ -32,8 +33,10 @@ USER_AGENT = (
 SCOOP_SEARCH_URL = "https://scoopsearch.search.windows.net/indexes/apps/docs"
 SCOOP_API_KEY = "78CB5DCD0A7ABACE5B4DC3C34BC54C8F"
 
-# Limit concurrent winget operations to prevent process storms under heavy load
+# Limit concurrent winget operations & heavy downloads to prevent process/bandwidth storms
 _WINGET_SEMAPHORE = asyncio.Semaphore(2)
+_SOFTWARE_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("SOFTWARE_MAX_CONCURRENT_DL", "4"))))
+_SCOOP_MANIFEST_SEMAPHORE = asyncio.Semaphore(5)
 
 _shared_httpx_client: Optional[httpx.AsyncClient] = None
 _httpx_lock = asyncio.Lock()
@@ -284,10 +287,14 @@ class SoftwareService:
             async def _fetch_manifest(client: httpx.AsyncClient, cand: dict) -> Optional[Dict[str, Any]]:
                 m_key = _software_cache_key("scoop_manifest", cand["manifest_url"])
                 cached_item = await cache_get(m_key)
-                if isinstance(cached_item, dict) and cached_item.get("download_url"):
-                    return dict(cached_item)
+                if isinstance(cached_item, dict):
+                    if cached_item.get("_missing"):
+                        return None
+                    if cached_item.get("download_url"):
+                        return dict(cached_item)
                 try:
-                    r = await client.get(cand["manifest_url"], timeout=6.0)
+                    async with _SCOOP_MANIFEST_SEMAPHORE:
+                        r = await client.get(cand["manifest_url"], timeout=6.0)
                     if r.status_code == 200:
                         m = r.json()
                         dl_url = cls._extract_scoop_download_url(m)
@@ -306,6 +313,7 @@ class SoftwareService:
                             }
                             await cache_set(m_key, item_data, ttl_sec=_MANIFEST_CACHE_TTL_SECONDS)
                             return item_data
+                    await cache_set(m_key, {"_missing": True}, ttl_sec=300)
                 except Exception:
                     pass
                 return None
@@ -520,45 +528,51 @@ class SoftwareService:
             filename = sanitize_filename(filename)
 
         dest_path = os.path.join(dest_dir, filename)
+        part_path = f"{dest_path}.{uuid.uuid4().hex[:8]}.part"
 
         total_downloaded = 0
         f = None
 
         try:
-            client = await get_software_httpx_client()
-            async with client.stream("GET", url, timeout=180.0) as response:
-                response.raise_for_status()
+            async with _SOFTWARE_DOWNLOAD_SEMAPHORE:
+                client = await get_software_httpx_client()
+                async with client.stream("GET", url, timeout=180.0) as response:
+                    response.raise_for_status()
 
-                cl_header = response.headers.get("content-length")
-                if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
-                    raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
+                    cl_header = response.headers.get("content-length")
+                    if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
+                        raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
 
-                f = await asyncio.to_thread(open, dest_path, "wb")
-                write_buf = bytearray()
-                write_threshold = 512 * 1024
-                async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
-                    total_downloaded += len(chunk)
-                    if total_downloaded > max_bytes:
-                        raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
-                    write_buf.extend(chunk)
-                    if len(write_buf) >= write_threshold:
+                    f = await asyncio.to_thread(open, part_path, "wb")
+                    write_buf = bytearray()
+                    write_threshold = 512 * 1024
+                    async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                        total_downloaded += len(chunk)
+                        if total_downloaded > max_bytes:
+                            raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
+                        write_buf.extend(chunk)
+                        if len(write_buf) >= write_threshold:
+                            payload = bytes(write_buf)
+                            write_buf.clear()
+                            await asyncio.to_thread(f.write, payload)
+                    if write_buf:
                         payload = bytes(write_buf)
                         write_buf.clear()
                         await asyncio.to_thread(f.write, payload)
-                if write_buf:
-                    payload = bytes(write_buf)
-                    write_buf.clear()
-                    await asyncio.to_thread(f.write, payload)
+
+                await asyncio.to_thread(f.close)
+                f = None
+                await asyncio.to_thread(os.replace, part_path, dest_path)
 
             return os.path.abspath(dest_path)
         except Exception:
             if f is not None:
                 await asyncio.to_thread(f.close)
                 f = None
-            # Clean up partial/corrupted file
-            if await asyncio.to_thread(os.path.isfile, dest_path):
+            # Clean up only our unique partial file (never clobber another concurrent download)
+            if await asyncio.to_thread(os.path.isfile, part_path):
                 try:
-                    await asyncio.to_thread(os.remove, dest_path)
+                    await asyncio.to_thread(os.remove, part_path)
                 except OSError:
                     pass
             raise

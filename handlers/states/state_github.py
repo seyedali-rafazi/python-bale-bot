@@ -140,6 +140,7 @@ async def handle_github_state(
             )
             return
         # به جای پردازش مستقیم، به صف اضافه می‌کنیم
+        clear_state(chat_id)
         await enqueue_download(update, context, chat_id, repo_path, user_id)
 
     elif step == "waiting_gh_user":
@@ -243,17 +244,21 @@ async def process_github_download(
 
     try:
         session = await get_http_session()
-        try:
-            await asyncio.wait_for(
-                context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=screenshot_url,
-                    caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
-                ),
-                timeout=5.0,
-            )
-        except Exception:
-            pass
+
+        async def _send_preview_safe():
+            try:
+                await asyncio.wait_for(
+                    context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=screenshot_url,
+                        caption=f"📸 نمای کلی از ریپازیتوری: {repo_path}",
+                    ),
+                    timeout=5.0,
+                )
+            except Exception:
+                pass
+
+        preview_task = track_task(_send_preview_safe(), name=f"gh_preview_{chat_id}")
 
         async with session.get(
             zip_url, headers=headers, allow_redirects=True, timeout=120
@@ -330,4 +335,5 @@ async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             return
 
         # به جای پردازش مستقیم، به صف اضافه می‌کنیم
+        clear_state(chat_id)
         await enqueue_download(update, context, chat_id, repo_path, user_id)

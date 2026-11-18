@@ -8,7 +8,7 @@ from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
-from core.state_manager import set_state
+from core.state_manager import clear_state, set_state
 from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, track_task
 from core.constants import BTN_BACK
 from services.rate_limiter import user_action_lock
@@ -124,9 +124,13 @@ async def background_tt_download(
 
 async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    await update.message.reply_text("⏳ در حال دریافت ویدیوهای ترند...")
-
-    results = await get_tiktok_trends()
+    user_id_str = str(update.effective_user.id)
+    async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=15) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما در حال پردازش است. لطفاً صبر کنید.")
+            return
+        await update.message.reply_text("⏳ در حال دریافت ویدیوهای ترند...")
+        results = await get_tiktok_trends()
     if not results:
         await update.message.reply_text("❌ ویدیویی یافت نشد.")
         return
@@ -166,6 +170,7 @@ async def handle_tiktok_state(
             if not await check_tt_dl_limit(update, user_id_str):
                 return
 
+            clear_state(chat_id)
             track_task(
                 background_tt_download(
                     context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
@@ -175,9 +180,12 @@ async def handle_tiktok_state(
         return
 
     elif step == "waiting_tt_search":
-        await update.message.reply_text("⏳ در حال جستجو...")
-
-        results = await search_tiktok_videos(text, max_results=10)
+        async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=15) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است. لطفاً صبر کنید.")
+                return
+            await update.message.reply_text("⏳ در حال جستجو...")
+            results = await search_tiktok_videos(text, max_results=10)
 
         if not results:
             logger.warning("[TikTok] Search returned 0 results for query '%s' from user %s", text, user_id_str)

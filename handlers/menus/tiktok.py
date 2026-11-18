@@ -1,11 +1,10 @@
 # handlers/menus/tiktok.py
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_BACK
-from core.keyboards import get_tiktok_menu_keyboard
+from core.keyboards import get_tiktok_menu_keyboard, get_back_only_keyboard
 from handlers.ensure_membership import ensure_membership
 
 
@@ -25,9 +24,7 @@ async def btn_tt_link_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_tt_link")
     await update.message.reply_text(
         "🔗 لطفاً لینک ویدیوی تیک‌تاک (یا یوزر لینک) را بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 
@@ -38,9 +35,7 @@ async def btn_tt_search_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(chat_id, "waiting_tt_search")
     await update.message.reply_text(
         "🔍 لطفاً کلمه کلیدی یا موضوع مورد نظر خود را برای جستجو بفرستید:",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(BTN_BACK)]], resize_keyboard=True
-        ),
+        reply_markup=get_back_only_keyboard(),
     )
 
 

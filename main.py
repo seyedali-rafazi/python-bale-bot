@@ -274,15 +274,20 @@ async def on_shutdown(app):
     except Exception:
         logger.exception("AI client cleanup on shutdown failed")
 
-    # 6.5 Flush buffered YouTube views before closing PostgreSQL/Redis
+    # 6.5 Flush buffered YouTube views and monitoring events before closing PostgreSQL/Redis
     try:
-        from core.database import flush_pending_yt_views
+        from core.database import flush_pending_yt_views, flush_pending_monitoring_events
 
-        flushed = await flush_pending_yt_views()
+        flushed, mon_flushed = await asyncio.gather(
+            flush_pending_yt_views(),
+            flush_pending_monitoring_events(),
+        )
         if flushed:
             logger.info("✅ Flushed %d pending YouTube view updates", flushed)
+        if mon_flushed:
+            logger.info("✅ Flushed %d pending monitoring events", mon_flushed)
     except Exception:
-        logger.exception("Failed flushing pending YouTube views on shutdown")
+        logger.exception("Failed flushing pending buffers on shutdown")
 
     # 7. Close PostgreSQL pool (after in-flight tasks and clients are done)
     try:
@@ -303,11 +308,14 @@ async def on_shutdown(app):
 
 async def _flush_yt_views_job(context: ContextTypes.DEFAULT_TYPE = None):
     try:
-        from core.database import flush_pending_yt_views
+        from core.database import flush_pending_yt_views, flush_pending_monitoring_events
 
-        await flush_pending_yt_views()
+        await asyncio.gather(
+            flush_pending_yt_views(),
+            flush_pending_monitoring_events(),
+        )
     except Exception:
-        logger.exception("Periodic YouTube view flush failed")
+        logger.exception("Periodic view/monitoring flush failed")
 
 
 def main():

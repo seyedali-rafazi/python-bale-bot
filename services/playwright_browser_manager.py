@@ -38,20 +38,43 @@ class PlaywrightBrowserManager:
         self._max_browser_age_sec = max(
             300, int(os.getenv("CHROMIUM_MAX_BROWSER_AGE_SEC", "1800"))
         )
+        self._idle_close_task: Optional[asyncio.Task] = None
 
     def _is_browser_alive(self) -> bool:
         try:
             if self._browser and self._browser.is_connected():
                 return True
             return False
-        except:
+        except Exception:
             return False
+
+    def is_idle(self) -> bool:
+        return not self._active_context_ids and not self._is_browser_alive()
+
+    def _schedule_idle_close(self) -> None:
+        if self._idle_close_task is not None and not self._idle_close_task.done():
+            self._idle_close_task.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _idle_watchdog():
+            await asyncio.sleep(self._context_timeout + 5)
+            async with self._init_lock:
+                if (
+                    self._browser is not None
+                    and not self._active_context_ids
+                    and (time.time() - self._last_context_time) >= self._context_timeout
+                ):
+                    logger.info("Browser idle watchdog closing Chromium to reclaim RAM...")
+                    await self._cleanup_unlocked()
+
+        self._idle_close_task = loop.create_task(_idle_watchdog())
 
     async def _restart_browser(self):
         logger.info("Restarting Playwright Browser...")
-        await self.cleanup()
-        self._browser = None
-        self._playwright = None
+        await self._cleanup_unlocked()
 
     async def force_restart(self):
         async with self._init_lock:
@@ -178,6 +201,9 @@ class PlaywrightBrowserManager:
                         return await orig_close()
                     finally:
                         self._active_context_ids.discard(ctx_id)
+                        self._last_context_time = time.time()
+                        if not self._active_context_ids:
+                            self._schedule_idle_close()
 
                 context.close = _tracked_close
                 return context
@@ -195,7 +221,11 @@ class PlaywrightBrowserManager:
                 if attempt == max_retries - 1:
                     raise e
 
-    async def cleanup(self):
+    async def _cleanup_unlocked(self):
+        if self._idle_close_task is not None and not self._idle_close_task.done():
+            self._idle_close_task.cancel()
+            self._idle_close_task = None
+
         try:
             if self._browser:
                 await self._browser.close()
@@ -215,6 +245,10 @@ class PlaywrightBrowserManager:
         self._usage_count = 0
         self._browser_started_at = 0.0
         self._active_context_ids.clear()
+
+    async def cleanup(self):
+        async with self._init_lock:
+            await self._cleanup_unlocked()
 
 
 _browser_manager: Optional[PlaywrightBrowserManager] = None

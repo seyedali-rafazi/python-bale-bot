@@ -73,9 +73,10 @@ def print_header():
     print(f"Chromium Memory Monitor - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)
 
-def print_metrics():
+def print_metrics(processes=None, chromium_total=None):
     """Print current metrics."""
-    processes, chromium_total = get_chromium_processes()
+    if processes is None or chromium_total is None:
+        processes, chromium_total = get_chromium_processes()
     sys_memory = get_system_memory()
     
     print_header()
@@ -129,7 +130,7 @@ def main():
             processes, chromium_total = get_chromium_processes()
             history.append(chromium_total)
             
-            print_metrics()
+            print_metrics(processes, chromium_total)
             
             if len(history) > 1:
                 avg = sum(history) / len(history)

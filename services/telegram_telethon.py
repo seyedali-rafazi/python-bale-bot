@@ -68,7 +68,10 @@ def _media_size(message) -> Optional[int]:
     if not message.media:
         return None
     if isinstance(message.media, MessageMediaPhoto):
-        return getattr(message.media.photo, "size", None)
+        photo = getattr(message.media, "photo", None)
+        sizes = getattr(photo, "sizes", None) or []
+        byte_sizes = [getattr(s, "size", None) for s in sizes if getattr(s, "size", None)]
+        return max(byte_sizes) if byte_sizes else getattr(photo, "size", None)
     if isinstance(message.media, MessageMediaDocument):
         return getattr(message.media.document, "size", None)
     return None
@@ -251,8 +254,8 @@ async def fetch_channel_messages(
     async with _tg_fetch_semaphore:
         client = await get_telethon_client()
         logger.info("Telethon: resolving channel @%s", channel_id)
-        entity = await client.get_entity(channel_id)
-        messages = await client.get_messages(entity, limit=limit)
+        entity = await asyncio.wait_for(client.get_entity(channel_id), timeout=30.0)
+        messages = await asyncio.wait_for(client.get_messages(entity, limit=limit), timeout=30.0)
         result = list(messages or [])
         logger.info(
             "Telethon: got %s messages from @%s", len(result), channel_id
@@ -270,8 +273,8 @@ async def fetch_single_message(link: str):
     async with _tg_fetch_semaphore:
         client = await get_telethon_client()
         logger.info("Telethon: fetch message %s/%s", channel, msg_id)
-        entity = await client.get_entity(channel)
-        messages = await client.get_messages(entity, ids=msg_id)
+        entity = await asyncio.wait_for(client.get_entity(channel), timeout=30.0)
+        messages = await asyncio.wait_for(client.get_messages(entity, ids=msg_id), timeout=30.0)
         if isinstance(messages, list):
             return messages[0] if messages else None
         return messages

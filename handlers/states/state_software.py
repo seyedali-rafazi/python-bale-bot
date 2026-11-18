@@ -86,13 +86,12 @@ async def handle_software_state(
         )
         return
 
-    # Cache results in bounded TTL/LRU cache and user_states
+    # Cache results in bounded TTL/LRU cache; keep only lightweight metadata in Redis state
     _software_cache[str(chat_id)] = results
 
     set_state(
         chat_id,
         "waiting_software_choice",
-        software_results=results,
         software_platform=platform_key,
         software_query=query,
     )
@@ -169,12 +168,7 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
         return
 
     # Retrieve cached results
-    results: List[Dict[str, Any]] = (
-        _software_cache.get(str(chat_id))
-        or (context.bot_data.get("software") or {}).get(chat_id)
-        or (await async_get_state(chat_id)).get("software_results")
-        or []
-    )
+    results: List[Dict[str, Any]] = _software_cache.get(str(chat_id)) or []
 
     if not results or item_index >= len(results):
         await query.message.reply_text(
@@ -209,21 +203,17 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
             await query.message.reply_text("⏳ درخواست دانلود قبلی شما در حال ثبت است. لطفاً صبر کنید.")
             return
 
-        # Immediately disable inline buttons to prevent spam/double-tap
-        try:
-            await query.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
+        # Immediately disable inline buttons and show processing message in one API call
         try:
             await query.message.edit_text(
                 f"⏳ در حال پردازش و دانلود نرم‌افزار «{app_name}»...\n"
-                "لطفاً شکیبا باشید."
+                "لطفاً شکیبا باشید.",
+                reply_markup=None,
             )
         except Exception:
             pass
 
-    await async_clear_state(chat_id)
+    clear_state(chat_id)
     track_task(
         _process_software_download(
             context=context,

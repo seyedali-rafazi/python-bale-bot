@@ -2,10 +2,12 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import zipfile
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
+_ZIP_SUBPROC_SEM = threading.Semaphore(max(1, int(os.getenv("ZIP_MAX_CONCURRENT", "2"))))
 
 
 # split_method: "single" | "spanned" (zip -s, WinRAR/7-Zip) | "concat" (merge .zip.001+...)
@@ -17,6 +19,9 @@ _INCOMPRESSIBLE_EXTS = frozenset(
         ".mp3", ".m4a", ".ogg", ".aac", ".flac", ".opus",
         ".jpg", ".jpeg", ".png", ".webp", ".gif",
         ".apk", ".7z", ".rar", ".gz", ".xz", ".bz2", ".zip", ".zst",
+        ".docx", ".xlsx", ".pptx", ".epub", ".parquet",
+        ".npy", ".npz", ".h5", ".hdf5", ".pt", ".pth", ".ckpt",
+        ".safetensors", ".sqlite", ".db", ".pkl", ".joblib",
     }
 )
 
@@ -91,12 +96,13 @@ def _try_spanned_zip(
         if _is_incompressible(input_path):
             cmd.append("-0")
         cmd.extend([f"-s{mb}m", archive_zip, input_path])
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
+        with _ZIP_SUBPROC_SEM:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
         if proc.returncode != 0:
             logger.warning("zip -s failed: %s", proc.stderr or proc.stdout)
             return None

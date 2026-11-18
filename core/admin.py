@@ -281,23 +281,21 @@ async def _run_broadcast_job(bot, admin_chat_id: str, message_text: str, total_u
                 break
 
             last_user_id = users_batch[-1]
-            for i in range(0, len(users_batch), mini_batch_size):
-                chunk = users_batch[i : i + mini_batch_size]
-                results = await asyncio.gather(
-                    *(_send_broadcast_one(bot, uid, message_text, sem) for uid in chunk),
-                    return_exceptions=True,
-                )
-                for res in results:
-                    if isinstance(res, asyncio.CancelledError):
-                        raise res
-                    processed += 1
-                    if res is True:
-                        success += 1
-                    else:
-                        fail += 1
+            results = await asyncio.gather(
+                *(_send_broadcast_one(bot, uid, message_text, sem) for uid in users_batch),
+                return_exceptions=True,
+            )
+            for res in results:
+                if isinstance(res, asyncio.CancelledError):
+                    raise res
+                processed += 1
+                if res is True:
+                    success += 1
+                else:
+                    fail += 1
 
-                # Gentle pacing (~25 msgs/sec ceiling) across concurrent mini-batches
-                await asyncio.sleep(0.4)
+            # Gentle pacing across batch so a single RetryAfter chat never stalls others
+            await asyncio.sleep(0.4 * max(1, len(users_batch) // mini_batch_size))
 
             if processed % 200 == 0 or processed == total_users:
                 logger.info("Broadcast progress: %d/%d (ok=%d, fail=%d)", processed, total_users, success, fail)

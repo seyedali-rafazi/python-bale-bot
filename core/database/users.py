@@ -189,6 +189,13 @@ async def get_user_profile_summary(user_id) -> dict | None:
         try:
             if datetime.now() > datetime.fromisoformat(expire_str):
                 is_vip_val = 0
+                await pool.execute(
+                    "UPDATE users SET is_vip = 0, vip_expire_date = NULL WHERE user_id = $1",
+                    uid,
+                )
+                from services.cache_service import cache_delete
+
+                await cache_delete(f"vip_status:{uid}")
         except ValueError:
             pass
     arc_period_key = today if is_vip_val == 1 else week_key

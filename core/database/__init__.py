@@ -34,6 +34,7 @@ from .youtube import (
     decrement_yt_downloads,
     get_cached_video,
     get_cache_row_metadata,
+    get_cached_video_with_meta,
     save_cached_video,
     increment_yt_video_view,
     flush_pending_yt_views,
@@ -118,6 +119,7 @@ from .monitoring import (
     get_monitoring_report_data,
     count_active_users_today,
     purge_old_monitoring_events,
+    flush_pending_monitoring_events,
     SECTION_LABELS,
     ALL_SECTIONS,
 )

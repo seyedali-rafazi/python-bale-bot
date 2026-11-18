@@ -57,6 +57,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clear_state(chat_id)
+    from handlers.states.state_image_processing import cleanup_user_image_caches
+
+    cleanup_user_image_caches(chat_id)
     await msg.reply_text(
         "👋 به ربات خوش آمدید!\n\nلطفاً یک گزینه را انتخاب کنید 👇",
         reply_markup=get_main_menu_keyboard(),

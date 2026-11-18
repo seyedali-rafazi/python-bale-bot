@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 IDENTIFY_DIR = os.path.join("downloads", "music_identify")
 MAX_DURATION_SEC = 180  # 3 minutes
+_IDENTIFY_FFMPEG_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("IDENTIFY_FFMPEG_CONCURRENT", "2"))))
+_shazam_instance = None
 
 os.makedirs(IDENTIFY_DIR, exist_ok=True)
 
@@ -185,23 +187,24 @@ async def async_extract_audio_to_mp3(
         output_path,
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            await asyncio.wait_for(proc.communicate(), timeout=60.0)
-        except asyncio.TimeoutError:
+        async with _IDENTIFY_FFMPEG_SEMAPHORE:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
             try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return False
+                await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+                return False
         return proc.returncode == 0 and await asyncio.to_thread(os.path.exists, output_path)
     except Exception as e:
-        print(f"ffmpeg extract audio error: {e}")
+        logger.warning("ffmpeg extract audio error: %s", e)
         return False
 
 
@@ -242,6 +245,7 @@ def _parse_shazam_result(data: dict) -> Optional[dict]:
 
 
 async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
+    global _shazam_instance
     try:
         from shazamio import Shazam
         from shazamio_core import SearchParams
@@ -249,8 +253,9 @@ async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
         return None
 
     try:
-        shazam = Shazam()
-        out = await shazam.recognize(
+        if _shazam_instance is None:
+            _shazam_instance = Shazam()
+        out = await _shazam_instance.recognize(
             file_path,
             options=SearchParams(segment_duration_seconds=12),
         )
@@ -265,24 +270,21 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
     if not token:
         return None
 
+    audio_file = None
     try:
-        def _read_bytes():
-            with open(file_path, "rb") as audio_file:
-                return audio_file.read()
-
-        file_bytes = await asyncio.to_thread(_read_bytes)
-
+        audio_file = await asyncio.to_thread(open, file_path, "rb")
         session = await get_http_session()
         form = aiohttp.FormData()
         form.add_field("api_token", token)
         form.add_field("return", "apple_music,spotify")
         form.add_field(
             "file",
-            file_bytes,
+            audio_file,
             filename=os.path.basename(file_path),
             content_type="audio/mpeg",
         )
-        async with session.post("https://api.audd.io/", data=form) as resp:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with session.post("https://api.audd.io/", data=form, timeout=timeout) as resp:
             data = await resp.json()
 
         if data.get("status") != "success" or not data.get("result"):
@@ -305,6 +307,9 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
     except Exception as e:
         logger.warning("AudD recognize error: %s", e)
         return None
+    finally:
+        if audio_file is not None:
+            await asyncio.to_thread(audio_file.close)
 
 
 def format_identified_info_message(identified: dict, *, pending_download: bool = True) -> str:

@@ -2,12 +2,14 @@
 
 import os
 import asyncio
+import logging
 from core.task_utils import get_file_size_async, remove_files_async
 from core.database import (
     is_vip,
     decrement_yt_downloads,
     get_cached_video,
     get_cache_row_metadata,
+    get_cached_video_with_meta,
     save_cached_video,
     increment_yt_video_view,
     record_cloud_upload,
@@ -17,6 +19,8 @@ from core.database import (
     release_cloud_quota,
     log_upload_failed,
 )
+
+logger = logging.getLogger(__name__)
 from services.youtube import (
     async_download_youtube_video,
     async_download_youtube_audio,
@@ -87,6 +91,8 @@ async def background_yt_download(
     destination: str = "telegram",
     quality: str = "480",
     delivery_mode: str = "zip",
+    *,
+    estimated_size: int | None = None,
 ):
     video_id = extract_yt_id(url)
     effective_format = _effective_format(format_type, destination, delivery_mode)
@@ -97,10 +103,9 @@ async def background_yt_download(
     # =========================================
 
     if _use_youtube_cache(destination, format_type, delivery_mode):
-        cached_files = await get_cached_video(cache_key)
+        cached_files, meta = await get_cached_video_with_meta(cache_key)
 
         if cached_files:
-            meta = await get_cache_row_metadata(cache_key)
             has_meta = bool(
                 meta
                 and meta.get("title")
@@ -138,10 +143,21 @@ async def background_yt_download(
             return
 
     # =========================================
-    # اطلاعات ویدیو
+    # اطلاعات ویدیو + VIP + حجم ابری (هم‌زمان)
     # =========================================
 
-    info = await get_video_info_cached(url)
+    if destination == "server":
+        info, user_is_vip, user_storage_mb_prefetched = await asyncio.gather(
+            get_video_info_cached(url),
+            is_vip(chat_id),
+            get_available_cloud_mb(chat_id),
+        )
+    else:
+        info, user_is_vip = await asyncio.gather(
+            get_video_info_cached(url),
+            is_vip(chat_id),
+        )
+        user_storage_mb_prefetched = None
 
     if not await check_video_info_allowed(info):
         await context.bot.send_message(chat_id=chat_id, text=MSG_BLOCKED_CHANNEL)
@@ -152,12 +168,12 @@ async def background_yt_download(
     # چک سایز قبل دانلود
     # =========================================
 
-    estimated_size = None
     try:
-        if format_type == "video":
-            estimated_size = await get_video_filesize_cached(url, quality)
-        else:
-            estimated_size = await get_video_filesize_cached(url, "bestaudio")
+        if estimated_size is None:
+            if format_type == "video":
+                estimated_size = await get_video_filesize_cached(url, quality)
+            else:
+                estimated_size = await get_video_filesize_cached(url, "bestaudio")
 
         limit = 1 * 1024 * 1024 * 1024
 
@@ -181,7 +197,7 @@ async def background_yt_download(
 
             # 2. چک کردن موجودی فضای ابری کاربر
             if destination == "server":
-                user_storage_mb = await get_available_cloud_mb(chat_id)
+                user_storage_mb = user_storage_mb_prefetched
                 if user_storage_mb is None or user_storage_mb <= 0:
                     user_storage_mb = 0
 
@@ -201,7 +217,7 @@ async def background_yt_download(
                     return
 
     except Exception as e:
-        print(f"⚠️ Error checking filesize: {e}")
+        logger.warning("Error checking filesize: %s", e)
 
     # =========================================
     # thumbnail
@@ -233,8 +249,6 @@ async def background_yt_download(
     # =========================================
     # semaphore
     # =========================================
-
-    user_is_vip = await is_vip(chat_id)
 
     if destination == "telegram":
         active_semaphore = (
@@ -559,7 +573,7 @@ async def background_yt_download(
                         await decrement_yt_downloads(chat_id)
 
                     finally:
-                        await remove_files_async([*downloaded_files, *zip_artifacts])
+                        await remove_files_async(list(dict.fromkeys([*downloaded_files, *zip_artifacts])))
 
                 # =========================================
                 # AUDIO
