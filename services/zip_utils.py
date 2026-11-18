@@ -86,6 +86,9 @@ def _try_spanned_zip(
         return None
 
 
+_STREAM_CHUNK_BYTES = 4 * 1024 * 1024  # 4 MB streaming buffer
+
+
 def split_file_concat_parts(
     input_path: str,
     max_part_bytes: int,
@@ -108,14 +111,26 @@ def split_file_concat_parts(
 
     with open(input_path, "rb") as src:
         while True:
-            chunk = src.read(max_part_bytes)
-            if not chunk:
-                break
             part_path = os.path.join(
                 base_dir, f"{archive_basename}.zip.{part_index:03d}"
             )
+            written = 0
             with open(part_path, "wb") as dst:
-                dst.write(chunk)
+                while written < max_part_bytes:
+                    to_read = min(_STREAM_CHUNK_BYTES, max_part_bytes - written)
+                    chunk = src.read(to_read)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+                    written += len(chunk)
+
+            if written == 0:
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                break
+
             part_paths.append(part_path)
             part_index += 1
 

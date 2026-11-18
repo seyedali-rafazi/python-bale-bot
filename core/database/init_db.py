@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS users (
     ai_chat_count INTEGER DEFAULT 0,
     ai_chat_date TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_users_vip_expire
+    ON users(vip_expire_date)
+    WHERE is_vip = 1;
 CREATE TABLE IF NOT EXISTS youtube_cache (
     id BIGSERIAL PRIMARY KEY,
     video_id TEXT UNIQUE NOT NULL,
@@ -108,6 +111,9 @@ CREATE TABLE IF NOT EXISTS monitoring_events (
 );
 CREATE INDEX IF NOT EXISTS idx_monitoring_events_created_at ON monitoring_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_monitoring_events_section ON monitoring_events(section, created_at);
+CREATE INDEX IF NOT EXISTS idx_monitoring_events_created_user
+    ON monitoring_events(created_at, user_id)
+    WHERE user_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS yt_channel_blacklist (
     channel_key TEXT PRIMARY KEY,
     display_name TEXT,

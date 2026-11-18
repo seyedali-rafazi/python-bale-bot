@@ -134,16 +134,12 @@ async def count_active_users_today() -> int:
     today_start = f"{today} 00:00:00"
     pool = await get_db()
     val = await pool.fetchval(
-        f"""
-        SELECT COUNT(DISTINCT user_id) FROM (
-            SELECT user_id FROM users
-            WHERE user_id IS NOT NULL AND ({_TODAY_ACTIVITY_SQL})
-            UNION
-            SELECT user_id FROM monitoring_events
-            WHERE user_id IS NOT NULL AND created_at >= $2
-        ) AS active_users
+        """
+        SELECT COUNT(DISTINCT user_id) AS active_users
+        FROM monitoring_events
+        WHERE user_id IS NOT NULL
+          AND created_at >= $1
         """,
-        today,
         today_start,
     )
     return int(val or 0)
@@ -171,11 +167,58 @@ async def get_monitoring_report_data() -> dict:
         + timedelta(days=1)
     ).strftime("%Y-%m-%d 00:00:00")
 
-    hour_ok = await _section_counts_between(hour_start, hour_end, "upload_success")
-    today_ok = await _section_counts_between(today_start, tomorrow, "upload_success")
+    window_start = min(hour_start, today_start)
+    window_end = max(hour_end, tomorrow)
 
-    hour_fail = await _section_counts_between(hour_start, hour_end, "upload_failed")
-    today_fail = await _section_counts_between(today_start, tomorrow, "upload_failed")
+    pool = await get_db()
+    rows = await pool.fetch(
+        """
+        SELECT
+            section,
+            event_type,
+            COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $4) AS hour_cnt,
+            COUNT(*) FILTER (WHERE created_at >= $5 AND created_at < $6) AS today_cnt
+        FROM monitoring_events
+        WHERE created_at >= $1
+          AND created_at < $2
+          AND event_type IN ('upload_success', 'upload_failed')
+        GROUP BY section, event_type
+        """,
+        window_start,
+        window_end,
+        hour_start,
+        hour_end,
+        today_start,
+        tomorrow,
+    )
+
+    hour_ok = {section: 0 for section in ALL_SECTIONS}
+    today_ok = {section: 0 for section in ALL_SECTIONS}
+    hour_fail = {section: 0 for section in ALL_SECTIONS}
+    today_fail = {section: 0 for section in ALL_SECTIONS}
+    hour_responses = 0
+    today_responses = 0
+    hour_failures = 0
+    today_failures = 0
+
+    for row in rows:
+        section = row["section"]
+        ev_type = row["event_type"]
+        h_cnt = int(row["hour_cnt"] or 0)
+        t_cnt = int(row["today_cnt"] or 0)
+
+        if ev_type == "upload_success":
+            hour_responses += h_cnt
+            today_responses += t_cnt
+            if section in hour_ok:
+                hour_ok[section] = h_cnt
+                today_ok[section] = t_cnt
+        elif ev_type == "upload_failed":
+            hour_failures += h_cnt
+            today_failures += t_cnt
+            if section in hour_fail:
+                hour_fail[section] = h_cnt
+                today_fail[section] = t_cnt
 
     return {
         "report_date": today,
@@ -184,12 +227,12 @@ async def get_monitoring_report_data() -> dict:
         "hour_end": hour_end,
         "hour_section_counts": hour_ok,
         "today_section_counts": today_ok,
-        "hour_responses": await _count_responses_between(hour_start, hour_end, "upload_success"),
-        "today_responses": await _count_responses_between(today_start, tomorrow, "upload_success"),
+        "hour_responses": hour_responses,
+        "today_responses": today_responses,
         "hour_section_fails": hour_fail,
         "today_section_fails": today_fail,
-        "hour_failures": await _count_responses_between(hour_start, hour_end, "upload_failed"),
-        "today_failures": await _count_responses_between(today_start, tomorrow, "upload_failed"),
+        "hour_failures": hour_failures,
+        "today_failures": today_failures,
         "hour_active_users": await _count_active_users_between(hour_start, hour_end),
         "today_active_users": await count_active_users_today(),
     }

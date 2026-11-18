@@ -8,6 +8,8 @@ import asyncio
 import subprocess
 import shutil
 import sys
+import threading
+from collections import deque
 from dotenv import load_dotenv
 import random
 import json
@@ -53,7 +55,7 @@ def get_video_duration(file_path):
             "default=noprint_wrappers=1:nokey=1",
             file_path,
         ]
-        output = subprocess.check_output(cmd, text=True)
+        output = subprocess.check_output(cmd, text=True, timeout=20)
         return float(output.strip())
     except Exception as e:
         print(f"Error getting duration: {e}")
@@ -116,6 +118,8 @@ def _base_ytdlp_cmd():
 
     cmd.extend(
         [
+            "--socket-timeout",
+            "20",
             "--js-runtimes",
             "node",
             "--remote-components",
@@ -328,7 +332,16 @@ def get_video_filesize(
         return None
 
 
-def _run_subprocess_and_capture(cmd, progress_dict=None):
+YTDLP_DOWNLOAD_TIMEOUT_SEC = max(
+    60, int(os.getenv("YTDLP_DOWNLOAD_TIMEOUT_SEC", "900"))
+)
+
+
+def _run_subprocess_and_capture(
+    cmd,
+    progress_dict=None,
+    timeout_sec: int = YTDLP_DOWNLOAD_TIMEOUT_SEC,
+):
     print("Running command:")
     print(" ".join(cmd))
 
@@ -340,31 +353,65 @@ def _run_subprocess_and_capture(cmd, progress_dict=None):
         bufsize=1,
     )
 
-    output_lines = []
+    timed_out = False
 
-    for line in process.stdout:
-        line = line.rstrip()
-        output_lines.append(line)
-        print(line)
+    def _on_timeout():
+        nonlocal timed_out
+        timed_out = True
+        try:
+            process.kill()
+        except Exception:
+            pass
 
-        if progress_dict is not None:
-            if "[download]" in line and "%" in line:
-                match = re.search(r"(\d+\.\d+)%", line)
+    timer = threading.Timer(timeout_sec, _on_timeout)
+    timer.daemon = True
+    timer.start()
 
-                if match:
-                    percent = float(match.group(1))
-                    bar = generate_progress_bar(percent)
+    output_lines: deque[str] = deque(maxlen=200)
+    try:
+        if process.stdout is not None:
+            for line in process.stdout:
+                line = line.rstrip()
+                output_lines.append(line)
+                print(line)
 
-                    clean_line = line.split("]", 1)[-1].strip()
+                if progress_dict is not None:
+                    if "[download]" in line and "%" in line:
+                        match = re.search(r"(\d+\.\d+)%", line)
 
-                    progress_dict["text"] = f"📥 در حال دانلود...\n{bar}\n{clean_line}"
+                        if match:
+                            percent = float(match.group(1))
+                            bar = generate_progress_bar(percent)
 
-            elif "Destination:" in line:
-                progress_dict["text"] = "📥 شروع دانلود..."
+                            clean_line = line.split("]", 1)[-1].strip()
 
-    process.wait()
+                            progress_dict["text"] = (
+                                f"📥 در حال دانلود...\n{bar}\n{clean_line}"
+                            )
+
+                    elif "Destination:" in line:
+                        progress_dict["text"] = "📥 شروع دانلود..."
+
+        process.wait()
+    finally:
+        timer.cancel()
+        if process.stdout is not None:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+        if process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
 
     full_output = "\n".join(output_lines)
+
+    if timed_out:
+        print(f"❌ yt-dlp timed out after {timeout_sec}s")
+        return False, f"{full_output}\nTimed out after {timeout_sec}s".strip()
 
     if process.returncode != 0:
         print("❌ yt-dlp failed")
@@ -508,7 +555,15 @@ async def split_video_if_needed(original_file_path):
                 stderr=asyncio.subprocess.DEVNULL,
             )
 
-            await process.communicate()
+            try:
+                await asyncio.wait_for(process.communicate(), timeout=300)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.wait()
+                except Exception:
+                    pass
+                raise RuntimeError("ffmpeg segment timed out")
 
             if process.returncode == 0:
                 new_parts = sorted(

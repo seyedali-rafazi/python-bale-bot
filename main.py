@@ -112,6 +112,7 @@ async def ignore_old_updates(update: Update, context: ContextTypes.DEFAULT_TYPE)
 DOWNLOAD_CLEANUP_DIRS = [
     "downloads",
     "ig_downloads",
+    "tg_downloads",
 ]
 
 

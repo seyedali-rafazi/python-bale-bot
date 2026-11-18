@@ -17,6 +17,21 @@ from services.playwright_browser_manager import get_browser_manager
 
 # حجم HTML پینترست بعد از اسکرول می‌تواند چند مگابایت باشد؛ regex روی کل صفحه CPU/RAM می‌سوزاند
 _MAX_HTML_FOR_PARSE = 1_500_000
+_PINIMG_URL_RE = re.compile(r"https://i\.pinimg\.com/[^\s\"'<>\\)]+", re.IGNORECASE)
+# فقط تصاویر واقعی پین‌ها (مسیر سه‌سطحی هش hex و سایزهای پین؛ حذف آیکون‌های UI، _RS و آواتارها)
+_REAL_PIN_PATH_RE = re.compile(
+    r"^/(originals|1200x|736x|564x|474x|236x)/([0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{2}/[^/?#]+\.(?:jpg|jpeg|png|webp))$",
+    re.IGNORECASE,
+)
+_EXCLUDED_PIN_MARKERS = (
+    "_rs/",
+    "/webapp/",
+    "/avatars/",
+    "/custom_covers/",
+    "/images/user/",
+    "/assets/",
+    "/email/",
+)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -42,35 +57,9 @@ class PinterestService:
         if not html_text:
             return []
 
-        raw_urls = self._extract_pinimg_urls(html_text)
-        best_by_image: Dict[str, str] = {}
-
-        for raw_url in raw_urls:
-            clean_url = self._clean_url(raw_url)
-            if not clean_url:
-                continue
-
-            candidates = self._build_quality_candidates(clean_url)
-
-            for candidate in candidates:
-                image_key = self._get_image_key(candidate)
-                if not image_key:
-                    continue
-
-                current = best_by_image.get(image_key)
-
-                if not current:
-                    best_by_image[image_key] = candidate
-                else:
-                    if self._quality_score(candidate) < self._quality_score(current):
-                        best_by_image[image_key] = candidate
-
-        sorted_urls = sorted(
-            best_by_image.values(),
-            key=lambda u: self._quality_score(u),
+        results = await asyncio.to_thread(
+            self._parse_image_urls, html_text, max_results
         )
-
-        results = sorted_urls[:max_results]
 
         print(
             f"Pinterest Playwright extracted {len(results)} unique high-quality images for query={query}"
@@ -80,6 +69,37 @@ class PinterestService:
             print("Pinterest sample images:", results[:5])
 
         return results
+
+    def _parse_image_urls(self, html_text: str, max_results: int) -> List[str]:
+        raw_urls = self._extract_pinimg_urls(html_text)
+        best_by_image: Dict[str, str] = {}
+        verified_originals: set[str] = set()
+
+        for raw_url in raw_urls:
+            clean_url = self._clean_url(raw_url)
+            if not clean_url:
+                continue
+
+            image_key = self._get_image_key(clean_url)
+            if not image_key:
+                continue
+
+            if "/originals/" in clean_url.lower() or "/1200x/" in clean_url.lower():
+                verified_originals.add(image_key)
+
+            candidates = self._build_quality_candidates(clean_url)
+            for candidate in candidates:
+                current = best_by_image.get(image_key)
+                if not current or self._quality_score(candidate) < self._quality_score(current):
+                    best_by_image[image_key] = candidate
+
+        # پین‌هایی که نسخه اصلی یا سایز بزرگ‌تر داشته‌اند در اولویت می‌مانند؛ همه نتایج با کیفیت بالا هستند
+        sorted_urls = sorted(
+            best_by_image.items(),
+            key=lambda kv: (0 if kv[0] in verified_originals else 1, self._quality_score(kv[1])),
+        )
+
+        return [u for _, u in sorted_urls[:max_results]]
 
     # این متد به دلیل تعامل با Playwright باید async باشد
     async def _load_search_page(
@@ -179,35 +199,26 @@ class PinterestService:
         return None
 
     def _extract_pinimg_urls(self, text: str) -> List[str]:
-        # (کد این متد بدون تغییر باقی می‌ماند چون نیازی به async ندارد)
-        patterns = [
-            r'https://i\.pinimg\.com/[^\s"\'<>\\)]+',
-            r'https:\\/\\/i\.pinimg\.com\\/[^"\']+',
-            r'"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"image"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"orig"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"originals"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"736x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"564x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"474x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-            r'"images"\s*:\s*\{.*?"236x"\s*:\s*\{\s*"url"\s*:\s*"(https:\\/\\/i\.pinimg\.com\\/[^"]+)"',
-        ]
+        if not text:
+            return []
 
+        # Skip <head> metadata (og:image, app/social icons, preload badges) when present
+        head_end = text.lower().find("</head>")
+        body_text = text[head_end + 7 :] if head_end != -1 else text
+
+        normalized = body_text.replace("\\/", "/")
         results = []
         seen = set()
 
-        for pattern in patterns:
-            matches = re.findall(pattern, text, flags=re.I | re.S)
-            for url in matches:
-                cleaned = self._clean_url(url)
-                if cleaned and cleaned not in seen:
-                    seen.add(cleaned)
-                    results.append(cleaned)
+        for url in _PINIMG_URL_RE.findall(normalized):
+            cleaned = self._clean_url(url)
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                results.append(cleaned)
 
         return results
 
     def _clean_url(self, url: str) -> Optional[str]:
-        # (بدون تغییر)
         if not url:
             return None
 
@@ -221,14 +232,24 @@ class PinterestService:
         if not url.startswith("http"):
             return None
 
-        if "i.pinimg.com" not in url:
+        url = url.split("?")[0]
+        lower = url.lower()
+        if "i.pinimg.com" not in lower:
+            return None
+        if any(marker in lower for marker in _EXCLUDED_PIN_MARKERS):
             return None
 
-        url = url.split("?")[0]
+        try:
+            path = urlparse(url).path
+        except Exception:
+            return None
+
+        if not _REAL_PIN_PATH_RE.match(path):
+            return None
+
         return url
 
     def _build_quality_candidates(self, url: str) -> List[str]:
-        # (بدون تغییر)
         clean = self._clean_url(url)
         if not clean:
             return []
@@ -243,50 +264,50 @@ class PinterestService:
                 candidates.append(u)
 
         originals_url = re.sub(
-            r"/(236x|474x|564x|736x)/", "/originals/", clean, flags=re.I
+            r"/(236x|474x|564x|736x|1200x)/", "/originals/", clean, flags=re.I
         )
-        x736_url = re.sub(r"/(236x|474x|564x|originals)/", "/736x/", clean, flags=re.I)
-        x564_url = re.sub(r"/(236x|474x|736x|originals)/", "/564x/", clean, flags=re.I)
-        x474_url = re.sub(r"/(236x|564x|736x|originals)/", "/474x/", clean, flags=re.I)
-        x236_url = re.sub(r"/(474x|564x|736x|originals)/", "/236x/", clean, flags=re.I)
+        x736_url = re.sub(r"/(236x|474x|564x|originals|1200x)/", "/736x/", clean, flags=re.I)
+        x564_url = re.sub(r"/(236x|474x|736x|originals|1200x)/", "/564x/", clean, flags=re.I)
+        x474_url = re.sub(r"/(236x|564x|736x|originals|1200x)/", "/474x/", clean, flags=re.I)
 
         add(originals_url)
         add(x736_url)
         add(x564_url)
         add(x474_url)
-        add(x236_url)
         add(clean)
 
         candidates.sort(key=self._quality_score)
         return candidates
 
     def _get_image_key(self, url: str) -> Optional[str]:
-        # (بدون تغییر)
         clean = self._clean_url(url)
         if not clean:
             return None
 
         try:
-            parsed = urlparse(clean)
-            path = parsed.path
-            path = re.sub(r"^/(236x|474x|564x|736x|originals)/", "", path, flags=re.I)
-            return path.lower()
+            path = urlparse(clean).path
+            m = _REAL_PIN_PATH_RE.match(path)
+            if not m:
+                return None
+            return m.group(2).lower()
         except Exception:
             return None
 
     def _quality_score(self, url: str) -> int:
-        # (بدون تغییر)
-        if "/originals/" in url:
+        lower = url.lower()
+        if "/originals/" in lower:
             return 0
-        if "/736x/" in url:
+        if "/1200x/" in lower:
             return 1
-        if "/564x/" in url:
+        if "/736x/" in lower:
             return 2
-        if "/474x/" in url:
+        if "/564x/" in lower:
             return 3
-        if "/236x/" in url:
+        if "/474x/" in lower:
             return 4
-        return 5
+        if "/236x/" in lower:
+            return 5
+        return 6
 
 
 # این تابع اصلی که از خارج صدا زده می‌شود نیز باید async باشد

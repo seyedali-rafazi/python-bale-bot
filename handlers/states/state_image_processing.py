@@ -2,6 +2,7 @@
 
 import os
 import io
+import uuid
 from telegram import Update
 from telegram.ext import ContextTypes
 try:
@@ -30,10 +31,47 @@ except ImportError:
 MEDIA_MAX_CONCURRENT = 2
 media_processing_semaphore = asyncio.Semaphore(MEDIA_MAX_CONCURRENT)
 
-# Bounded TTL caches for pending raw image bytes (prevents unbounded RAM growth if users abandon flow)
+_IMG_TMP_DIR = os.path.join("downloads", "img_tmp")
+_background_tasks: set[asyncio.Task] = set()
+
+# Bounded TTL caches storing temp disk paths (never raw image bytes in RAM)
 _pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
 _convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
 _resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
+
+
+def _track_background_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _remove_files_quietly(paths) -> None:
+    if not paths:
+        return
+    if isinstance(paths, (str, os.PathLike)):
+        paths = [paths]
+    for p in paths:
+        if p and isinstance(p, (str, os.PathLike)) and os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+async def _download_image_to_disk(bot, file_id: str, prefix: str) -> str:
+    os.makedirs(_IMG_TMP_DIR, exist_ok=True)
+    dest_path = os.path.join(_IMG_TMP_DIR, f"{prefix}_{uuid.uuid4().hex[:10]}.img")
+    tg_file = await bot.get_file(file_id)
+    await tg_file.download_to_drive(dest_path)
+    return dest_path
+
+
+def _open_pil_image(source):
+    if isinstance(source, (bytes, bytearray)):
+        return Image.open(io.BytesIO(source))
+    return Image.open(source)
 
 
 async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,7 +105,6 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             await log_upload_success("image_processing", chat_id)
 
-            _pdf_images_cache.pop(chat_id, None)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -76,14 +113,11 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
 
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در ساخت PDF: {str(e)}")
-            _pdf_images_cache.pop(chat_id, None)
             clear_state(chat_id)
         finally:
-            if pdf_path and os.path.exists(pdf_path):
-                try:
-                    os.remove(pdf_path)
-                except OSError:
-                    pass
+            _pdf_images_cache.pop(chat_id, None)
+            _remove_files_quietly(pending_images)
+            _remove_files_quietly(pdf_path)
 
         return
 
@@ -96,12 +130,11 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("❌ حداکثر 20 عکس می‌توانید ارسال کنید!")
             return
 
-        # Download image
+        # Download image to temp file on disk instead of holding bytes in RAM
         photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        image_bytes = await file.download_as_bytearray()
+        img_path = await _download_image_to_disk(context.bot, photo.file_id, f"pdf_{chat_id}")
 
-        pending_images.append(image_bytes)
+        pending_images.append(img_path)
         _pdf_images_cache[chat_id] = pending_images
 
         await update.message.reply_text(
@@ -146,7 +179,6 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                     )
                 await log_upload_success("image_processing", chat_id)
 
-                _convert_images_cache.pop(chat_id, None)
                 clear_state(chat_id)
 
                 await update.message.reply_text(
@@ -156,14 +188,11 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
 
             except Exception as e:
                 await update.message.reply_text(f"❌ خطا در تبدیل فرمت: {str(e)}")
-                _convert_images_cache.pop(chat_id, None)
                 clear_state(chat_id)
             finally:
-                if converted_path and os.path.exists(converted_path):
-                    try:
-                        os.remove(converted_path)
-                    except OSError:
-                        pass
+                _convert_images_cache.pop(chat_id, None)
+                _remove_files_quietly(raw_img)
+                _remove_files_quietly(converted_path)
 
             return
 
@@ -176,13 +205,14 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
 
         try:
             if update.message.photo:
-                photo = update.message.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
+                file_id = update.message.photo[-1].file_id
             else:
-                file = await context.bot.get_file(update.message.document.file_id)
+                file_id = update.message.document.file_id
 
-            image_bytes = await file.download_as_bytearray()
-            _convert_images_cache[chat_id] = image_bytes
+            old_path = _convert_images_cache.pop(chat_id, None)
+            _remove_files_quietly(old_path)
+            img_path = await _download_image_to_disk(context.bot, file_id, f"conv_{chat_id}")
+            _convert_images_cache[chat_id] = img_path
 
             await update.message.reply_text(
                 "✅ عکس دریافت شد!\n\n"
@@ -226,6 +256,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await log_upload_success("image_processing", chat_id)
 
             _resize_images_cache.pop(chat_id, None)
+            _remove_files_quietly(raw_img)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -237,11 +268,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ خطا در تغییر اندازه: {str(e)}\n\nفرمت صحیح: 800x600 یا 50%"
             )
         finally:
-            if resized_path and os.path.exists(resized_path):
-                try:
-                    os.remove(resized_path)
-                except OSError:
-                    pass
+            _remove_files_quietly(resized_path)
 
         return
 
@@ -254,13 +281,14 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             if update.message.photo:
-                photo = update.message.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
+                file_id = update.message.photo[-1].file_id
             else:
-                file = await context.bot.get_file(update.message.document.file_id)
+                file_id = update.message.document.file_id
 
-            image_bytes = await file.download_as_bytearray()
-            _resize_images_cache[chat_id] = image_bytes
+            old_path = _resize_images_cache.pop(chat_id, None)
+            _remove_files_quietly(old_path)
+            img_path = await _download_image_to_disk(context.bot, file_id, f"resize_{chat_id}")
+            _resize_images_cache[chat_id] = img_path
 
             await update.message.reply_text(
                 "✅ عکس دریافت شد!\n\n"
@@ -301,17 +329,18 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
             "⏳ در حال حذف پس‌زمینه... (ممکن است چند ثانیه طول بکشد)"
         )
 
+        input_path = None
+        output_path = None
         try:
             if update.message.photo:
-                photo = update.message.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
+                file_id = update.message.photo[-1].file_id
             else:
-                file = await context.bot.get_file(update.message.document.file_id)
+                file_id = update.message.document.file_id
 
-            image_bytes = await file.download_as_bytearray()
+            input_path = await _download_image_to_disk(context.bot, file_id, f"rmbg_{chat_id}")
 
             # Remove background
-            output_path = await remove_background(image_bytes, chat_id)
+            output_path = await remove_background(input_path, chat_id)
 
             # Send result
             with open(output_path, "rb") as img_file:
@@ -322,8 +351,6 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
             await log_upload_success("image_processing", chat_id)
 
-            # Cleanup
-            os.remove(output_path)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -333,6 +360,9 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             await update.message.reply_text(f"❌ خطا در حذف پس‌زمینه: {str(e)}")
             clear_state(chat_id)
+        finally:
+            _remove_files_quietly(input_path)
+            _remove_files_quietly(output_path)
     else:
         await update.message.reply_text("❌ لطفاً یک عکس ارسال کنید!")
 
@@ -340,97 +370,121 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
 # Helper functions
 
 
-async def create_pdf_from_images(images_bytes_list, chat_id):
-    """Create PDF from list of image bytes"""
+async def create_pdf_from_images(images_sources, chat_id):
+    """Create PDF from list of image paths or raw image bytes."""
 
     def _create_pdf():
         images = []
-        for img_bytes in images_bytes_list:
-            img = Image.open(io.BytesIO(img_bytes))
-            if img.mode == "RGBA":
-                img = img.convert("RGB")
-            images.append(img)
+        try:
+            for src in images_sources:
+                with _open_pil_image(src) as img:
+                    if img.mode != "RGB":
+                        converted = img.convert("RGB")
+                    else:
+                        converted = img.copy()
+                    images.append(converted)
 
-        pdf_path = f"downloads/pdf_{chat_id}.pdf"
-        os.makedirs("downloads", exist_ok=True)
+            os.makedirs("downloads", exist_ok=True)
+            pdf_path = f"downloads/pdf_{chat_id}_{uuid.uuid4().hex[:8]}.pdf"
 
-        images[0].save(pdf_path, save_all=True, append_images=images[1:])
-        return pdf_path
+            images[0].save(pdf_path, save_all=True, append_images=images[1:])
+            return pdf_path
+        finally:
+            for im in images:
+                try:
+                    im.close()
+                except Exception:
+                    pass
 
     return await asyncio.to_thread(_create_pdf)
 
 
-async def convert_image_format(image_bytes, target_format, chat_id):
-    """Convert image to target format"""
+async def convert_image_format(image_source, target_format, chat_id):
+    """Convert image (disk path or bytes) to target format."""
 
     def _convert():
-        img = Image.open(io.BytesIO(image_bytes))
+        with _open_pil_image(image_source) as img:
+            # Determine the save format (PIL uses JPEG not JPG)
+            save_format = "JPEG" if target_format == "JPG" else target_format
 
-        # Determine the save format (PIL uses JPEG not JPG)
-        save_format = "JPEG" if target_format == "JPG" else target_format
-
-        # Handle transparency for formats that don't support it
-        if save_format in ["JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
-            background = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "RGBA":
-                background.paste(img, mask=img.split()[3])
+            # Handle transparency for formats that don't support it
+            if save_format in ["JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                try:
+                    if img.mode == "RGBA":
+                        background.paste(img, mask=img.split()[3])
+                    else:
+                        background.paste(img, mask=img.split()[1])
+                    out_img = background
+                except Exception:
+                    background.close()
+                    raise
             else:
-                background.paste(img, mask=img.split()[1])
-            img = background
+                out_img = img
 
-        output_path = f"downloads/converted_{chat_id}.{target_format.lower()}"
-        os.makedirs("downloads", exist_ok=True)
-
-        img.save(output_path, format=save_format)
-        return output_path
+            os.makedirs("downloads", exist_ok=True)
+            output_path = (
+                f"downloads/converted_{chat_id}_{uuid.uuid4().hex[:8]}.{target_format.lower()}"
+            )
+            try:
+                out_img.save(output_path, format=save_format)
+            finally:
+                if out_img is not img:
+                    out_img.close()
+            return output_path
 
     return await asyncio.to_thread(_convert)
 
 
-async def resize_image(image_bytes, size_text, chat_id):
-    """Resize image based on size text"""
+async def resize_image(image_source, size_text, chat_id):
+    """Resize image (disk path or bytes) based on size text."""
 
     def _resize():
-        img = Image.open(io.BytesIO(image_bytes))
+        with _open_pil_image(image_source) as img:
+            if "%" in size_text:
+                percent = int(size_text.replace("%", ""))
+                new_width = int(img.width * percent / 100)
+                new_height = int(img.height * percent / 100)
+            elif "x" in size_text.lower():
+                width, height = size_text.lower().split("x")
+                new_width = int(width)
+                new_height = int(height)
+            else:
+                raise ValueError("Invalid size format")
 
-        if "%" in size_text:
-            # Percentage resize
-            percent = int(size_text.replace("%", ""))
-            new_width = int(img.width * percent / 100)
-            new_height = int(img.height * percent / 100)
-        elif "x" in size_text.lower():
-            # Dimension resize
-            width, height = size_text.lower().split("x")
-            new_width = int(width)
-            new_height = int(height)
-        else:
-            raise ValueError("Invalid size format")
+            if new_width <= 0 or new_height <= 0 or new_width > 10000 or new_height > 10000:
+                raise ValueError("Invalid dimensions")
 
-        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        output_path = f"downloads/resized_{chat_id}.png"
-        os.makedirs("downloads", exist_ok=True)
-
-        resized_img.save(output_path)
-        return output_path
+            resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            os.makedirs("downloads", exist_ok=True)
+            output_path = f"downloads/resized_{chat_id}_{uuid.uuid4().hex[:8]}.png"
+            try:
+                resized_img.save(output_path)
+            finally:
+                resized_img.close()
+            return output_path
 
     return await asyncio.to_thread(_resize)
 
 
-async def remove_background(image_bytes, chat_id):
-    """Remove background from image"""
+async def remove_background(image_source, chat_id):
+    """Remove background from image (disk path or bytes)."""
     if not REMBG_AVAILABLE:
         raise ImportError("rembg library is not installed")
 
     def _remove_bg():
-        input_img = Image.open(io.BytesIO(image_bytes))
-        output_img = remove(input_img)
-
-        output_path = f"downloads/no_bg_{chat_id}.png"
-        os.makedirs("downloads", exist_ok=True)
-
-        output_img.save(output_path)
-        return output_path
+        with _open_pil_image(image_source) as input_img:
+            output_img = remove(input_img)
+            os.makedirs("downloads", exist_ok=True)
+            output_path = f"downloads/no_bg_{chat_id}_{uuid.uuid4().hex[:8]}.png"
+            try:
+                output_img.save(output_path)
+            finally:
+                try:
+                    output_img.close()
+                except Exception:
+                    pass
+            return output_path
 
     return await asyncio.to_thread(_remove_bg)
 
@@ -483,7 +537,7 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
     temp_video_path += ext
 
     # Launch background task
-    asyncio.create_task(
+    _track_background_task(
         background_video_to_gif(
             context,
             chat_id,
@@ -569,6 +623,25 @@ async def background_video_to_gif(
                 pass
 
 
+async def _run_ffmpeg(cmd: list[str], timeout_sec: float = 180.0) -> bool:
+    """Run an ffmpeg command asynchronously with timeout and forced termination on hang."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
+        return process.returncode == 0
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+            await process.wait()
+        except Exception:
+            pass
+        return False
+
+
 async def convert_video_to_gif(video_path: str, chat_id: str, timestamp: int, is_video_note: bool = False) -> str:
     """Convert video to GIF using ffmpeg with optimization"""
     gif_path = f"downloads/gif_{chat_id}_{timestamp}.gif"
@@ -591,13 +664,7 @@ async def convert_video_to_gif(video_path: str, chat_id: str, timestamp: int, is
     ]
     
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await process.communicate()
-        if process.returncode == 0 and os.path.exists(gif_path):
+        if await _run_ffmpeg(cmd, timeout_sec=180.0) and os.path.exists(gif_path):
             return gif_path
     except Exception as e:
         print(f"ffmpeg gif conversion error: {e}")
@@ -658,7 +725,7 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
     temp_media_path += ext
 
     # Launch background task
-    asyncio.create_task(
+    _track_background_task(
         background_extract_audio(
             context,
             chat_id,
@@ -762,13 +829,7 @@ async def extract_audio_from_video(media_path: str, chat_id: str, timestamp: int
     ]
     
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await process.communicate()
-        if process.returncode == 0 and os.path.exists(mp3_path):
+        if await _run_ffmpeg(cmd, timeout_sec=180.0) and os.path.exists(mp3_path):
             return mp3_path
     except Exception as e:
         print(f"ffmpeg audio extraction error: {e}")

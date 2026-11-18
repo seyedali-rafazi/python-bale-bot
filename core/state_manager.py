@@ -7,6 +7,7 @@ while never blocking the asyncio event loop on synchronous Redis I/O.
 """
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import MutableMapping
 import json
 import logging
@@ -32,9 +33,8 @@ class StateCache(MutableMapping):
     """
 
     def __init__(self, max_capacity: int = 10000, default_ttl: float = 7200.0):
-        self._data: dict = {}
+        self._data: OrderedDict = OrderedDict()
         self._expires: dict = {}
-        self._last_access: dict = {}
         self._max_capacity = max_capacity
         self._default_ttl = default_ttl
         self._lock = threading.RLock()
@@ -47,7 +47,7 @@ class StateCache(MutableMapping):
             if now > self._expires.get(key, 0):
                 self._remove_key(key)
                 raise KeyError(key)
-            self._last_access[key] = now
+            self._data.move_to_end(key)
             return self._data[key]
 
     def __setitem__(self, key, value):
@@ -56,8 +56,8 @@ class StateCache(MutableMapping):
             if key not in self._data and len(self._data) >= self._max_capacity:
                 self._evict_over_capacity(now)
             self._data[key] = value
+            self._data.move_to_end(key)
             self._expires[key] = now + self._default_ttl
-            self._last_access[key] = now
 
     def __delitem__(self, key):
         with self._lock:
@@ -104,7 +104,6 @@ class StateCache(MutableMapping):
     def _remove_key(self, key):
         self._data.pop(key, None)
         self._expires.pop(key, None)
-        self._last_access.pop(key, None)
 
     def _purge_expired(self):
         now = time.time()
@@ -116,9 +115,9 @@ class StateCache(MutableMapping):
         self._purge_expired()
         if len(self._data) >= self._max_capacity:
             to_evict_count = max(1, int(self._max_capacity * 0.1))
-            sorted_keys = sorted(self._last_access.keys(), key=lambda k: self._last_access[k])
-            for k in sorted_keys[:to_evict_count]:
-                self._remove_key(k)
+            for _ in range(min(to_evict_count, len(self._data))):
+                oldest_key, _ = self._data.popitem(last=False)
+                self._expires.pop(oldest_key, None)
 
 
 # L1 In-Memory Cache with TTL & LRU bounds

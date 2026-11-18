@@ -140,9 +140,8 @@ async def add_vip_time_to_all(days: int) -> int:
                 )
 
     if updated_user_ids:
-        from services.cache_service import cache_delete
+        from services.cache_service import cache_delete_many
 
-        for uid in updated_user_ids:
-            await cache_delete(f"vip_status:{uid}")
+        await cache_delete_many([f"vip_status:{uid}" for uid in updated_user_ids])
 
     return len(updates)

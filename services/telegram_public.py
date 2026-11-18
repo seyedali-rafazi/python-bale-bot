@@ -224,7 +224,9 @@ async def download_media(
     url: str, filename: str, max_bytes: int = MAX_MEDIA_BYTES
 ) -> tuple[Optional[str], Optional[str]]:
     """Download to temp file. Returns (path, error_message)."""
-    temp_path = f"temp_{uuid.uuid4().hex}_{filename}"
+    os.makedirs("downloads", exist_ok=True)
+    safe_name = os.path.basename(filename or "file.bin")
+    temp_path = os.path.join("downloads", f"tgpub_{uuid.uuid4().hex}_{safe_name}")
     session = await get_http_session()
     headers = {"User-Agent": USER_AGENT}
 

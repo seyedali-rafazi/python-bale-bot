@@ -1,6 +1,7 @@
 # handlers/states/state_pinterest.py
 
 import asyncio
+import re
 from io import BytesIO
 from typing import List, Optional
 
@@ -42,6 +43,9 @@ from services.pinterest_queue import (
 DOWNLOAD_CONCURRENCY = 6
 
 SEND_BATCH_SIZE = 10
+MAX_PIN_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB per image safety cap
+MIN_PIN_IMAGE_BYTES = 5 * 1024  # 5 KB floor to skip tiny UI icons/placeholders
+_PIN_SIZE_SEGMENT_RE = re.compile(r"/(originals|1200x|736x|564x|474x|236x)/", re.IGNORECASE)
 
 download_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
 _pin_pagination_cache = StateCache(max_capacity=3000, default_ttl=3600.0)
@@ -62,52 +66,84 @@ def build_more_keyboard():
     )
 
 
+def _build_pin_fallback_urls(url: str) -> List[str]:
+    """Generate ordered HD fallback URLs (originals -> 736x -> 564x -> 474x) for i.pinimg.com."""
+    candidates = [url]
+    if "i.pinimg.com" in url.lower() and _PIN_SIZE_SEGMENT_RE.search(url):
+        for size in ("736x", "564x", "474x"):
+            alt = _PIN_SIZE_SEGMENT_RE.sub(f"/{size}/", url, count=1)
+            if alt not in candidates:
+                candidates.append(alt)
+    return candidates
+
+
 async def get_image_bytes(
     session: aiohttp.ClientSession,
     url: str,
     headers: dict,
 ) -> Optional[BytesIO]:
 
+    candidate_urls = _build_pin_fallback_urls(url)
+
     async with download_semaphore:
-        for attempt in range(3):
-            try:
-                async with session.get(
-                    url,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=25),
-                    allow_redirects=True,
-                    ssl=False,
-                ) as res:
-                    if res.status in (429, 503) and attempt < 2:
-                        await asyncio.sleep(0.5 * (attempt + 1))
-                        continue
-                    if res.status != 200:
-                        if attempt < 2:
-                            await asyncio.sleep(0.3 * (attempt + 1))
+        for candidate_url in candidate_urls:
+            for attempt in range(2):
+                try:
+                    async with session.get(
+                        candidate_url,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=25),
+                        allow_redirects=True,
+                    ) as res:
+                        if res.status in (403, 404, 410):
+                            # Size variant (e.g. /originals/.jpg) missing; try next HD fallback
+                            break
+                        if res.status in (429, 503) and attempt == 0:
+                            await asyncio.sleep(0.5)
                             continue
-                        return None
+                        if res.status != 200:
+                            if attempt == 0:
+                                await asyncio.sleep(0.3)
+                                continue
+                            break
 
-                    content_type = res.headers.get("Content-Type", "").lower()
+                        content_type = res.headers.get("Content-Type", "").lower()
+                        if "image" not in content_type:
+                            break
 
-                    if "image" not in content_type:
-                        return None
+                        content_length = res.headers.get("Content-Length")
+                        if content_length and content_length.isdigit():
+                            cl = int(content_length)
+                            if cl > MAX_PIN_IMAGE_BYTES or cl < MIN_PIN_IMAGE_BYTES:
+                                break
 
-                    bio = BytesIO()
+                        bio = BytesIO()
+                        total_bytes = 0
 
-                    async for chunk in res.content.iter_chunked(65536):
-                        bio.write(chunk)
+                        async for chunk in res.content.iter_chunked(65536):
+                            total_bytes += len(chunk)
+                            if total_bytes > MAX_PIN_IMAGE_BYTES:
+                                bio.close()
+                                bio = None
+                                break
+                            bio.write(chunk)
 
-                    bio.seek(0)
-                    bio.name = "pinterest.jpg"
+                        if bio is None:
+                            break
+                        if total_bytes < MIN_PIN_IMAGE_BYTES:
+                            bio.close()
+                            break
 
-                    return bio
+                        bio.seek(0)
+                        bio.name = "pinterest.jpg"
+                        return bio
 
-            except Exception as e:
-                print(f"download image error (try {attempt + 1}): {e}")
-                if attempt < 2:
-                    await asyncio.sleep(0.4 * (attempt + 1))
-                    continue
-                return None
+                except Exception as e:
+                    print(f"download image error (try {attempt + 1}): {e}")
+                    if attempt == 0:
+                        await asyncio.sleep(0.4)
+                        continue
+                    break
         return None
 
 
@@ -157,6 +193,7 @@ async def send_image_batch(
     urls: List[str],
 ) -> int:
 
+    images: List[BytesIO] = []
     try:
         images = await fetch_image_bytes(urls)
 
@@ -182,6 +219,12 @@ async def send_image_batch(
     except Exception as e:
         print(f"send_image_batch error: {e}")
         return 0
+    finally:
+        for img in images:
+            try:
+                img.close()
+            except Exception:
+                pass
 
 
 async def process_pinterest_search(
