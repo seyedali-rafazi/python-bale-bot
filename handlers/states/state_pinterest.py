@@ -14,7 +14,7 @@ from telegram import (
     InlineKeyboardButton,
     InputMediaPhoto,
 )
-
+from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 
 from core.state_manager import StateCache, set_state
@@ -179,8 +179,16 @@ async def send_image_batch(
             try:
                 img = await done_task
                 if isinstance(img, BytesIO):
-                    await context.bot.send_photo(chat_id=chat_id, photo=img)
-                    sent += 1
+                    try:
+                        await context.bot.send_photo(chat_id=chat_id, photo=img)
+                        sent += 1
+                    except RetryAfter as exc:
+                        wait = max(1.0, float(exc.retry_after)) + 0.5
+                        await asyncio.sleep(wait)
+                        img.seek(0)
+                        await context.bot.send_photo(chat_id=chat_id, photo=img)
+                        sent += 1
+                    await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"send photo error: {e}")
             finally:
@@ -420,8 +428,8 @@ async def process_more_pins(
             pass
 
         cached_pin = _pin_pagination_cache.get(pin_key)
-        images = (cached_pin or {}).get("images") or context.user_data.get("pin_images", [])
-        index = (cached_pin or {}).get("index") if cached_pin is not None else context.user_data.get("pin_index", 0)
+        images = (cached_pin or {}).get("images") or []
+        index = (cached_pin or {}).get("index", 0)
 
         if not images:
             await context.bot.send_message(

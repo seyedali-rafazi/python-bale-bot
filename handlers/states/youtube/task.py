@@ -13,6 +13,8 @@ from core.database import (
     record_cloud_upload,
     record_cloud_uploads,
     get_available_cloud_mb,
+    reserve_cloud_quota,
+    release_cloud_quota,
     log_upload_failed,
 )
 from services.youtube import (
@@ -26,9 +28,10 @@ from services.youtube import (
 from services.zip_utils import build_zip_and_split
 
 try:
-    from services.parspack_s3 import upload_to_s3
+    from services.parspack_s3 import upload_to_s3, upload_to_s3_with_key
 except ImportError:
     upload_to_s3 = None
+    upload_to_s3_with_key = None
 
 from .config import (
     telegram_normal_semaphore,
@@ -385,23 +388,19 @@ async def background_yt_download(
 
                             if destination == "server":
                                 # =================================
-                                # چک فضای ابری قبل از آپلود ویدیو
+                                # چک و رزرو اتمیک فضای ابری قبل از آپلود ویدیو
                                 # =================================
-                                user_storage_mb = await get_available_cloud_mb(chat_id)
-                                if user_storage_mb is None or user_storage_mb <= 0:
-                                    user_storage_mb = 0
-
-                                # محاسبه کل حجم فایل‌های تقسیم‌شده
-                                total_video_size_mb = 0
+                                total_video_size_mb = 0.0
                                 for file_path in result:
                                     total_video_size_mb += round(
                                         (await get_file_size_async(file_path)) / (1024 * 1024), 2
                                     )
 
-                                if (
-                                    user_storage_mb <= 0
-                                    or total_video_size_mb > user_storage_mb
-                                ):
+                                reserved = await reserve_cloud_quota(chat_id, total_video_size_mb)
+                                if not reserved:
+                                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                                    if user_storage_mb is None or user_storage_mb <= 0:
+                                        user_storage_mb = 0
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text=(
@@ -430,31 +429,50 @@ async def background_yt_download(
                                 )
 
                                 s3_links = []
-                                cloud_records: list[tuple[str, float, str]] = []
+                                cloud_records: list[tuple[str, float, str, str | None]] = []
                                 total_size_mb = 0.0
+                                upload_fn = upload_to_s3_with_key or upload_to_s3
 
-                                for file_path in result:
-                                    s3_url = await asyncio.to_thread(
-                                        upload_to_s3,
-                                        file_path,
-                                        None,
-                                        progress_dict,
-                                    )
+                                try:
+                                    for file_path in result:
+                                        if upload_to_s3_with_key is not None:
+                                            s3_url, s3_key = await asyncio.to_thread(
+                                                upload_to_s3_with_key,
+                                                file_path,
+                                                None,
+                                                progress_dict,
+                                            )
+                                        else:
+                                            s3_url = await asyncio.to_thread(
+                                                upload_fn,
+                                                file_path,
+                                                None,
+                                                progress_dict,
+                                            )
+                                            s3_key = None
 
-                                    if s3_url:
-                                        file_size_mb = round(
-                                            (await get_file_size_async(file_path)) / (1024 * 1024),
-                                            2,
-                                        )
-                                        file_name = os.path.basename(file_path)
-                                        total_size_mb += file_size_mb
-                                        cloud_records.append((file_name, file_size_mb, s3_url))
-                                        s3_links.append(s3_url)
+                                        if s3_url:
+                                            file_size_mb = round(
+                                                (await get_file_size_async(file_path)) / (1024 * 1024),
+                                                2,
+                                            )
+                                            file_name = os.path.basename(file_path)
+                                            total_size_mb += file_size_mb
+                                            cloud_records.append((file_name, file_size_mb, s3_url, s3_key))
+                                            s3_links.append(s3_url)
+                                except Exception:
+                                    await release_cloud_quota(chat_id, total_video_size_mb)
+                                    raise
 
                                 progress_dict["is_finished"] = True
 
                                 if s3_links:
-                                    await record_cloud_uploads(chat_id, cloud_records)
+                                    diff = total_video_size_mb - total_size_mb
+                                    if diff > 0:
+                                        await release_cloud_quota(chat_id, diff)
+                                    await record_cloud_uploads(
+                                        chat_id, cloud_records, quota_reserved=True
+                                    )
 
                                     links_text = "\n\n".join(
                                         [
@@ -470,6 +488,7 @@ async def background_yt_download(
                                     )
 
                                 else:
+                                    await release_cloud_quota(chat_id, total_video_size_mb)
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text="❌ خطا در آپلود ابری.",
@@ -584,20 +603,17 @@ async def background_yt_download(
 
                             if destination == "server":
                                 # =================================
-                                # چک فضای ابری قبل از آپلود صوت
+                                # چک و رزرو اتمیک فضای ابری قبل از آپلود صوت
                                 # =================================
-                                user_storage_mb = await get_available_cloud_mb(chat_id)
-                                if user_storage_mb is None or user_storage_mb <= 0:
-                                    user_storage_mb = 0
-
                                 audio_size_mb = round(
                                     (await get_file_size_async(file_path)) / (1024 * 1024), 2
                                 )
 
-                                if (
-                                    user_storage_mb <= 0
-                                    or audio_size_mb > user_storage_mb
-                                ):
+                                reserved = await reserve_cloud_quota(chat_id, audio_size_mb)
+                                if not reserved:
+                                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                                    if user_storage_mb is None or user_storage_mb <= 0:
+                                        user_storage_mb = 0
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text=(
@@ -625,23 +641,38 @@ async def background_yt_download(
                                     update_progress_message()
                                 )
 
-                                s3_url = await asyncio.to_thread(
-                                    upload_to_s3,
-                                    file_path,
-                                    None,
-                                    progress_dict,
-                                )
+                                try:
+                                    if upload_to_s3_with_key is not None:
+                                        s3_url, s3_key = await asyncio.to_thread(
+                                            upload_to_s3_with_key,
+                                            file_path,
+                                            None,
+                                            progress_dict,
+                                        )
+                                    else:
+                                        s3_url = await asyncio.to_thread(
+                                            upload_to_s3,
+                                            file_path,
+                                            None,
+                                            progress_dict,
+                                        )
+                                        s3_key = None
+                                except Exception:
+                                    await release_cloud_quota(chat_id, audio_size_mb)
+                                    raise
 
                                 progress_dict["is_finished"] = True
 
                                 if s3_url:
-                                    audio_size_mb = round(
-                                        (await get_file_size_async(file_path)) / (1024 * 1024), 2
-                                    )
                                     file_name = os.path.basename(file_path)
 
                                     await record_cloud_upload(
-                                        chat_id, file_name, audio_size_mb, s3_url
+                                        chat_id,
+                                        file_name,
+                                        audio_size_mb,
+                                        s3_url,
+                                        s3_key=s3_key,
+                                        quota_reserved=True,
                                     )
 
                                     await context.bot.send_message(
@@ -651,11 +682,13 @@ async def background_yt_download(
                                     )
 
                                 else:
+                                    await release_cloud_quota(chat_id, audio_size_mb)
                                     await context.bot.send_message(
                                         chat_id=chat_id,
                                         text="❌ خطا در آپلود ابری.",
                                     )
 
+                                    await log_upload_failed("youtube", chat_id)
                                     await decrement_yt_downloads(chat_id)
 
                             # =====================
@@ -779,6 +812,7 @@ async def background_yt_download(
                     text=f"❌ خطا: {str(e)}",
                 )
 
+                await log_upload_failed("youtube", chat_id)
                 await decrement_yt_downloads(chat_id)
 
             finally:

@@ -65,6 +65,8 @@ from .kaggle import (
 from .cloud import (
     get_user_cloud_info,
     get_available_cloud_mb,
+    reserve_cloud_quota,
+    release_cloud_quota,
     add_cloud_storage,
     reduce_cloud_storage,
     add_cloud_file,

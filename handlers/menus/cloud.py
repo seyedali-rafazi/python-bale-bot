@@ -14,6 +14,7 @@ from core.constants import (
 )
 from core.database import get_cloud_usage_stats, get_user_cloud_files
 from core.state_manager import set_state
+from services.parspack_s3 import generate_presigned_url_for_key
 import os
 from dotenv import load_dotenv
 
@@ -125,20 +126,29 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
 
     try:
-        cloud_files = await get_user_cloud_files(user_id)
+        cloud_stats = await get_cloud_usage_stats(user_id)
+        cloud_files = await get_user_cloud_files(user_id, limit=10)
 
-        if not cloud_files or len(cloud_files) == 0:
+        if not cloud_files:
             files_text = "📂 **فایل‌های من**\n\nشما هنوز فایلی آپلود نکرده‌اید."
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="cloud_back")]]
         else:
+            total_count = cloud_stats["file_count"] if cloud_stats else len(cloud_files)
             files_text = "📂 **فایل‌های من**\n\n"
-            files_text += f"تعداد فایل‌ها: **{len(cloud_files)}**\n\n"
+            files_text += f"تعداد فایل‌ها: **{total_count}**\n\n"
 
-            for idx, file_info in enumerate(cloud_files[:10], 1):  # Show last 10 files
-                file_id, file_name, file_size_mb, download_link, upload_date = file_info
+            for idx, file_info in enumerate(cloud_files[:10], 1):
+                if len(file_info) >= 6:
+                    _, file_name, file_size_mb, download_link, upload_date, s3_key = file_info[:6]
+                else:
+                    _, file_name, file_size_mb, download_link, upload_date = file_info[:5]
+                    s3_key = None
+                fresh_link = (
+                    generate_presigned_url_for_key(s3_key) if s3_key else None
+                ) or download_link
                 files_text += f"{idx}. **{file_name}** ({file_size_mb} MB)\n"
                 files_text += f"   📅 {upload_date}\n"
-                files_text += f"   🔗 [دانلود]({download_link})\n\n"
+                files_text += f"   🔗 [دانلود]({fresh_link})\n\n"
 
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="cloud_back")]]
 
@@ -162,9 +172,6 @@ async def btn_buy_cloud_size(
         await query.answer()
     except Exception as e:
         print(f"Note: Could not answer callback (may be too old): {e}")
-
-    # Store purchase info in context for payment handler
-    context.user_data["cloud_purchase"] = size_gb
 
     # Show TOS for cloud storage purchase
     tos_text = f"""

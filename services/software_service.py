@@ -8,14 +8,16 @@ High-concurrency optimized:
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
 import shutil
-import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import httpx
+
+from services.cache_service import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +63,8 @@ async def close_software_httpx_client() -> None:
             await _shared_httpx_client.aclose()
             _shared_httpx_client = None
 
-# In-memory search cache: key -> (timestamp, results)
 _CACHE_TTL_SECONDS = 1800  # 30 minutes
-_search_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_MAX_CACHE_ENTRIES = 500
+_MANIFEST_CACHE_TTL_SECONDS = 3600  # 60 minutes
 
 # Max allowed download size (250 MB) to protect bot resources
 MAX_ALLOWED_DOWNLOAD_BYTES = 250 * 1024 * 1024
@@ -99,23 +99,9 @@ def sanitize_filename(filename: str) -> str:
     return clean or "software_package"
 
 
-def _get_from_cache(key: str) -> Optional[List[Dict[str, Any]]]:
-    now = time.monotonic()
-    if key in _search_cache:
-        cached_time, results = _search_cache[key]
-        if now - cached_time < _CACHE_TTL_SECONDS:
-            return results
-        del _search_cache[key]
-    return None
-
-
-def _put_in_cache(key: str, results: List[Dict[str, Any]]) -> None:
-    if len(_search_cache) > _MAX_CACHE_ENTRIES:
-        # Prune oldest 20%
-        old_keys = sorted(_search_cache.keys(), key=lambda k: _search_cache[k][0])[:100]
-        for k in old_keys:
-            _search_cache.pop(k, None)
-    _search_cache[key] = (time.monotonic(), results)
+def _software_cache_key(prefix: str, text: str, limit: int = 0) -> str:
+    digest = hashlib.md5(f"{text.lower()}:{limit}".encode("utf-8")).hexdigest()[:16]
+    return f"software:{prefix}:{digest}"
 
 
 class SoftwareService:
@@ -134,10 +120,10 @@ class SoftwareService:
           name, package, version, size_mb, icon, download_url, updated, platform
         """
         norm_query = cls._normalize_query(query)
-        cache_key = f"android:{norm_query}:{limit}"
+        cache_key = _software_cache_key("android", norm_query, limit)
 
-        cached = _get_from_cache(cache_key)
-        if cached is not None:
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list) and cached:
             return cached
 
         url = "https://ws75.aptoide.com/api/7/apps/search"
@@ -184,7 +170,8 @@ class SoftwareService:
                 if len(results) >= limit:
                     break
 
-            _put_in_cache(cache_key, results)
+            if results:
+                await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
             return results
         except Exception as e:
             logger.exception("Error searching Android software for '%s': %s", query, e)
@@ -289,6 +276,10 @@ class SoftwareService:
             candidates.sort(key=lambda c: (c["official"], c["stars"]), reverse=True)
 
             async def _fetch_manifest(client: httpx.AsyncClient, cand: dict) -> Optional[Dict[str, Any]]:
+                m_key = _software_cache_key("scoop_manifest", cand["manifest_url"])
+                cached_item = await cache_get(m_key)
+                if isinstance(cached_item, dict) and cached_item.get("download_url"):
+                    return dict(cached_item)
                 try:
                     r = await client.get(cand["manifest_url"], timeout=6.0)
                     if r.status_code == 200:
@@ -297,7 +288,7 @@ class SoftwareService:
                         if dl_url:
                             clean_dl = dl_url.split("#")[0]
                             ext = cls._detect_extension(clean_dl)
-                            return {
+                            item_data = {
                                 "name": cand["name"],
                                 "package": cand["name"],
                                 "version": cand["version"] or m.get("version", "نامشخص"),
@@ -307,6 +298,8 @@ class SoftwareService:
                                 "size_mb": 0.0,
                                 "updated": "نامشخص",
                             }
+                            await cache_set(m_key, item_data, ttl_sec=_MANIFEST_CACHE_TTL_SECONDS)
+                            return item_data
                 except Exception:
                     pass
                 return None
@@ -481,10 +474,10 @@ class SoftwareService:
         Uses universal cloud catalog (cross-platform) with winget CLI fallback when available.
         """
         norm_query = cls._normalize_query(query)
-        cache_key = f"windows:{norm_query}:{limit}"
+        cache_key = _software_cache_key("windows", norm_query, limit)
 
-        cached = _get_from_cache(cache_key)
-        if cached is not None:
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list) and cached:
             return cached
 
         # 1. Primary: Cloud catalog search (works on Linux VPS, Docker, Windows)
@@ -495,7 +488,7 @@ class SoftwareService:
             results = await cls._search_windows_winget(norm_query, limit=limit)
 
         if results:
-            _put_in_cache(cache_key, results)
+            await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
 
         return results
 
@@ -547,7 +540,7 @@ class SoftwareService:
                 await asyncio.to_thread(f.close)
                 f = None
             # Clean up partial/corrupted file
-            if os.path.isfile(dest_path):
+            if await asyncio.to_thread(os.path.isfile, dest_path):
                 try:
                     await asyncio.to_thread(os.remove, dest_path)
                 except OSError:

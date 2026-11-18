@@ -128,29 +128,44 @@ async def get_monitoring_report_data() -> dict:
     window_end = max(hour_end, tomorrow)
 
     pool = await get_db()
-    rows, hour_active_users, today_active_users = await asyncio.gather(
-        pool.fetch(
-            """
-            SELECT
-                section,
-                event_type,
-                COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $4) AS hour_cnt,
-                COUNT(*) FILTER (WHERE created_at >= $5 AND created_at < $6) AS today_cnt
+    rows = await pool.fetch(
+        """
+        WITH window_events AS (
+            SELECT section, event_type, user_id, created_at
             FROM monitoring_events
             WHERE created_at >= $1
               AND created_at < $2
-              AND event_type IN ('upload_success', 'upload_failed')
-            GROUP BY section, event_type
-            """,
-            window_start,
-            window_end,
-            hour_start,
-            hour_end,
-            today_start,
-            tomorrow,
-        ),
-        _count_active_users_between(hour_start, hour_end),
-        count_active_users_today(),
+        )
+        SELECT
+            section,
+            event_type,
+            COUNT(*) FILTER (WHERE created_at >= $3 AND created_at < $4) AS hour_cnt,
+            COUNT(*) FILTER (WHERE created_at >= $5 AND created_at < $6) AS today_cnt,
+            NULL::bigint AS hour_active_users,
+            NULL::bigint AS today_active_users
+        FROM window_events
+        WHERE event_type IN ('upload_success', 'upload_failed')
+        GROUP BY section, event_type
+        UNION ALL
+        SELECT
+            '__active__' AS section,
+            '__active__' AS event_type,
+            0 AS hour_cnt,
+            0 AS today_cnt,
+            COUNT(DISTINCT user_id) FILTER (
+                WHERE user_id IS NOT NULL AND created_at >= $3 AND created_at < $4
+            ) AS hour_active_users,
+            COUNT(DISTINCT user_id) FILTER (
+                WHERE user_id IS NOT NULL AND created_at >= $5 AND created_at < $6
+            ) AS today_active_users
+        FROM window_events
+        """,
+        window_start,
+        window_end,
+        hour_start,
+        hour_end,
+        today_start,
+        tomorrow,
     )
 
     hour_ok = {section: 0 for section in ALL_SECTIONS}
@@ -161,10 +176,17 @@ async def get_monitoring_report_data() -> dict:
     today_responses = 0
     hour_failures = 0
     today_failures = 0
+    hour_active_users = 0
+    today_active_users = 0
 
     for row in rows:
         section = row["section"]
         ev_type = row["event_type"]
+        if section == "__active__" and ev_type == "__active__":
+            hour_active_users = int(row["hour_active_users"] or 0)
+            today_active_users = int(row["today_active_users"] or 0)
+            continue
+
         h_cnt = int(row["hour_cnt"] or 0)
         t_cnt = int(row["today_cnt"] or 0)
 

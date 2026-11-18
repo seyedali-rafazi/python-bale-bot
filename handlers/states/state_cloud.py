@@ -7,14 +7,17 @@ import asyncio
 import os
 import re
 from core.state_manager import set_state, clear_state
-from core.task_utils import async_temp_dir
+from core.task_utils import async_temp_dir, get_file_size_async
 from core.database import (
     get_available_cloud_mb,
+    reserve_cloud_quota,
+    release_cloud_quota,
     record_cloud_upload,
     get_cloud_usage_stats,
     log_upload_success,
 )
-from services.parspack_s3 import upload_to_s3
+from services.parspack_s3 import upload_to_s3_with_key
+from services.rate_limiter import user_action_lock
 
 
 WAIT_FOR_FILE = 1
@@ -103,58 +106,90 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
             return WAIT_FOR_FILE
         
         file_size_mb = (file_obj.file_size or 0) / (1024 * 1024)
-        
-        # Check available space
-        available_mb = await get_available_cloud_mb(user_id)
-        if available_mb is None or file_size_mb > available_mb:
-            await update.message.reply_text(
-                "❌ فضای کافی برای آپلود این فایل وجود ندارد!\n\n"
-                f"حجم فایل: {file_size_mb:.2f} MB\n"
-                f"فضای در دسترس: {available_mb:.2f} MB"
-            )
-            return WAIT_FOR_FILE
-        
-        # Show uploading progress
-        progress_msg = await update.message.reply_text("⏳ در حال آپلود فایل به سرور ابری...")
-        
-        # Download file from Telegram/Bale into a safe per-request temp dir
-        safe_name = os.path.basename(file_name)
-        safe_name = re.sub(r"[^\w.\-]", "_", safe_name) or "upload.bin"
-        file = await context.bot.get_file(file_obj.file_id)
 
-        async with async_temp_dir(prefix="cloud_up_") as tmp_dir:
-            temp_file_path = os.path.join(tmp_dir, safe_name)
-            await file.download_to_drive(temp_file_path)
+        async with user_action_lock(user_id, "cloud_upload", timeout_sec=60) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ آپلود قبلی شما هنوز در حال انجام است. لطفاً صبر کنید.")
+                return WAIT_FOR_FILE
 
-            # Upload to S3 in worker thread so event loop never freezes
-            download_link = await asyncio.to_thread(
-                upload_to_s3, temp_file_path, f"{user_id}/{safe_name}"
-            )
+            # Quick pre-check before downloading from Bale
+            available_mb = await get_available_cloud_mb(user_id)
+            if available_mb is None or file_size_mb > available_mb:
+                await update.message.reply_text(
+                    "❌ فضای کافی برای آپلود این فایل وجود ندارد!\n\n"
+                    f"حجم فایل: {file_size_mb:.2f} MB\n"
+                    f"فضای در دسترس: {available_mb if available_mb is not None else 0:.2f} MB"
+                )
+                return WAIT_FOR_FILE
 
-        if download_link:
-            # Save to database atomically
-            await record_cloud_upload(user_id, safe_name, file_size_mb, download_link)
+            progress_msg = await update.message.reply_text("⏳ در حال آپلود فایل به سرور ابری...")
 
-            # Get updated cloud stats
-            cloud_stats = await get_cloud_usage_stats(user_id)
-            available_gb = (cloud_stats["total_quota"] - cloud_stats["used_quota"]) / 1024
+            safe_name = os.path.basename(file_name)
+            safe_name = re.sub(r"[^\w.\-]", "_", safe_name) or "upload.bin"
+            file = await context.bot.get_file(file_obj.file_id)
 
-            success_text = f"""
+            download_link = None
+            s3_key = None
+            actual_size_mb = file_size_mb
+            reserved = False
+            async with async_temp_dir(prefix="cloud_up_") as tmp_dir:
+                temp_file_path = os.path.join(tmp_dir, safe_name)
+                await file.download_to_drive(temp_file_path)
+                actual_size_mb = round(
+                    (await get_file_size_async(temp_file_path)) / (1024 * 1024), 2
+                )
+                reserved = await reserve_cloud_quota(user_id, actual_size_mb)
+                if not reserved:
+                    avail_now = await get_available_cloud_mb(user_id)
+                    await progress_msg.edit_text(
+                        "❌ فضای کافی برای آپلود این فایل وجود ندارد!\n\n"
+                        f"حجم فایل: {actual_size_mb:.2f} MB\n"
+                        f"فضای در دسترس: {avail_now if avail_now is not None else 0:.2f} MB"
+                    )
+                    return WAIT_FOR_FILE
+
+                try:
+                    # Upload to S3 in worker thread so event loop never freezes
+                    download_link, s3_key = await asyncio.to_thread(
+                        upload_to_s3_with_key, temp_file_path, f"{user_id}/{safe_name}"
+                    )
+                except Exception:
+                    await release_cloud_quota(user_id, actual_size_mb)
+                    raise
+
+            if download_link:
+                # Save file record (quota already reserved atomically)
+                await record_cloud_upload(
+                    user_id,
+                    safe_name,
+                    actual_size_mb,
+                    download_link,
+                    s3_key=s3_key,
+                    quota_reserved=True,
+                )
+
+                # Get updated cloud stats
+                cloud_stats = await get_cloud_usage_stats(user_id)
+                available_gb = (cloud_stats["total_quota"] - cloud_stats["used_quota"]) / 1024
+
+                success_text = f"""
 ✅ **آپلود موفق**
 
 📄 نام فایل: **{safe_name}**
-💾 حجم: **{file_size_mb:.2f} MB**
+💾 حجم: **{actual_size_mb:.2f} MB**
 🔗 لینک دانلود: [دریافت]({download_link})
 
 ⚡ فضای در دسترس: **{available_gb:.2f} GB**
 
 فایل شما در ابری ذخیره شد. می‌توانید این لینک را اشتراک‌گذاری کنید.
-            """
+                """
 
-            await progress_msg.edit_text(success_text, parse_mode="Markdown")
-            await log_upload_success("cloud", user_id)
-        else:
-            await progress_msg.edit_text("❌ خطایی در آپلود فایل رخ داد. دوباره تلاش کنید.")
+                await progress_msg.edit_text(success_text, parse_mode="Markdown")
+                await log_upload_success("cloud", user_id)
+            else:
+                if reserved:
+                    await release_cloud_quota(user_id, actual_size_mb)
+                await progress_msg.edit_text("❌ خطایی در آپلود فایل رخ داد. دوباره تلاش کنید.")
         
         clear_state(user_id)
         return ConversationHandler.END

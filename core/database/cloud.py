@@ -62,8 +62,52 @@ async def reduce_cloud_storage(user_id, size_mb: float):
     )
 
 
+async def reserve_cloud_quota(user_id, size_mb: float) -> bool:
+    """Atomically reserve cloud quota before uploading to S3 (prevents concurrent oversubscription)."""
+    uid = str(user_id)
+    amt = max(0.0, float(size_mb))
+    if amt <= 0:
+        info = await get_user_cloud_info(uid)
+        return bool(info is not None and (info["total_mb"] - info["used_mb"]) > 0)
+    pool = await get_db()
+    updated = await pool.fetchval(
+        """
+        UPDATE users
+        SET cloud_used_mb = COALESCE(cloud_used_mb, 0) + $1
+        WHERE user_id = $2
+          AND COALESCE(cloud_total_mb, 0) - COALESCE(cloud_used_mb, 0) >= $1
+        RETURNING cloud_used_mb
+        """,
+        amt,
+        uid,
+    )
+    return updated is not None
+
+
+async def release_cloud_quota(user_id, size_mb: float) -> None:
+    """Release previously reserved cloud quota if S3 upload fails."""
+    uid = str(user_id)
+    amt = max(0.0, float(size_mb))
+    if amt <= 0:
+        return
+    pool = await get_db()
+    await pool.execute(
+        """
+        UPDATE users
+        SET cloud_used_mb = GREATEST(0, COALESCE(cloud_used_mb, 0) - $1)
+        WHERE user_id = $2
+        """,
+        amt,
+        uid,
+    )
+
+
 async def add_cloud_file(
-    user_id, file_name: str, file_size_mb: float, download_link: str
+    user_id,
+    file_name: str,
+    file_size_mb: float,
+    download_link: str,
+    s3_key: str | None = None,
 ):
     """Add uploaded file to cloud files database."""
     uid = str(user_id)
@@ -71,50 +115,61 @@ async def add_cloud_file(
     upload_date = get_tehran_now_full()
     await pool.execute(
         """
-        INSERT INTO cloud_files (user_id, file_name, file_size_mb, download_link, upload_date)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO cloud_files (user_id, file_name, file_size_mb, download_link, s3_key, upload_date)
+        VALUES ($1, $2, $3, $4, $5, $6)
         """,
         uid,
         file_name,
         float(file_size_mb),
         download_link,
+        s3_key,
         upload_date,
     )
 
 
 async def record_cloud_uploads(
     user_id,
-    files: list[tuple[str, float, str]],
+    files: list[tuple[str, float, str] | tuple[str, float, str, str | None]],
+    *,
+    quota_reserved: bool = False,
 ) -> float:
     """
     Atomically insert one or more cloud_files rows and increment cloud_used_mb
-    inside a single PostgreSQL transaction.
+    inside a single PostgreSQL transaction (unless quota was already reserved).
     Returns total size added in MB.
     """
     if not files:
         return 0.0
     uid = str(user_id)
     upload_date = get_tehran_now_full()
-    total_mb = sum(float(size_mb) for _, size_mb, _ in files)
-    records = [
-        (uid, file_name, float(size_mb), download_link, upload_date)
-        for file_name, size_mb, download_link in files
-    ]
+    total_mb = 0.0
+    records = []
+    for entry in files:
+        if len(entry) == 4:
+            file_name, size_mb, download_link, s3_key = entry
+        else:
+            file_name, size_mb, download_link = entry
+            s3_key = None
+        sz = float(size_mb)
+        total_mb += sz
+        records.append((uid, file_name, sz, download_link, s3_key, upload_date))
+
     pool = await get_db()
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
                 """
-                INSERT INTO cloud_files (user_id, file_name, file_size_mb, download_link, upload_date)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO cloud_files (user_id, file_name, file_size_mb, download_link, s3_key, upload_date)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 records,
             )
-            await conn.execute(
-                "UPDATE users SET cloud_used_mb = COALESCE(cloud_used_mb, 0) + $1 WHERE user_id = $2",
-                total_mb,
-                uid,
-            )
+            if not quota_reserved:
+                await conn.execute(
+                    "UPDATE users SET cloud_used_mb = COALESCE(cloud_used_mb, 0) + $1 WHERE user_id = $2",
+                    total_mb,
+                    uid,
+                )
     return total_mb
 
 
@@ -123,10 +178,15 @@ async def record_cloud_upload(
     file_name: str,
     file_size_mb: float,
     download_link: str,
+    *,
+    s3_key: str | None = None,
+    quota_reserved: bool = False,
 ) -> float:
     """Atomically record a single cloud upload and deduct storage quota."""
     return await record_cloud_uploads(
-        user_id, [(file_name, float(file_size_mb), download_link)]
+        user_id,
+        [(file_name, float(file_size_mb), download_link, s3_key)],
+        quota_reserved=quota_reserved,
     )
 
 
@@ -137,7 +197,7 @@ async def get_user_cloud_files(user_id, limit: int | None = None):
     if limit is not None:
         return await pool.fetch(
             """
-            SELECT id, file_name, file_size_mb, download_link, upload_date
+            SELECT id, file_name, file_size_mb, download_link, upload_date, s3_key
             FROM cloud_files
             WHERE user_id = $1
             ORDER BY upload_date DESC
@@ -148,7 +208,7 @@ async def get_user_cloud_files(user_id, limit: int | None = None):
         )
     return await pool.fetch(
         """
-        SELECT id, file_name, file_size_mb, download_link, upload_date
+        SELECT id, file_name, file_size_mb, download_link, upload_date, s3_key
         FROM cloud_files
         WHERE user_id = $1
         ORDER BY upload_date DESC

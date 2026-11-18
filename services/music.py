@@ -1,9 +1,12 @@
 # services/music.py
 
 import hashlib
+import logging
 import subprocess
 from services.cache_service import cache_get, cache_set
 from services.youtube import _run_async_subprocess, get_base_search_cmd
+
+logger = logging.getLogger(__name__)
 
 _MUSIC_CACHE_TTL_SEC = 900  # 15 minutes
 
@@ -239,15 +242,14 @@ async def async_search_track(query: str, limit: int = 10) -> list[dict]:
             _build_track_search_cmd(clean, limit), timeout_sec=45.0
         )
         if rc != 0:
-            print("❌ Error searching music tracks:")
-            print(err)
+            logger.warning("Error searching music tracks: %s", err)
             return []
         tracks = _parse_tracks_output(out, limit)
         if tracks:
             await cache_set(key, tracks, ttl_sec=_MUSIC_CACHE_TTL_SEC)
         return tracks
     except Exception as e:
-        print(f"Error in async_search_track: {e}")
+        logger.warning("Error in async_search_track: %s", e)
         return []
 
 

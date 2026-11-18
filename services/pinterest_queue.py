@@ -1,11 +1,16 @@
 # services/pinterest_queue.py
 
 import asyncio
+import hashlib
+import logging
 import os
 from typing import List
 
+from services.cache_service import cache_get, cache_set
 from services.chromium_workload import heavy_chromium_semaphore
 from services.pinterest import search_pinterest_images
+
+logger = logging.getLogger(__name__)
 
 # ۲۰هزار کاربر: یک Chromium مشترک + صف؛ RAM ثابت می‌ماند، تعداد هم‌زمان جستجو محدود است.
 PINTEREST_SEARCH_WORKERS = max(1, int(os.getenv("PINTEREST_SEARCH_WORKERS", "2")))
@@ -70,9 +75,11 @@ async def pinterest_worker(worker_id: int):
             if job.future.done():
                 continue
 
-            print(
-                f"[Pinterest Worker {worker_id}] searching: {job.query} "
-                f"(queue_remaining≈{search_queue.qsize()})"
+            logger.info(
+                "[Pinterest Worker %s] searching: %s (queue_remaining≈%s)",
+                worker_id,
+                job.query,
+                search_queue.qsize(),
             )
 
             async with heavy_chromium_semaphore:
@@ -84,7 +91,7 @@ async def pinterest_worker(worker_id: int):
                 job.future.set_result(data)
 
         except Exception as e:
-            print(f"Pinterest worker error: {e}")
+            logger.warning("Pinterest worker error: %s", e)
 
             if not job.future.done():
                 job.future.set_exception(e)
@@ -107,9 +114,11 @@ async def start_pinterest_workers():
         for i in range(PINTEREST_SEARCH_WORKERS)
     ]
 
-    print(
-        f"✅ Started {PINTEREST_SEARCH_WORKERS} Pinterest worker(s) "
-        f"(queue={PINTEREST_QUEUE_MAXSIZE}, max_in_flight={PINTEREST_MAX_IN_FLIGHT})"
+    logger.info(
+        "✅ Started %s Pinterest worker(s) (queue=%s, max_in_flight=%s)",
+        PINTEREST_SEARCH_WORKERS,
+        PINTEREST_QUEUE_MAXSIZE,
+        PINTEREST_MAX_IN_FLIGHT,
     )
 
 
@@ -128,6 +137,15 @@ async def queued_pinterest_search(
     query: str,
     max_results: int = 30,
 ) -> List[str]:
+    clean_q = (query or "").strip()
+    cache_key = None
+    if clean_q:
+        q_hash = hashlib.md5(f"{clean_q.lower()}:{max_results}".encode("utf-8")).hexdigest()[:16]
+        cache_key = f"pinterest:search:{q_hash}"
+        cached = await cache_get(cache_key)
+        if isinstance(cached, list) and cached:
+            return cached
+
     if search_queue.full():
         raise PinterestQueueFullError()
 
@@ -152,6 +170,9 @@ async def queued_pinterest_search(
                 future.cancel()
             raise PinterestQueueFullError() from None
 
-        return await future
+        results = await future
+        if cache_key and results:
+            await cache_set(cache_key, results, ttl_sec=1200)
+        return results
     finally:
         _in_flight_semaphore.release()

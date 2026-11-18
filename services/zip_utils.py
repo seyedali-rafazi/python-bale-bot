@@ -1,8 +1,11 @@
+import logging
 import os
 import shutil
 import subprocess
 import zipfile
 from typing import List, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # split_method: "single" | "spanned" (zip -s, WinRAR/7-Zip) | "concat" (merge .zip.001+...)
@@ -95,12 +98,12 @@ def _try_spanned_zip(
             timeout=600,
         )
         if proc.returncode != 0:
-            print(f"zip -s failed: {proc.stderr or proc.stdout}")
+            logger.warning("zip -s failed: %s", proc.stderr or proc.stdout)
             return None
         parts = _collect_spanned_parts(out_dir, zip_basename)
         return parts if parts else None
     except Exception as e:
-        print(f"zip -s error: {e}")
+        logger.warning("zip -s error: %s", e)
         return None
 
 
@@ -233,49 +236,58 @@ def build_zip_and_split(
         return parts, archive_basename, "concat"
 
     # 2. For clearly multi-part files (already compressed or >> max_part_bytes),
-    # try spanned zip directly first to avoid compressing the payload twice.
+    # try spanned zip directly first; if unavailable or failed, fall back straight to
+    # single ZIP + concat split without retrying spanned zip a second time or leaving
+    # an extra full-size .zip copy on disk.
     input_size = os.path.getsize(input_path)
+    spanned_already_tried = False
     if input_size > max_part_bytes and (_is_incompressible(input_path) or input_size > max_part_bytes * 2):
+        spanned_already_tried = True
         spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
         if spanned:
             method = "single" if len(spanned) == 1 else "spanned"
             return spanned, archive_basename, method
 
-    # 3. Build a standard, valid single ZIP first
+    # 3. Build a standard, valid single ZIP
     zip_path = os.path.join(out_dir, f"{archive_basename}.zip")
     make_zip_single(input_path=input_path, zip_path=zip_path)
 
     # If the clean ZIP fits in a single part, return it directly!
-    # (Do NOT call _try_spanned_zip for single files to avoid corrupt/spanned headers)
     if os.path.getsize(zip_path) <= max_part_bytes:
         return [zip_path], archive_basename, "single"
 
-    # 4. If file exceeds max_part_bytes, preserve single ZIP while trying spanned zip
-    backup_zip = f"{zip_path}.single_tmp"
-    try:
-        if os.path.isfile(backup_zip):
-            os.remove(backup_zip)
-        os.replace(zip_path, backup_zip)
-    except OSError:
-        backup_zip = None
-
-    spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
-    if spanned and len(spanned) > 1:
-        if backup_zip and os.path.isfile(backup_zip):
-            try:
+    # 4. If file exceeds max_part_bytes and spanned zip hasn't been attempted yet, try it once
+    if not spanned_already_tried:
+        backup_zip = f"{zip_path}.single_tmp"
+        try:
+            if os.path.isfile(backup_zip):
                 os.remove(backup_zip)
+            os.replace(zip_path, backup_zip)
+        except OSError:
+            backup_zip = None
+
+        spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
+        if spanned and len(spanned) > 1:
+            if backup_zip and os.path.isfile(backup_zip):
+                try:
+                    os.remove(backup_zip)
+                except OSError:
+                    pass
+            return spanned, archive_basename, "spanned"
+
+        for leftover in _collect_spanned_parts(out_dir, archive_basename):
+            try:
+                os.remove(leftover)
             except OSError:
                 pass
-        return spanned, archive_basename, "spanned"
-
-    # Clean up any partial spanned output before restoring single ZIP for concat split
-    for leftover in _collect_spanned_parts(out_dir, archive_basename):
-        try:
-            os.remove(leftover)
-        except OSError:
-            pass
-    if backup_zip and os.path.isfile(backup_zip):
-        os.replace(backup_zip, zip_path)
+        if backup_zip and os.path.isfile(backup_zip):
+            os.replace(backup_zip, zip_path)
 
     parts = split_file_concat_parts(zip_path, max_part_bytes, archive_basename)
+    # Remove the intermediate monolithic .zip once concat parts are written
+    if len(parts) > 1 and zip_path not in parts and os.path.isfile(zip_path):
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
     return parts, archive_basename, "concat"

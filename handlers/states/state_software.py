@@ -20,7 +20,7 @@ from telegram.ext import ContextTypes
 
 from core.database.monitoring import log_upload_failed, log_upload_success
 from core.state_manager import StateCache, async_clear_state, async_get_state, async_set_state, clear_state, set_state
-from core.task_utils import async_temp_dir, get_file_size_async, load_input_file, track_task
+from core.task_utils import async_temp_dir, bounded_large_upload, get_file_size_async, load_input_file, track_task
 from services.rate_limiter import user_action_lock
 from services.software_service import (
     MAX_ALLOWED_DOWNLOAD_BYTES,
@@ -337,17 +337,21 @@ async def _process_software_download(
             )
             try:
                 zip_name = os.path.basename(zip_file)
-                doc_input = await load_input_file(zip_file, filename=zip_name)
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=doc_input,
-                    filename=zip_name,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    write_timeout=180,
-                    read_timeout=120,
-                    connect_timeout=60,
-                )
+                async with bounded_large_upload():
+                    doc_input = await load_input_file(zip_file, filename=zip_name)
+                    try:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=doc_input,
+                            filename=zip_name,
+                            caption=caption,
+                            parse_mode="Markdown",
+                            write_timeout=180,
+                            read_timeout=120,
+                            connect_timeout=60,
+                        )
+                    finally:
+                        del doc_input
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text="✅ نرم‌افزار با موفقیت ارسال شد!\nبرای جستجوی برنامه‌ای دیگر، مجدداً نام آن را بنویسید.",
@@ -371,17 +375,21 @@ async def _process_software_download(
                 )
                 try:
                     part_name = os.path.basename(part_path)
-                    part_input = await load_input_file(part_path, filename=part_name)
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=part_input,
-                        filename=part_name,
-                        caption=part_caption,
-                        parse_mode="Markdown",
-                        write_timeout=180,
-                        read_timeout=120,
-                        connect_timeout=60,
-                    )
+                    async with bounded_large_upload():
+                        part_input = await load_input_file(part_path, filename=part_name)
+                        try:
+                            await context.bot.send_document(
+                                chat_id=chat_id,
+                                document=part_input,
+                                filename=part_name,
+                                caption=part_caption,
+                                parse_mode="Markdown",
+                                write_timeout=180,
+                                read_timeout=120,
+                                connect_timeout=60,
+                            )
+                        finally:
+                            del part_input
                 except Exception as e:
                     logger.exception("Failed sending part %d of %s: %s", part_idx, app_name, e)
                     await context.bot.send_message(

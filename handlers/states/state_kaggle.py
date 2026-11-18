@@ -22,7 +22,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import clear_state, set_state
-from core.task_utils import get_file_size_async, load_input_file
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file
 from core.database import (
     get_kaggle_downloads,
     increment_kaggle_downloads,
@@ -195,14 +195,18 @@ async def process_kaggle_download(
                 f"قسمت {i} از {total_parts} | حجم: {part_size_mb:.1f} مگابایت"
             )
             try:
-                doc_file = await load_input_file(part_path, filename=os.path.basename(part_path))
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=doc_file,
-                    filename=os.path.basename(part_path),
-                    caption=caption,
-                    parse_mode="Markdown",
-                )
+                async with bounded_large_upload():
+                    doc_file = await load_input_file(part_path, filename=os.path.basename(part_path))
+                    try:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=doc_file,
+                            filename=os.path.basename(part_path),
+                            caption=caption,
+                            parse_mode="Markdown",
+                        )
+                    finally:
+                        del doc_file
             except Exception:
                 logger.exception("Failed to send Kaggle part %s", part_path)
                 await context.bot.send_message(

@@ -3,6 +3,7 @@
 import asyncio
 from functools import lru_cache
 import json
+import logging
 import os
 import shutil
 import signal
@@ -10,6 +11,8 @@ import sys
 import time
 from typing import List, Optional
 from urllib.parse import urljoin
+
+logger = logging.getLogger(__name__)
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -147,25 +150,33 @@ def _get_singlefile_browser_executable() -> Optional[str]:
     return _find_singlefile_browser_executable_cached()
 
 
+def _search_web_once(query: str, max_results: int = 10) -> list:
+    results = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(query, max_results=max_results):
+            results.append({"title": r["title"], "url": r["href"]})
+    return results
+
+
 def search_web(query, max_results=10, max_attempts=3):
     """جستجو در وب؛ با چند بار تلاش برای خطای محدودیت/شبکه DuckDuckGo."""
     for attempt in range(max_attempts):
-        results = []
         try:
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=max_results):
-                    results.append({"title": r["title"], "url": r["href"]})
+            results = _search_web_once(query, max_results=max_results)
             if results:
                 return results
         except Exception as e:
-            print(f"Search Error (attempt {attempt + 1}/{max_attempts}): {e}")
+            logger.warning("Search Error (attempt %s/%s): %s", attempt + 1, max_attempts, e)
         if attempt < max_attempts - 1:
             time.sleep(1.0 * (attempt + 1))
     return []
 
 
+_ORIG_SEARCH_WEB = search_web
+
+
 async def async_search_web(query: str, max_results: int = 10, max_attempts: int = 3) -> list:
-    """Async cached web search with timeout protection."""
+    """Async cached web search with non-blocking retries and timeout protection."""
     import hashlib
     from services.cache_service import cache_get, cache_set
 
@@ -178,10 +189,37 @@ async def async_search_web(query: str, max_results: int = 10, max_attempts: int 
         if isinstance(cached, list) and cached:
             return cached
 
-    results = await asyncio.wait_for(
-        asyncio.to_thread(search_web, query, max_results, max_attempts),
-        timeout=35.0,
-    )
+    if search_web is not _ORIG_SEARCH_WEB:
+        results = await asyncio.wait_for(
+            asyncio.to_thread(search_web, query, max_results, max_attempts),
+            timeout=35.0,
+        )
+    else:
+        results = []
+        deadline = asyncio.get_running_loop().time() + 35.0
+        for attempt in range(max_attempts):
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.to_thread(_search_web_once, query, max_results),
+                    timeout=remaining,
+                )
+                if results:
+                    break
+            except asyncio.TimeoutError:
+                break
+            except Exception as e:
+                logger.warning(
+                    "Search Error (attempt %s/%s): %s", attempt + 1, max_attempts, e
+                )
+            if attempt < max_attempts - 1:
+                delay = min(1.0 * (attempt + 1), max(0.0, deadline - asyncio.get_running_loop().time()))
+                if delay <= 0:
+                    break
+                await asyncio.sleep(delay)
+
     if cache_key and results:
         await cache_set(cache_key, results, ttl_sec=900)
     return results

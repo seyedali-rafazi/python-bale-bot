@@ -13,13 +13,15 @@ from core.database import (
     get_music_downloads,
     increment_music_downloads,
     get_available_cloud_mb,
+    reserve_cloud_quota,
+    release_cloud_quota,
     record_cloud_upload,
     log_upload_success,
     log_upload_failed,
 )
 from core.state_manager import StateCache
 from core.limits import get_limit
-from core.task_utils import get_file_size_async, load_input_file, remove_file_async, track_task
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
 from services.rate_limiter import user_action_lock
 from services.music import (
     async_search_track,
@@ -44,9 +46,10 @@ from services.music_identify import (
 from services.youtube import async_download_youtube_audio
 
 try:
-    from services.parspack_s3 import upload_to_s3
+    from services.parspack_s3 import upload_to_s3, upload_to_s3_with_key
 except ImportError:
     upload_to_s3 = None
+    upload_to_s3_with_key = None
 
 # صف دانلود برای جلوگیری از فشار به سرور و محدودیت‌های یوتیوب
 MAX_MUSIC_CONCURRENT = 3
@@ -87,16 +90,16 @@ async def background_download_task(
 
         if file_path and await asyncio.to_thread(os.path.exists, file_path):
                 # =====================================
-                # چک فضای ابری برای آپلود به سرور
+                # چک و رزرو اتمیک فضای ابری برای آپلود به سرور
                 # =====================================
+                file_size_mb = 0.0
                 if destination == "server":
-                    user_storage_mb = await get_available_cloud_mb(chat_id)
-                    if user_storage_mb is None or user_storage_mb <= 0:
-                        user_storage_mb = 0
-
                     file_size_mb = round((await get_file_size_async(file_path)) / (1024 * 1024), 2)
-
-                    if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
+                    reserved = await reserve_cloud_quota(chat_id, file_size_mb)
+                    if not reserved:
+                        user_storage_mb = await get_available_cloud_mb(chat_id)
+                        if user_storage_mb is None or user_storage_mb <= 0:
+                            user_storage_mb = 0
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=(
@@ -125,20 +128,37 @@ async def background_download_task(
                 if destination == "server":
                     progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
 
-                    s3_url = await asyncio.to_thread(
-                        upload_to_s3,
-                        file_path,
-                        None,
-                        progress_dict,
-                    )
+                    try:
+                        if upload_to_s3_with_key is not None:
+                            s3_url, s3_key = await asyncio.to_thread(
+                                upload_to_s3_with_key,
+                                file_path,
+                                None,
+                                progress_dict,
+                            )
+                        else:
+                            s3_url = await asyncio.to_thread(
+                                upload_to_s3,
+                                file_path,
+                                None,
+                                progress_dict,
+                            )
+                            s3_key = None
+                    except Exception:
+                        await release_cloud_quota(chat_id, file_size_mb)
+                        raise
 
                     if s3_url:
-                        file_size_mb = round(
-                            (await get_file_size_async(file_path)) / (1024 * 1024), 2
-                        )
                         file_name = os.path.basename(file_path)
 
-                        await record_cloud_upload(chat_id, file_name, file_size_mb, s3_url)
+                        await record_cloud_upload(
+                            chat_id,
+                            file_name,
+                            file_size_mb,
+                            s3_url,
+                            s3_key=s3_key,
+                            quota_reserved=True,
+                        )
 
                         await context.bot.send_message(
                             chat_id=chat_id,
@@ -150,6 +170,7 @@ async def background_download_task(
                         return
 
                     else:
+                        await release_cloud_quota(chat_id, file_size_mb)
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text="❌ خطا در آپلود ابری.",
@@ -161,19 +182,23 @@ async def background_download_task(
                 # آپلود به بله
                 # ========================
                 else:
-                    audio_input = await load_input_file(
-                        file_path, filename=f"{safe_filename}.mp3"
-                    )
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=audio_input,
-                        title=title,
-                        performer=performer,
-                        filename=f"{safe_filename}.mp3",
-                        read_timeout=120,
-                        write_timeout=120,
-                        connect_timeout=60,
-                    )
+                    async with bounded_large_upload():
+                        audio_input = await load_input_file(
+                            file_path, filename=f"{safe_filename}.mp3"
+                        )
+                        try:
+                            await context.bot.send_audio(
+                                chat_id=chat_id,
+                                audio=audio_input,
+                                title=title,
+                                performer=performer,
+                                filename=f"{safe_filename}.mp3",
+                                read_timeout=120,
+                                write_timeout=120,
+                                connect_timeout=60,
+                            )
+                        finally:
+                            del audio_input
 
                     # ثبت آمار پس از موفقیت
                     await increment_music_downloads(chat_id)

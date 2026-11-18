@@ -23,8 +23,10 @@ from telethon.tl.types import (
     MessageMediaPhoto,
 )
 
+from telegram.error import RetryAfter
+
 from core.state_manager import StateCache
-from core.task_utils import get_file_size_async, load_input_file
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file
 from services.ai import get_telethon_client
 from services.telegram_public import MAX_MEDIA_BYTES
 
@@ -102,8 +104,16 @@ async def _send_downloaded(
 
     try:
         if isinstance(media, MessageMediaPhoto):
-            photo_file = await load_input_file(path, filename="photo.jpg")
-            await bot.send_photo(chat_id=chat_id, photo=photo_file, caption=cap)
+            async with bounded_large_upload():
+                photo_file = await load_input_file(path, filename="photo.jpg")
+                try:
+                    try:
+                        await bot.send_photo(chat_id=chat_id, photo=photo_file, caption=cap)
+                    except RetryAfter as exc:
+                        await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+                        await bot.send_photo(chat_id=chat_id, photo=photo_file, caption=cap)
+                finally:
+                    del photo_file
             return True
 
         if isinstance(media, DocMedia):
@@ -116,25 +126,36 @@ async def _send_downloaded(
                 isinstance(a, DocumentAttributeAudio) for a in (doc.attributes or [])
             )
             fname = _filename_from_document(doc)
-            media_file = await load_input_file(path, filename=fname)
 
-            if is_video:
-                await bot.send_video(
-                    chat_id=chat_id, video=media_file, caption=cap, filename=fname
-                )
-            elif is_voice:
-                await bot.send_voice(chat_id=chat_id, voice=media_file, caption=cap)
-            elif is_audio and not is_voice:
-                await bot.send_audio(
-                    chat_id=chat_id, audio=media_file, caption=cap, filename=fname
-                )
-            else:
-                await bot.send_document(
-                    chat_id=chat_id,
-                    document=media_file,
-                    filename=fname,
-                    caption=cap,
-                )
+            async def _send_doc_file(media_file):
+                if is_video:
+                    await bot.send_video(
+                        chat_id=chat_id, video=media_file, caption=cap, filename=fname
+                    )
+                elif is_voice:
+                    await bot.send_voice(chat_id=chat_id, voice=media_file, caption=cap)
+                elif is_audio and not is_voice:
+                    await bot.send_audio(
+                        chat_id=chat_id, audio=media_file, caption=cap, filename=fname
+                    )
+                else:
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=media_file,
+                        filename=fname,
+                        caption=cap,
+                    )
+
+            async with bounded_large_upload():
+                media_file = await load_input_file(path, filename=fname)
+                try:
+                    try:
+                        await _send_doc_file(media_file)
+                    except RetryAfter as exc:
+                        await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+                        await _send_doc_file(media_file)
+                finally:
+                    del media_file
             return True
     except Exception as e:
         logger.warning("Bale send failed for telethon media: %s", e)

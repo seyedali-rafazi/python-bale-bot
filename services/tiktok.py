@@ -345,7 +345,9 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
             logger.warning("[TikTok] yt-dlp failed (proxy=%s): %s", proxy or "none", err_msg.strip()[:300])
             return None
 
-        files = glob.glob(os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*"))
+        files = await asyncio.to_thread(
+            glob.glob, os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.*")
+        )
         return files[0] if files else None
 
     except Exception as e:
@@ -383,7 +385,7 @@ async def _try_tikwm_download(
     if not downloaded and proxy:
         downloaded = await _download_stream_to_file(video_url, output_path, proxy=None)
 
-    return bool(downloaded and os.path.exists(output_path))
+    return bool(downloaded and await asyncio.to_thread(os.path.exists, output_path))
 
 
 async def download_tiktok_video(url: str) -> str | None:
@@ -404,7 +406,7 @@ async def download_tiktok_video(url: str) -> str | None:
     # ۱. روش مستقیم از TikWM API (بدون معطلی سالور)
     try:
         if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=False):
-            logger.info("[TikTok] Download completed successfully via TikWM API (%s bytes)", os.path.getsize(output_path))
+            logger.info("[TikTok] Download completed successfully via TikWM API (%s bytes)", await asyncio.to_thread(os.path.getsize, output_path))
             return output_path
     except Exception as e:
         logger.warning("[TikTok] TikWM direct download pipeline exception: %s", e)
@@ -423,10 +425,10 @@ async def download_tiktok_video(url: str) -> str | None:
                 downloaded = await _download_stream_to_file(
                     dl_url, output_path, proxy=None, referer=referer
                 )
-            if downloaded and os.path.exists(output_path):
+            if downloaded and await asyncio.to_thread(os.path.exists, output_path):
                 logger.info(
                     "[TikTok] Download completed successfully via SaveTik/TikVid (%s bytes)",
-                    os.path.getsize(output_path),
+                    await asyncio.to_thread(os.path.getsize, output_path),
                 )
                 return output_path
     except Exception as e:
@@ -435,7 +437,7 @@ async def download_tiktok_video(url: str) -> str | None:
     # ۳. بای‌پاس TikWM با Byparr / FlareSolverr
     try:
         if await _try_tikwm_download(clean_url, output_path, proxy=proxy, allow_solver=True):
-            logger.info("[TikTok] Download completed via Byparr/FlareSolverr (%s bytes)", os.path.getsize(output_path))
+            logger.info("[TikTok] Download completed via Byparr/FlareSolverr (%s bytes)", await asyncio.to_thread(os.path.getsize, output_path))
             return output_path
     except Exception as e:
         logger.warning("[TikTok] TikWM solver download pipeline exception: %s", e)

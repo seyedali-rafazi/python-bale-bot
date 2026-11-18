@@ -77,6 +77,7 @@ async def _send_latest_via_telethon(bot, chat_id: str, channel_id: str) -> bool:
     for msg in reversed(messages):
         if msg and await telegram_telethon.send_message_via_bot(bot, chat_id, msg):
             any_sent = True
+            await asyncio.sleep(0.25)
     return any_sent
 
 
@@ -113,6 +114,7 @@ async def _send_latest_via_scrape(bot, chat_id: str, channel_id: str) -> bool:
     for parsed in parsed_list:
         if await send_parsed_message(bot, chat_id, parsed):
             any_sent = True
+            await asyncio.sleep(0.25)
     return any_sent
 
 

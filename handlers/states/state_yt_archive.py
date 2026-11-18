@@ -23,18 +23,23 @@ async def handle_yt_archive_search_state(
     text: str,
     chat_id: str,
 ):
-    if await is_search_query_blocked(text):
+    clean_q = (text or "").strip()
+    if len(clean_q) < 2:
+        await update.message.reply_text("❌ لطفاً حداقل ۲ کاراکتر برای جستجو وارد کنید.")
+        return
+
+    if await is_search_query_blocked(clean_q):
         await update.message.reply_text(MSG_BLOCKED_SEARCH)
         return
 
     if step == "waiting_yt_archive_search_title":
-        results = await search_archive_by_title(text)
+        results = await search_archive_by_title(clean_q, limit=36)
         empty_msg = "نتیجه‌ای برای این عنوان در کش مشترک پیدا نشد."
     else:
-        if not await check_channel_allowed(text):
+        if not await check_channel_allowed(clean_q):
             await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
-        results = await search_archive_by_channel(text)
+        results = await search_archive_by_channel(clean_q, limit=36)
         empty_msg = "نتیجه‌ای برای این کانال در کش مشترک پیدا نشد."
 
     if not results:

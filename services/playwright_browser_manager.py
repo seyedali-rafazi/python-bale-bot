@@ -5,9 +5,12 @@ Reuses a single browser instance across multiple searches.
 """
 
 import asyncio
+import logging
 import os
 import time
 from typing import Optional, Any
+
+logger = logging.getLogger(__name__)
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Playwright
 except ImportError:
@@ -45,7 +48,7 @@ class PlaywrightBrowserManager:
             return False
 
     async def _restart_browser(self):
-        print("🔄 Restarting Playwright Browser...")
+        logger.info("Restarting Playwright Browser...")
         await self.cleanup()
         self._browser = None
         self._playwright = None
@@ -53,8 +56,9 @@ class PlaywrightBrowserManager:
     async def force_restart(self):
         async with self._init_lock:
             if self._active_context_ids and self._is_browser_alive():
-                print(
-                    f"⚠️ Skipping force_restart while {len(self._active_context_ids)} context(s) active"
+                logger.warning(
+                    "Skipping force_restart while %s context(s) active",
+                    len(self._active_context_ids),
                 )
                 return
             self._usage_count = 0
@@ -63,7 +67,7 @@ class PlaywrightBrowserManager:
     async def _initialize_locked(self):
         if self._browser is not None:
             if not self._is_browser_alive():
-                print("⚠️ Browser crashed, restarting...")
+                logger.warning("Browser crashed, restarting...")
                 await self._restart_browser()
 
             elif self._active_context_ids:
@@ -71,8 +75,9 @@ class PlaywrightBrowserManager:
                 pass
 
             elif self._usage_count >= self._max_usages_before_restart:
-                print(
-                    f"♻️ Browser reached {self._usage_count} uses. Force restarting to free RAM..."
+                logger.info(
+                    "Browser reached %s uses. Force restarting to free RAM...",
+                    self._usage_count,
                 )
                 await self._restart_browser()
 
@@ -82,16 +87,19 @@ class PlaywrightBrowserManager:
                 > self._max_browser_age_sec
             ):
                 age = time.time() - self._browser_started_at
-                print(
-                    f"♻️ Browser age {age:.0f}s exceeds {self._max_browser_age_sec}s, restarting..."
+                logger.info(
+                    "Browser age %.0fs exceeds %ss, restarting...",
+                    age,
+                    self._max_browser_age_sec,
                 )
                 await self._restart_browser()
 
             else:
                 time_since_use = time.time() - self._last_context_time
                 if time_since_use > self._context_timeout:
-                    print(
-                        f"⚠️ Browser idle for {time_since_use:.0f}s, restarting..."
+                    logger.info(
+                        "Browser idle for %.0fs, restarting...",
+                        time_since_use,
                     )
                     await self._restart_browser()
 
@@ -122,9 +130,9 @@ class PlaywrightBrowserManager:
                 self._usage_count = 0
                 self._last_context_time = time.time()
                 self._browser_started_at = time.time()
-                print("✅ Browser initialized")
+                logger.info("Browser initialized")
             except Exception as e:
-                print(f"❌ Browser launch failed: {e}")
+                logger.warning("Browser launch failed: %s", e)
                 self._browser = None
                 if self._playwright:
                     await self._playwright.stop()
@@ -175,8 +183,11 @@ class PlaywrightBrowserManager:
                 return context
 
             except Exception as e:
-                print(
-                    f"❌ Context creation failed (Attempt {attempt + 1}/{max_retries}): {e}"
+                logger.warning(
+                    "Context creation failed (Attempt %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    e,
                 )
                 async with self._init_lock:
                     if not self._active_context_ids or not self._is_browser_alive():
@@ -189,7 +200,7 @@ class PlaywrightBrowserManager:
             if self._browser:
                 await self._browser.close()
         except Exception as e:
-            print(f"Error closing browser: {e}")
+            logger.debug("Error closing browser: %s", e)
         finally:
             self._browser = None
 
@@ -197,7 +208,7 @@ class PlaywrightBrowserManager:
             if self._playwright:
                 await self._playwright.stop()
         except Exception as e:
-            print(f"Error closing playwright: {e}")
+            logger.debug("Error closing playwright: %s", e)
         finally:
             self._playwright = None
 

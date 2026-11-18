@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_vip_expire
     ON users(vip_expire_date)
     WHERE is_vip = 1;
+CREATE INDEX IF NOT EXISTS idx_users_is_vip_active
+    ON users(user_id)
+    WHERE is_vip = 1;
 CREATE TABLE IF NOT EXISTS youtube_cache (
     id BIGSERIAL PRIMARY KEY,
     video_id TEXT UNIQUE NOT NULL,
@@ -73,6 +76,12 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_archive_channel_has_files
 CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_group_has_files
     ON youtube_cache(channel_name, (COALESCE(NULLIF(TRIM(yt_video_id), ''), substr(video_id, 1, 11))))
     WHERE file_ids IS NOT NULL AND file_ids != '[]';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_has_files_views
+    ON youtube_cache(view_count DESC)
+    WHERE file_ids IS NOT NULL AND file_ids != '[]';
+CREATE INDEX IF NOT EXISTS idx_yt_cache_has_files_only
+    ON youtube_cache(id)
+    WHERE file_ids IS NOT NULL AND file_ids != '[]';
 CREATE TABLE IF NOT EXISTS instagram_explore (
     id SERIAL PRIMARY KEY,
     file_id TEXT UNIQUE
@@ -96,6 +105,7 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     file_name TEXT,
     file_size_mb DOUBLE PRECISION,
     download_link TEXT,
+    s3_key TEXT,
     upload_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id);
@@ -176,6 +186,7 @@ async def init_db():
 
     async with pool.acquire() as conn:
         await conn.execute(schema_sql)
+        await conn.execute("ALTER TABLE cloud_files ADD COLUMN IF NOT EXISTS s3_key TEXT")
         await _ensure_float_cloud_columns(conn)
         await _ensure_trigram_indexes(conn)
         await conn.execute("DROP TABLE IF EXISTS user_youtube_archive")

@@ -10,9 +10,11 @@ from typing import Optional
 import aiohttp
 from bs4 import Tag
 from telegram import Bot
+from telegram.error import RetryAfter
 
 from core.task_utils import (
     FileTooLargeError,
+    bounded_large_upload,
     load_input_file,
     remove_file_async,
     stream_aiohttp_to_file,
@@ -284,19 +286,32 @@ async def _send_item(
             read_timeout=120,
             write_timeout=120,
         )
-        input_file = await load_input_file(temp_path, filename=item.filename)
-        if item.kind == "photo":
-            await bot.send_photo(photo=input_file, **send_kwargs)
-        elif item.kind == "video":
-            await bot.send_video(video=input_file, **send_kwargs)
-        elif item.kind == "voice":
-            await bot.send_voice(voice=input_file, **send_kwargs)
-        elif item.kind == "audio":
-            await bot.send_audio(audio=input_file, **send_kwargs)
-        else:
-            await bot.send_document(
-                document=input_file, filename=item.filename, **send_kwargs
-            )
+
+        async def _send_loaded(input_file):
+            if item.kind == "photo":
+                await bot.send_photo(photo=input_file, **send_kwargs)
+            elif item.kind == "video":
+                await bot.send_video(video=input_file, **send_kwargs)
+            elif item.kind == "voice":
+                await bot.send_voice(voice=input_file, **send_kwargs)
+            elif item.kind == "audio":
+                await bot.send_audio(audio=input_file, **send_kwargs)
+            else:
+                await bot.send_document(
+                    document=input_file, filename=item.filename, **send_kwargs
+                )
+
+        async with bounded_large_upload():
+            input_file = await load_input_file(temp_path, filename=item.filename)
+            try:
+                try:
+                    await _send_loaded(input_file)
+                except RetryAfter as exc:
+                    wait = max(1.0, float(exc.retry_after)) + 0.5
+                    await asyncio.sleep(wait)
+                    await _send_loaded(input_file)
+            finally:
+                del input_file
         return True, None
     except Exception:
         return False, "send_failed"

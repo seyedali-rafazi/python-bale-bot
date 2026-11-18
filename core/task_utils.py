@@ -14,6 +14,17 @@ from typing import AsyncIterator, Coroutine, Optional, Set
 logger = logging.getLogger(__name__)
 
 _tracked_tasks: Set[asyncio.Task] = set()
+MAX_CONCURRENT_LARGE_UPLOADS = max(
+    2, int(os.getenv("MAX_CONCURRENT_LARGE_UPLOADS", "8"))
+)
+_large_upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_LARGE_UPLOADS)
+
+
+@asynccontextmanager
+async def bounded_large_upload():
+    """Limit concurrent in-memory InputFile buffers for large media uploads."""
+    async with _large_upload_semaphore:
+        yield
 
 
 def _on_task_done(task: asyncio.Task) -> None:

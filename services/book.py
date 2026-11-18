@@ -433,19 +433,19 @@ async def _download_url_async(
             async with client.stream("GET", download_url) as stream:
                 if stream.status_code != 200:
                     logger.info("Download URL returned HTTP %d: %s", stream.status_code, download_url)
-                    _safe_unlink(dest_path)
+                    await asyncio.to_thread(_safe_unlink, dest_path)
                     return False
 
                 content_type = stream.headers.get("content-type", "").lower()
                 if "text/html" in content_type or "application/xhtml+xml" in content_type:
                     logger.warning("Download URL returned HTML content: %s", download_url)
-                    _safe_unlink(dest_path)
+                    await asyncio.to_thread(_safe_unlink, dest_path)
                     return False
 
                 cl_header = stream.headers.get("content-length")
                 if cl_header and cl_header.isdigit() and int(cl_header) > MAX_BOOK_BYTES:
                     logger.warning("File too large via Content-Length (>50 MB): %s", download_url)
-                    _safe_unlink(dest_path)
+                    await asyncio.to_thread(_safe_unlink, dest_path)
                     return False
 
                 downloaded = 0

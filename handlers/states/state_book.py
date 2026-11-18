@@ -21,7 +21,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import StateCache, clear_state
-from core.task_utils import async_temp_dir, get_file_size_async, load_input_file
+from core.task_utils import async_temp_dir, bounded_large_upload, get_file_size_async, load_input_file
 from core.database import log_upload_success, log_upload_failed
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 from services.rate_limiter import user_action_lock
@@ -213,14 +213,18 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             )
             try:
                 book_name = os.path.basename(file_path)
-                book_input = await load_input_file(file_path, filename=book_name)
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=book_input,
-                    filename=book_name,
-                    caption=caption,
-                    parse_mode="Markdown",
-                )
+                async with bounded_large_upload():
+                    book_input = await load_input_file(file_path, filename=book_name)
+                    try:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=book_input,
+                            filename=book_name,
+                            caption=caption,
+                            parse_mode="Markdown",
+                        )
+                    finally:
+                        del book_input
                 await context.bot.send_message(
                     chat_id,
                     "✅ کتاب با موفقیت ارسال شد!\n"

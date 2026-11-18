@@ -2,8 +2,11 @@
 
 import aiohttp
 import asyncio
+import logging
 import urllib.parse
 from services.http_client import get_http_session
+
+logger = logging.getLogger(__name__)
 
 
 def get_wmo_description(code):
@@ -99,5 +102,5 @@ async def get_weather_forecast(city_name: str) -> str:
     except asyncio.TimeoutError:
         return "❌ ارتباط با سرور آب و هوا زمان‌بر شد."
     except Exception as e:
-        print(f"Weather error: {e}")
+        logger.warning("Weather error: %s", e)
         return "❌ خطایی در دریافت اطلاعات رخ داد."

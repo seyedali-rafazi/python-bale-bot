@@ -77,18 +77,17 @@ def _normalize_channel(channel: str | None) -> str | None:
     return channel.strip()[:200]
 
 
-async def _invalidate_archive_summary_cache() -> None:
+async def _invalidate_archive_summary_cache(*, include_top: bool = True) -> None:
     from services.cache_service import cache_delete_many, cache_set
 
-    await cache_delete_many(
-        [
-            "yt_archive:count_global",
-            "yt_archive:count_channels",
-            "yt_archive:channels_p0",
-            "yt_archive:top:4",
-            "yt_archive:top:10",
-        ]
-    )
+    keys = [
+        "yt_archive:count_global",
+        "yt_archive:count_channels",
+        "yt_archive:channels_p0",
+    ]
+    if include_top:
+        keys.extend(["yt_archive:top:4", "yt_archive:top:10"])
+    await cache_delete_many(keys)
     await cache_set("yt_archive:channels_ver", str(int(time.time() * 1000)), ttl_sec=86400)
 
 
@@ -222,7 +221,7 @@ async def save_cached_video(
     from services.cache_service import cache_set
 
     await cache_set(f"yt_video:{cache_key}", file_ids, ttl_sec=86400 * 7)
-    await _invalidate_archive_summary_cache()
+    await _invalidate_archive_summary_cache(include_top=False)
 
 
 async def update_cache_metadata(

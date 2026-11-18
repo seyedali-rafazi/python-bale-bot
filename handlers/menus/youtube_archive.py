@@ -302,7 +302,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not await check_channel_allowed(channel_name):
             await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
             return
-        context.user_data["ytarc_channel"] = channel_name
+        _set_ytarc_ui(user_id, channel=channel_name)
         await _show_channel_videos(update, context, channel_name, page=0)
         return
 
@@ -341,7 +341,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         if len(variants) == 1:
-            context.user_data["ytarc_pending_rowid"] = variants[0]["id"]
+            _set_ytarc_ui(user_id, pending_rowid=variants[0]["id"])
             await _send_archive_video(update, context, user_id, variants[0]["id"])
             return
 
@@ -362,7 +362,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
             for v in variants
         ]
-        vid_page = context.user_data.get("ytarc_vid_page", 0)
+        vid_page = _get_ytarc_ui(user_id).get("vid_page", 0)
         enc = _encode_channel(channel_name)
         keyboard.append(
             [
@@ -477,6 +477,18 @@ async def _send_archive_video(
 
 
 _backfill_inflight = StateCache(max_capacity=500, default_ttl=600.0)
+_ytarc_ui_state = StateCache(max_capacity=5000, default_ttl=3600.0)
+
+
+def _get_ytarc_ui(user_id: str) -> dict:
+    return _ytarc_ui_state.get(str(user_id)) or {}
+
+
+def _set_ytarc_ui(user_id: str, **updates) -> None:
+    key = str(user_id)
+    cur = dict(_ytarc_ui_state.get(key) or {})
+    cur.update(updates)
+    _ytarc_ui_state[key] = cur
 
 
 def _schedule_missing_upload_date_backfill(videos: list) -> None:
@@ -544,7 +556,9 @@ async def _show_channel_videos(
             ]
         )
 
-    context.user_data["ytarc_vid_page"] = page
+    uid_key = str(query.from_user.id) if query and query.from_user else ""
+    if uid_key:
+        _set_ytarc_ui(uid_key, vid_page=page)
 
     nav = []
     enc = _encode_channel(channel_name)

@@ -16,7 +16,7 @@ import asyncio
 from core.state_manager import StateCache, get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.database import log_upload_success
-from core.task_utils import load_input_file, remove_file_async, remove_files_async, track_task
+from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, remove_files_async, track_task
 import time
 
 # Try to import rembg, but make it optional
@@ -602,13 +602,17 @@ async def background_video_to_gif(
             if gif_path and await asyncio.to_thread(os.path.exists, gif_path):
                 await status_msg.edit_text("📤 تبدیل با موفقیت انجام شد! در حال ارسال...")
                 gif_name = f"video_{timestamp}.gif"
-                gif_input = await load_input_file(gif_path, filename=gif_name)
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=gif_input,
-                    filename=gif_name,
-                    caption="✅ ویدیوی شما به GIF تبدیل شد!",
-                )
+                async with bounded_large_upload():
+                    gif_input = await load_input_file(gif_path, filename=gif_name)
+                    try:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=gif_input,
+                            filename=gif_name,
+                            caption="✅ ویدیوی شما به GIF تبدیل شد!",
+                        )
+                    finally:
+                        del gif_input
                 
                 await log_upload_success("image_processing", chat_id)
                 
@@ -680,7 +684,7 @@ async def convert_video_to_gif(video_path: str, chat_id: str, timestamp: int, is
     ]
     
     try:
-        if await _run_ffmpeg(cmd, timeout_sec=180.0) and os.path.exists(gif_path):
+        if await _run_ffmpeg(cmd, timeout_sec=180.0) and await asyncio.to_thread(os.path.exists, gif_path):
             return gif_path
     except Exception as e:
         print(f"ffmpeg gif conversion error: {e}")
@@ -782,15 +786,19 @@ async def background_extract_audio(
             if mp3_path and await asyncio.to_thread(os.path.exists, mp3_path):
                 await status_msg.edit_text("📤 استخراج صوتی تکمیل شد! در حال ارسال...")
                 mp3_name = f"audio_{timestamp}.mp3"
-                mp3_input = await load_input_file(mp3_path, filename=mp3_name)
-                await context.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=mp3_input,
-                    filename=mp3_name,
-                    title="استخراج شده از ویدیو",
-                    performer="ربات پردازش رسانه",
-                    caption="✅ صدای استخراج شده با موفقیت آماده شد!",
-                )
+                async with bounded_large_upload():
+                    mp3_input = await load_input_file(mp3_path, filename=mp3_name)
+                    try:
+                        await context.bot.send_audio(
+                            chat_id=chat_id,
+                            audio=mp3_input,
+                            filename=mp3_name,
+                            title="استخراج شده از ویدیو",
+                            performer="ربات پردازش رسانه",
+                            caption="✅ صدای استخراج شده با موفقیت آماده شد!",
+                        )
+                    finally:
+                        del mp3_input
                 
                 await log_upload_success("image_processing", chat_id)
                 
@@ -839,7 +847,7 @@ async def extract_audio_from_video(media_path: str, chat_id: str, timestamp: int
     ]
     
     try:
-        if await _run_ffmpeg(cmd, timeout_sec=180.0) and os.path.exists(mp3_path):
+        if await _run_ffmpeg(cmd, timeout_sec=180.0) and await asyncio.to_thread(os.path.exists, mp3_path):
             return mp3_path
     except Exception as e:
         print(f"ffmpeg audio extraction error: {e}")

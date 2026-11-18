@@ -3,8 +3,11 @@
 import re
 import html
 import asyncio
+import logging
 from typing import List, Optional, Dict
 from urllib.parse import quote, urlparse
+
+logger = logging.getLogger(__name__)
 
 try:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -64,12 +67,14 @@ class PinterestService:
             self._parse_image_urls, html_text, max_results
         )
 
-        print(
-            f"Pinterest Playwright extracted {len(results)} unique high-quality images for query={query}"
+        logger.info(
+            "Pinterest Playwright extracted %s unique high-quality images for query=%s",
+            len(results),
+            query,
         )
 
         if results:
-            print("Pinterest sample images:", results[:5])
+            logger.debug("Pinterest sample images: %s", results[:5])
 
         return results
 
@@ -136,9 +141,11 @@ class PinterestService:
                     }
                 )
 
-                print(
-                    f"Pinterest Playwright opening: {search_url} "
-                    f"(attempt {attempt + 1}/{max_retries})"
+                logger.info(
+                    "Pinterest Playwright opening: %s (attempt %s/%s)",
+                    search_url,
+                    attempt + 1,
+                    max_retries,
                 )
 
                 await page.goto(
@@ -153,7 +160,7 @@ class PinterestService:
                         await page.mouse.wheel(0, 2000)
                         await page.wait_for_timeout(800)
                 except Exception as wait_err:
-                    print(f"Wait/scroll error (non-critical): {wait_err}")
+                    logger.debug("Wait/scroll error (non-critical): %s", wait_err)
 
                 content = await page.content()
                 if len(content) > _MAX_HTML_FOR_PARSE:
@@ -161,9 +168,11 @@ class PinterestService:
                 return content
 
             except PlaywrightTimeoutError as timeout_err:
-                print(
-                    f"Pinterest timeout for query={query} "
-                    f"(attempt {attempt + 1}): {timeout_err}"
+                logger.warning(
+                    "Pinterest timeout for query=%s (attempt %s): %s",
+                    query,
+                    attempt + 1,
+                    timeout_err,
                 )
                 if attempt < max_retries - 1:
                     if allow_restart:
@@ -173,9 +182,11 @@ class PinterestService:
                 return None
 
             except Exception as err:
-                print(
-                    f"Pinterest error for query={query} "
-                    f"(attempt {attempt + 1}): {err}"
+                logger.warning(
+                    "Pinterest error for query=%s (attempt %s): %s",
+                    query,
+                    attempt + 1,
+                    err,
                 )
                 if attempt < max_retries - 1:
                     if allow_restart:

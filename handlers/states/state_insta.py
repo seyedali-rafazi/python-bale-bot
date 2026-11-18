@@ -4,20 +4,22 @@ import os
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from core.task_utils import get_file_size_async, load_input_file, remove_file_async, track_task
-from services.instagram import download_instagram
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
+from services.instagram import async_download_instagram
 from services.rate_limiter import user_action_lock
 from core.database import (
     get_available_cloud_mb,
+    reserve_cloud_quota,
+    release_cloud_quota,
     record_cloud_upload,
     log_upload_success,
     log_upload_failed,
 )
 
 try:
-    from services.parspack_s3 import upload_to_s3
+    from services.parspack_s3 import upload_to_s3_with_key
 except ImportError:
-    upload_to_s3 = None
+    upload_to_s3_with_key = None
 
 INSTA_SEMAPHORE = asyncio.Semaphore(5)
 
@@ -61,19 +63,16 @@ async def background_download_insta_link(
     file_path = None
     try:
         async with INSTA_SEMAPHORE:
-            file_path = await asyncio.wait_for(
-                asyncio.to_thread(download_instagram, link), timeout=60.0
-            )
+            file_path = await async_download_instagram(link, timeout_sec=60.0)
 
         if file_path and await asyncio.to_thread(os.path.exists, file_path):
             if destination == "server":
-                user_storage_mb = await get_available_cloud_mb(chat_id)
-                if user_storage_mb is None or user_storage_mb <= 0:
-                    user_storage_mb = 0
-
                 file_size_mb = round((await get_file_size_async(file_path)) / (1024 * 1024), 2)
-
-                if user_storage_mb <= 0 or file_size_mb > user_storage_mb:
+                reserved = await reserve_cloud_quota(chat_id, file_size_mb)
+                if not reserved:
+                    user_storage_mb = await get_available_cloud_mb(chat_id)
+                    if user_storage_mb is None or user_storage_mb <= 0:
+                        user_storage_mb = 0
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text=(
@@ -95,20 +94,28 @@ async def background_download_insta_link(
             if destination == "server":
                 progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
 
-                s3_url = await asyncio.to_thread(
-                    upload_to_s3,
-                    file_path,
-                    None,
-                    progress_dict,
-                )
+                try:
+                    s3_url, s3_key = await asyncio.to_thread(
+                        upload_to_s3_with_key,
+                        file_path,
+                        None,
+                        progress_dict,
+                    )
+                except Exception:
+                    await release_cloud_quota(chat_id, file_size_mb)
+                    raise
 
                 if s3_url:
-                    file_size_mb = round(
-                        (await get_file_size_async(file_path)) / (1024 * 1024), 2
-                    )
                     file_name = os.path.basename(file_path)
 
-                    await record_cloud_upload(chat_id, file_name, file_size_mb, s3_url)
+                    await record_cloud_upload(
+                        chat_id,
+                        file_name,
+                        file_size_mb,
+                        s3_url,
+                        s3_key=s3_key,
+                        quota_reserved=True,
+                    )
 
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -121,6 +128,7 @@ async def background_download_insta_link(
                     except Exception:
                         pass
                 else:
+                    await release_cloud_quota(chat_id, file_size_mb)
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text="❌ خطا در آپلود ابری.",
@@ -128,19 +136,20 @@ async def background_download_insta_link(
                     await log_upload_failed("instagram", chat_id)
 
             else:
-                try:
+                async with bounded_large_upload():
                     media_input = await load_input_file(file_path)
-                    if file_path.endswith(".mp4"):
-                        await context.bot.send_video(
-                            chat_id=chat_id, video=media_input
-                        )
-                    else:
-                        await context.bot.send_document(
-                            chat_id=chat_id, document=media_input
-                        )
-                    await log_upload_success("instagram", chat_id)
-                finally:
-                    pass
+                    try:
+                        if file_path.endswith(".mp4"):
+                            await context.bot.send_video(
+                                chat_id=chat_id, video=media_input
+                            )
+                        else:
+                            await context.bot.send_document(
+                                chat_id=chat_id, document=media_input
+                            )
+                    finally:
+                        del media_input
+                await log_upload_success("instagram", chat_id)
 
                 try:
                     await processing_msg.delete()

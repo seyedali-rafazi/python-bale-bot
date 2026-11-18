@@ -1,13 +1,15 @@
 # services/parspack_s3.py
 
 
+import logging
 import os
-import sys
 import threading
 import boto3
 from botocore.client import Config
 from botocore.exceptions import NoCredentialsError
 from boto3.s3.transfer import TransferConfig
+
+logger = logging.getLogger(__name__)
 
 ARVAN_ENDPOINT = os.getenv("ARVAN_ENDPOINT", "https://s3.ir-thr-at1.arvanstorage.ir")
 ARVAN_ACCESS_KEY = os.getenv("ARVAN_ACCESS_KEY", "YOUR_ACCESS_KEY")
@@ -77,11 +79,29 @@ class ProgressPercentage(object):
                 )
 
 
-def upload_to_s3(
+def generate_presigned_url_for_key(
+    object_name: str, expires_in: int = 10800
+) -> str | None:
+    """Generate a fresh presigned download URL for an existing S3 object key."""
+    if not object_name:
+        return None
+    try:
+        s3 = _get_s3_client()
+        return s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": ARVAN_BUCKET, "Key": object_name},
+            ExpiresIn=expires_in,
+        )
+    except Exception as e:
+        logger.warning("S3 presign error for %s: %s", object_name, e)
+        return None
+
+
+def upload_to_s3_with_key(
     file_path: str, object_name: str = None, progress_dict: dict = None
-) -> str:
+) -> tuple[str | None, str | None]:
     """
-    فایل را در سرور ابری آپلود کرده و یک لینک دانلود موقت برمی‌گرداند.
+    فایل را در سرور ابری آپلود کرده و (presigned_url, object_name) برمی‌گرداند.
     """
     if object_name is None:
         object_name = os.path.basename(file_path)
@@ -110,14 +130,26 @@ def upload_to_s3(
             ExpiresIn=10800,
         )
 
-        return presigned_url
+        return presigned_url, object_name
 
     except FileNotFoundError:
-        print("\n❌ The file was not found")
-        return None
+        logger.warning("S3 upload file not found: %s", file_path)
+        return None, None
     except NoCredentialsError:
-        print("\n❌ Credentials not available")
-        return None
+        logger.error("S3 credentials not available")
+        return None, None
     except Exception as e:
-        print(f"\n❌ S3 Upload Error: {e}")
-        return None
+        logger.warning("S3 Upload Error: %s", e)
+        return None, None
+
+
+def upload_to_s3(
+    file_path: str, object_name: str = None, progress_dict: dict = None
+) -> str:
+    """
+    فایل را در سرور ابری آپلود کرده و یک لینک دانلود موقت برمی‌گرداند.
+    """
+    presigned_url, _ = upload_to_s3_with_key(
+        file_path, object_name=object_name, progress_dict=progress_dict
+    )
+    return presigned_url

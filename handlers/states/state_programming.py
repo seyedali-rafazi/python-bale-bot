@@ -18,7 +18,7 @@ from telegram.ext import ContextTypes
 
 
 from core.state_manager import clear_state
-from core.task_utils import load_input_file, remove_file_async, stream_aiohttp_to_file, track_task
+from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, stream_aiohttp_to_file, track_task
 from services.http_client import get_http_session
 
 # کنترل تعداد درخواست‌های همزمان برای جلوگیری از پر شدن منابع و مسدود شدن IP
@@ -47,15 +47,19 @@ async def background_download(chat_id, bot, download_url, filename, caption):
                     )
 
                     # بارگذاری ناهمگام فایل از روی هارد و ارسال به بله
-                    doc_input = await load_input_file(temp_filepath, filename=safe_name)
-                    await bot.send_document(
-                        chat_id=chat_id_str,
-                        document=doc_input,
-                        filename=safe_name,
-                        caption=caption,
-                        read_timeout=120,
-                        write_timeout=120,
-                    )
+                    async with bounded_large_upload():
+                        doc_input = await load_input_file(temp_filepath, filename=safe_name)
+                        try:
+                            await bot.send_document(
+                                chat_id=chat_id_str,
+                                document=doc_input,
+                                filename=safe_name,
+                                caption=caption,
+                                read_timeout=120,
+                                write_timeout=120,
+                            )
+                        finally:
+                            del doc_input
                 else:
                     await bot.send_message(
                         chat_id_str,

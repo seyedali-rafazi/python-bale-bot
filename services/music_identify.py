@@ -1,6 +1,7 @@
 # services/music_identify.py
 
 import asyncio
+import logging
 import os
 import subprocess
 from typing import Optional, Tuple
@@ -8,6 +9,8 @@ from typing import Optional, Tuple
 import aiohttp
 
 from services.http_client import get_http_session
+
+logger = logging.getLogger(__name__)
 
 IDENTIFY_DIR = os.path.join("downloads", "music_identify")
 MAX_DURATION_SEC = 180  # 3 minutes
@@ -87,7 +90,7 @@ def probe_media_duration_sec(file_path: str) -> Optional[float]:
         value = float(result.stdout.strip())
         return value if value > 0 else None
     except Exception as e:
-        print(f"ffprobe duration error: {e}")
+        logger.warning("ffprobe duration error: %s", e)
         return None
 
 
@@ -123,7 +126,7 @@ async def async_probe_media_duration_sec(file_path: str) -> Optional[float]:
         value = float(stdout_b.decode("utf-8", errors="replace").strip())
         return value if value > 0 else None
     except Exception as e:
-        print(f"ffprobe duration error: {e}")
+        logger.warning("ffprobe duration error: %s", e)
         return None
 
 
@@ -196,7 +199,7 @@ async def async_extract_audio_to_mp3(
             except Exception:
                 pass
             return False
-        return proc.returncode == 0 and os.path.exists(output_path)
+        return proc.returncode == 0 and await asyncio.to_thread(os.path.exists, output_path)
     except Exception as e:
         print(f"ffmpeg extract audio error: {e}")
         return False
@@ -253,7 +256,7 @@ async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
         )
         return _parse_shazam_result(out)
     except Exception as e:
-        print(f"Shazam recognize error: {e}")
+        logger.warning("Shazam recognize error: %s", e)
         return None
 
 
@@ -300,7 +303,7 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
             parsed["shazam_url"] = result["song_link"]
         return parsed
     except Exception as e:
-        print(f"AudD recognize error: {e}")
+        logger.warning("AudD recognize error: %s", e)
         return None
 
 
