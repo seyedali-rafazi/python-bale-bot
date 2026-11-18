@@ -21,7 +21,6 @@ from core.database import (
     is_vip,
     get_tt_downloads,
     increment_tt_downloads,
-    log_upload_success,
     log_upload_failed,
 )
 from core.limits import get_limit
@@ -40,9 +39,11 @@ def _strip_hashtags(text: str) -> str:
 
 
 async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
-    vip = await is_vip(user_id)  # اضافه شدن await
+    vip, current_dl = await asyncio.gather(
+        is_vip(user_id),
+        get_tt_downloads(user_id),
+    )
     max_dl = get_limit("tiktok_download", vip)
-    current_dl = await get_tt_downloads(user_id)  # اضافه شدن await
 
     if current_dl >= max_dl:
         await update.message.reply_text(
@@ -51,6 +52,13 @@ async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
         return False
 
     return True
+
+
+async def _safe_edit_text(msg, text: str) -> None:
+    try:
+        await msg.edit_text(text)
+    except Exception:
+        pass
 
 
 # پارامتر user_id اضافه شد
@@ -64,52 +72,40 @@ async def background_tt_download(
     status_msg = await context.bot.send_message(
         chat_id=chat_id, text="⏳ در صف انتظار برای دانلود..."
     )
+    file_path = None
 
     try:
         async with DOWNLOAD_SEMAPHORE:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="⬇️ در حال دریافت ویدیو...",
-            )
-
+            await _safe_edit_text(status_msg, "⬇️ در حال دریافت ویدیو...")
             file_path = await download_tiktok_video(url)
 
-            if not file_path or not os.path.exists(file_path):
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_msg.message_id,
-                    text="❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.",
-                )
-                await log_upload_failed("tiktok", user_id)
-                return
+        if not file_path or not os.path.exists(file_path):
+            await _safe_edit_text(status_msg, "❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.")
+            await log_upload_failed("tiktok", user_id)
+            return
 
-            safe_title = _strip_hashtags(title) or "tiktok_video"
-            display_name = f"{safe_title}.mp4" if not safe_title.endswith(".mp4") else safe_title
-            caption = f"✅ {safe_title}"
+        safe_title = _strip_hashtags(title) or "tiktok_video"
+        display_name = f"{safe_title}.mp4" if not safe_title.endswith(".mp4") else safe_title
+        caption = f"✅ {safe_title}"
 
-            await context.bot.edit_message_text(
+        await _safe_edit_text(status_msg, "📤 ویدیو دانلود شد! در حال ارسال...")
+
+        with open(file_path, "rb") as vid:
+            await context.bot.send_video(
                 chat_id=chat_id,
-                message_id=status_msg.message_id,
-                text="📤 ویدیو دانلود شد! در حال ارسال...",
+                video=vid,
+                filename=display_name,
+                caption=caption,
+                read_timeout=300,
+                write_timeout=300,
             )
 
-            with open(file_path, "rb") as vid:
-                await context.bot.send_video(
-                    chat_id=chat_id,
-                    video=vid,
-                    filename=display_name,
-                    caption=caption,
-                    read_timeout=300,
-                    write_timeout=300,
-                )
-
         await increment_tt_downloads(user_id)
-        await log_upload_success("tiktok", user_id)
 
-        await context.bot.delete_message(
-            chat_id=chat_id, message_id=status_msg.message_id
-        )
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
 
     except Exception as e:
         print(f"❌ TikTok Error: {e}")
@@ -118,7 +114,7 @@ async def background_tt_download(
         )
         await log_upload_failed("tiktok", user_id)
     finally:
-        if "file_path" in locals() and file_path:
+        if file_path:
             await remove_file_async(file_path)
 
 

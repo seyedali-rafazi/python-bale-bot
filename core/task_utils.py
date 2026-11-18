@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 import os
-from typing import Coroutine, Optional, Set
+import shutil
+import tempfile
+from typing import AsyncIterator, Coroutine, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -76,3 +79,67 @@ async def remove_file_async(path: Optional[str]) -> None:
     if not path:
         return
     await asyncio.to_thread(_remove_sync, path)
+
+
+async def remove_files_async(paths) -> None:
+    """Remove multiple files off the asyncio event loop."""
+    if not paths:
+        return
+    if isinstance(paths, (str, os.PathLike)):
+        paths = [paths]
+    path_list = [str(p) for p in paths if p]
+    if not path_list:
+        return
+
+    def _remove_many():
+        for p in path_list:
+            _remove_sync(p)
+
+    await asyncio.to_thread(_remove_many)
+
+
+@asynccontextmanager
+async def async_temp_dir(prefix: str = "bot_tmp_") -> AsyncIterator[str]:
+    """Create and clean up a TemporaryDirectory off the asyncio event loop."""
+    tmp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix=prefix)
+    try:
+        yield tmp_dir
+    finally:
+        await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
+
+
+class FileTooLargeError(ValueError):
+    """Raised when a streamed download exceeds max_bytes."""
+
+
+async def stream_aiohttp_to_file(
+    resp,
+    dest_path: str,
+    *,
+    chunk_size: int = 512 * 1024,
+    max_bytes: Optional[int] = None,
+) -> int:
+    """Stream an aiohttp response body to disk without blocking the event loop."""
+    parent_dir = os.path.dirname(dest_path)
+    if parent_dir:
+        await asyncio.to_thread(os.makedirs, parent_dir, exist_ok=True)
+
+    f = await asyncio.to_thread(open, dest_path, "wb")
+    downloaded = 0
+    try:
+        async for chunk in resp.content.iter_chunked(chunk_size):
+            if not chunk:
+                continue
+            downloaded += len(chunk)
+            if max_bytes is not None and downloaded > max_bytes:
+                raise FileTooLargeError(f"Stream exceeded limit ({max_bytes} bytes)")
+            await asyncio.to_thread(f.write, chunk)
+        return downloaded
+    except BaseException:
+        await asyncio.to_thread(f.close)
+        f = None
+        await remove_file_async(dest_path)
+        raise
+    finally:
+        if f is not None:
+            await asyncio.to_thread(f.close)

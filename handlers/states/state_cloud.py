@@ -6,8 +6,8 @@ from telegram.constants import ChatAction
 import asyncio
 import os
 import re
-import tempfile
 from core.state_manager import set_state, clear_state
+from core.task_utils import async_temp_dir
 from core.database import (
     get_available_cloud_mb,
     reduce_cloud_storage,
@@ -23,21 +23,36 @@ WAIT_FOR_FILE = 1
 
 async def start_cloud_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start cloud file upload process"""
-    user_id = str(update.effective_chat.id)
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
+
+    chat = update.effective_chat
+    msg = update.effective_message
+    if not chat or not msg:
+        return ConversationHandler.END
+
+    user_id = str(chat.id)
     set_state(user_id, "cloud_upload")
-    
+
     try:
         cloud_stats = await get_cloud_usage_stats(user_id)
+        if not cloud_stats:
+            await msg.reply_text("❌ اطلاعات حساب ابری یافت نشد. لطفاً ابتدا /start را بزنید.")
+            return ConversationHandler.END
+
         available_mb = cloud_stats["total_quota"] - cloud_stats["used_quota"]
         available_gb = available_mb / 1024
-        
+
         if available_mb <= 0:
-            await update.message.reply_text(
+            await msg.reply_text(
                 "❌ فضای ذخیره‌سازی شما پر است!\n\n"
                 "🛒 برای اضافه کردن حجم، روی دکمه **خرید حجم اضافی** کلیک کنید."
             )
             return ConversationHandler.END
-        
+
         upload_text = f"""
 📤 **آپلود فایل به ابری**
 
@@ -51,13 +66,13 @@ async def start_cloud_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 برای لغو، /cancel را ارسال کنید.
         """
-        
-        await update.message.reply_text(upload_text, parse_mode="Markdown")
+
+        await msg.reply_text(upload_text, parse_mode="Markdown")
         return WAIT_FOR_FILE
-        
+
     except Exception as e:
         print(f"Error starting cloud upload: {e}")
-        await update.message.reply_text("❌ خطایی در شروع آپلود رخ داد.")
+        await msg.reply_text("❌ خطایی در شروع آپلود رخ داد.")
         return ConversationHandler.END
 
 
@@ -108,7 +123,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
         safe_name = re.sub(r"[^\w.\-]", "_", safe_name) or "upload.bin"
         file = await context.bot.get_file(file_obj.file_id)
 
-        with tempfile.TemporaryDirectory(prefix="cloud_up_") as tmp_dir:
+        async with async_temp_dir(prefix="cloud_up_") as tmp_dir:
             temp_file_path = os.path.join(tmp_dir, safe_name)
             await file.download_to_drive(temp_file_path)
 

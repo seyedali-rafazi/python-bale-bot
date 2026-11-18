@@ -1,5 +1,6 @@
 # handlers/menus/youtube_archive.py
 
+import asyncio
 import json
 from urllib.parse import quote
 
@@ -92,10 +93,13 @@ def _row_str(row, key: str, default: str = "") -> str:
 
 async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    total_global = await count_user_archive()
-    limit = await get_user_archive_limit(user_id)
-    _, used, _ = await can_user_fetch_from_archive(user_id)
     vip = await is_vip(user_id)
+    total_global, (_, used, limit), channels, total_ch = await asyncio.gather(
+        count_user_archive(),
+        can_user_fetch_from_archive(user_id, is_vip_status=vip),
+        get_user_channels_page(offset=0, limit=CHANNELS_PAGE_SIZE),
+        count_user_channels(),
+    )
 
     plan = "Pro" if vip == 1 else "رایگان"
     period_label = archive_limit_period_label(vip)
@@ -129,8 +133,6 @@ async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_T
             ]
         )
     else:
-        channels = await get_user_channels_page(offset=0, limit=CHANNELS_PAGE_SIZE)
-        total_ch = await count_user_channels()
         keyboard = _build_channels_keyboard(channels, page=0, total_channels=total_ch)
 
     if update.callback_query:
@@ -232,6 +234,8 @@ async def btn_yt_cache_search_channel_req(
 
 
 async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     query = update.callback_query
     data = query.data
     user_id = str(query.from_user.id)
@@ -250,10 +254,16 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if data.startswith("ytarc_chpg_"):
-        page = int(data.split("_")[-1])
+        try:
+            page = int(data.split("_")[-1])
+        except ValueError:
+            await query.answer("صفحه نامعتبر است.")
+            return
         offset = page * CHANNELS_PAGE_SIZE
-        channels = await get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE)
-        total_ch = await count_user_channels()
+        channels, total_ch = await asyncio.gather(
+            get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE),
+            count_user_channels(),
+        )
         total_pages = max(1, (total_ch + CHANNELS_PAGE_SIZE - 1) // CHANNELS_PAGE_SIZE)
 
         if not channels and page > 0:
@@ -273,8 +283,12 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if data.startswith("ytarc_ch_"):
         parts = data.split("_")
-        page = int(parts[2])
-        index = int(parts[3])
+        try:
+            page = int(parts[2])
+            index = int(parts[3])
+        except (IndexError, ValueError):
+            await query.answer("درخواست نامعتبر است.")
+            return
         offset = page * CHANNELS_PAGE_SIZE
         channels = await get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE)
         if index >= len(channels):
@@ -290,13 +304,22 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if data.startswith("ytarc_vidpg_"):
         encoded = data.replace("ytarc_vidpg_", "", 1)
-        channel_name, vid_page = encoded.rsplit("_", 1)
+        try:
+            channel_name, vid_page_str = encoded.rsplit("_", 1)
+            vid_page = int(vid_page_str)
+        except ValueError:
+            await query.answer("درخواست نامعتبر است.")
+            return
         channel_name = _decode_channel(channel_name)
-        await _show_channel_videos(update, context, channel_name, page=int(vid_page))
+        await _show_channel_videos(update, context, channel_name, page=vid_page)
         return
 
     if data.startswith("ytarc_pick_"):
-        rep_id = int(data.replace("ytarc_pick_", ""))
+        try:
+            rep_id = int(data.replace("ytarc_pick_", ""))
+        except ValueError:
+            await query.answer("شناسه نامعتبر است.")
+            return
         entry = await get_archive_entry(rep_id)
         if not entry:
             await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
@@ -354,7 +377,11 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if data.startswith("ytarc_vid_"):
-        archive_id = int(data.replace("ytarc_vid_", ""))
+        try:
+            archive_id = int(data.replace("ytarc_vid_", ""))
+        except ValueError:
+            await query.answer("شناسه نامعتبر است.")
+            return
         await _send_archive_video(update, context, user_id, archive_id)
         return
 
@@ -383,18 +410,17 @@ async def _send_archive_video(
         await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
         return
 
-    allowed, used, limit = await can_user_fetch_from_archive(user_id)
+    vip = await is_vip(user_id)
+    allowed, used, limit = await can_user_fetch_from_archive(
+        user_id, is_vip_status=vip
+    )
     if not allowed:
-        vip = await is_vip(user_id)
         period = archive_limit_period_label(vip)
         await query.answer(
             f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
             show_alert=True,
         )
         return
-
-    await query.answer("در حال ارسال...")
-    from handlers.states.youtube.helpers import send_cached_files
 
     try:
         file_ids = json.loads(entry["file_ids"] or "[]")
@@ -404,6 +430,9 @@ async def _send_archive_video(
     if not file_ids:
         await query.answer("فایل کش خالی است.", show_alert=True)
         return
+
+    await query.answer("در حال ارسال...")
+    from handlers.states.youtube.helpers import send_cached_files
 
     fmt = entry["format_type"] or "video_zip"
     try:
@@ -415,8 +444,7 @@ async def _send_archive_video(
             text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
         )
         return
-    await increment_archive_fetch(user_id)
-    await log_upload_success("yt_archive", user_id)
+    await increment_archive_fetch(user_id, is_vip_status=vip)
     await increment_yt_video_view(entry["video_id"])
 
 
@@ -450,12 +478,12 @@ async def _show_channel_videos(
 ):
     query = update.callback_query
     offset = page * VIDEOS_PAGE_SIZE
-    videos = await get_channel_videos_page(
-        channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE
+    videos, total = await asyncio.gather(
+        get_channel_videos_page(channel_name, offset=offset, limit=VIDEOS_PAGE_SIZE),
+        count_channel_videos(channel_name),
     )
     if videos:
         _schedule_missing_upload_date_backfill(videos)
-    total = await count_channel_videos(channel_name)
     total_pages = max(1, (total + VIDEOS_PAGE_SIZE - 1) // VIDEOS_PAGE_SIZE)
 
     if not videos:

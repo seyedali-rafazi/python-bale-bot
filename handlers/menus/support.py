@@ -8,18 +8,8 @@ from telegram.ext import ContextTypes
 
 from core.constants import BALE_SUPPORT_URL
 from core.database import (
-    get_user_info,
-    get_yt_downloads,
-    get_music_downloads,
-    get_pinterest_downloads,
-    get_tt_downloads,
-    get_gh_downloads,
-    get_cloud_usage_stats,
-    get_web_search_downloads,
-    get_ai_questions_today,
-    get_archive_fetches_used,
+    get_user_profile_summary,
     archive_limit_period_label,
-    get_tg_downloads,
 )
 from core.limits import get_limit
 
@@ -38,16 +28,18 @@ async def btn_support_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_chat.id)
-    # اضافه شدن await
-    user_info = await get_user_info(user_id)
+    summary = await get_user_profile_summary(user_id)
 
-    if not user_info:
+    if not summary:
         await update.message.reply_text(
             "❌ اطلاعات شما یافت نشد. لطفاً دستور /start را ارسال کنید."
         )
         return
 
-    username, is_vip, join_date, vip_expire_date = user_info
+    username = summary["username"]
+    is_vip = summary["is_vip"]
+    join_date = summary["join_date"]
+    vip_expire_date = summary["vip_expire_date"]
 
     username_str = f"@{username}" if username else "ندارد"
 
@@ -72,18 +64,16 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Error parsing date for user {user_id}: {e}")
                 vip_duration_text = "\n⏳ اعتبار اشتراک: نامشخص (خطا)"
 
-    # اضافه شدن await به دریافت آمار قبلی
-    yt_count = await get_yt_downloads(user_id)
-    music_count = await get_music_downloads(user_id)
-    pinterest_count = await get_pinterest_downloads(user_id)
-    tt_dl_count = await get_tt_downloads(user_id)
-    gh_count = await get_gh_downloads(user_id)
-    web_count = await get_web_search_downloads(user_id)
-    ai_count = await get_ai_questions_today(user_id)
-    arc_count = await get_archive_fetches_used(user_id)
-    tg_count = await get_tg_downloads(user_id)
+    yt_count = summary["yt_count"]
+    music_count = summary["music_count"]
+    pinterest_count = summary["pinterest_count"]
+    tt_dl_count = summary["tt_dl_count"]
+    gh_count = summary["gh_count"]
+    web_count = summary["web_search_count"]
+    ai_count = summary["ai_count"]
+    arc_count = summary["arc_count"]
+    tg_count = summary["tg_count"]
 
-    # تعیین لیمیت‌های قبلی (فرض بر این است که get_limit یک تابع سینک معمولی در فایل limits است)
     yt_limit = get_limit("youtube_download", is_vip)
     music_limit = get_limit("music_download", is_vip)
     pinterest_limit = get_limit("pinterest_search", is_vip)
@@ -95,27 +85,19 @@ async def btn_profile_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_limit = get_limit("telegram_download", is_vip)
     arc_period = archive_limit_period_label(is_vip)
 
-    # دریافت آمار ذخیره‌سازی ابری
-    cloud_stats = await get_cloud_usage_stats(user_id)
-    cloud_info_text = ""
-    if cloud_stats:
-        # دریافت حجم‌ها به مگابایت و گرد کردن تا 2 رقم اعشار
-        available_mb = round(cloud_stats["total_quota"] - cloud_stats["used_quota"], 2)
-        total_mb = round(cloud_stats["total_quota"], 2)
-        used_mb = round(cloud_stats["used_quota"], 2)
+    total_quota = summary["cloud_total_quota"]
+    used_quota = summary["cloud_used_quota"]
+    available_mb = round(total_quota - used_quota, 2)
+    total_mb = round(total_quota, 2)
+    used_mb = round(used_quota, 2)
 
-        # Create usage bar
-        usage_percent = (
-            (cloud_stats["used_quota"] / cloud_stats["total_quota"] * 100)
-            if cloud_stats["total_quota"] > 0
-            else 0
-        )
-        filled = int((usage_percent / 100) * 10)
-        bar = "█" * filled + "░" * (10 - filled)
+    usage_percent = (used_quota / total_quota * 100) if total_quota > 0 else 0
+    filled = int((usage_percent / 100) * 10)
+    bar = "█" * filled + "░" * (10 - filled)
 
-        cloud_info_text = f"""
+    cloud_info_text = f"""
 ☁️ **اطلاعات ذخیره‌سازی ابری:**
-📌 فایل‌های آپلود شده: {cloud_stats["file_count"]} فایل
+📌 فایل‌های آپلود شده: {summary["cloud_file_count"]} فایل
 💾 حجم استفاده شده: {used_mb} MB
 📈 حجم کل: {total_mb} MB
 ⚡ فضای در دسترس: {available_mb} MB

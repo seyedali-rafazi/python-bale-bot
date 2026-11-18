@@ -26,6 +26,14 @@ else
 end
 """
 
+_ANTI_FLOOD_LUA = """
+local count = redis.call("incr", KEYS[1])
+if count == 1 then
+    redis.call("expire", KEYS[1], ARGV[1])
+end
+return count
+"""
+
 
 @asynccontextmanager
 async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 30):
@@ -47,6 +55,10 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
         else:
             # In-memory lock fallback with TTL expiration
             now = time.monotonic()
+            if len(_local_locks) > 5000:
+                expired_keys = [k for k, (_, exp) in _local_locks.items() if now >= exp]
+                for k in expired_keys:
+                    _local_locks.pop(k, None)
             existing = _local_locks.get(lock_key)
             if existing is None or now >= existing[1]:
                 _local_locks[lock_key] = (lock_token, now + timeout_sec)
@@ -81,11 +93,7 @@ async def check_anti_flood(user_id: str | int, max_messages: int = 5, window_sec
     if redis is not None:
         try:
             flood_key = f"bale:flood:{uid_str}"
-            pipe = redis.pipeline()
-            pipe.incr(flood_key)
-            pipe.expire(flood_key, window_sec)
-            results = await pipe.execute()
-            count = results[0]
+            count = int(await redis.eval(_ANTI_FLOOD_LUA, 1, flood_key, window_sec))
             return count <= max_messages
         except Exception as e:
             logger.debug("Redis anti-flood check error: %s", e)

@@ -16,12 +16,12 @@ Callback data format: bookdl_<chat_id>_<index>
 import asyncio
 import logging
 import os
-import tempfile
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from core.state_manager import StateCache, clear_state
+from core.task_utils import async_temp_dir
 from core.database import log_upload_success, log_upload_failed
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 from services.rate_limiter import user_action_lock
@@ -177,8 +177,8 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="Markdown",
         )
 
-        # Download in a thread-safe temp directory
-        with tempfile.TemporaryDirectory(prefix="book_dl_") as tmp_dir:
+        # Download in a thread-safe temp directory (offloading rmtree cleanup off event loop)
+        async with async_temp_dir(prefix="book_dl_") as tmp_dir:
             try:
                 file_path = await download_book(book, tmp_dir)
             except Exception:

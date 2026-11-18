@@ -18,16 +18,19 @@ from telegram.ext import ContextTypes
 
 
 from core.state_manager import clear_state
-from core.task_utils import remove_file_async, track_task
+from core.task_utils import remove_file_async, stream_aiohttp_to_file, track_task
 from services.http_client import get_http_session
 
 # کنترل تعداد درخواست‌های همزمان برای جلوگیری از پر شدن منابع و مسدود شدن IP
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(5)
 SEARCH_SEMAPHORE = asyncio.Semaphore(3)
+_PROG_TEMP_DIR = os.path.join("downloads", "programming")
 
 
 async def background_download(chat_id, bot, download_url, filename, caption):
-    temp_filepath = f"temp_{uuid.uuid4().hex}_{filename}"
+    chat_id_str = str(chat_id)
+    safe_name = os.path.basename(filename or "download.bin")
+    temp_filepath = os.path.join(_PROG_TEMP_DIR, f"temp_{uuid.uuid4().hex}_{safe_name}")
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -39,30 +42,29 @@ async def background_download(chat_id, bot, download_url, filename, caption):
                 download_url, headers=headers, timeout=120
             ) as response:
                 if response.status == 200:
-                    # دانلود فایل به صورت تکه‌ای (Chunk) روی هارد به جای پر کردن RAM
-                    with open(temp_filepath, "wb") as f:
-                        async for chunk in response.content.iter_chunked(1024 * 1024):
-                            f.write(chunk)
+                    await stream_aiohttp_to_file(
+                        response, temp_filepath, chunk_size=1024 * 1024
+                    )
 
                     # ارسال مستقیم فایل از روی هارد
                     await bot.send_document(
-                        chat_id=chat_id,
+                        chat_id=chat_id_str,
                         document=temp_filepath,
-                        filename=filename,
+                        filename=safe_name,
                         caption=caption,
                         read_timeout=120,
                         write_timeout=120,
                     )
                 else:
                     await bot.send_message(
-                        chat_id,
+                        chat_id_str,
                         f"❌ خطا در دریافت فایل. کد خطا: {response.status}",
                     )
     except Exception as e:
-        await bot.send_message(chat_id, f"❌ خطای غیرمنتظره در دانلود: {e}")
+        await bot.send_message(chat_id_str, f"❌ خطای غیرمنتظره در دانلود: {e}")
     finally:
         await remove_file_async(temp_filepath)
-        clear_state(chat_id)
+        clear_state(chat_id_str)
 
 
 async def handle_programming_state(
@@ -106,6 +108,10 @@ async def handle_programming_state(
                 "🔍 در حال جستجوی نام افزونه (لطفا کمی صبر کنید)..."
             )
             try:
+                if DDGS is None:
+                    await update.message.reply_text("❌ سرویس جستجوی افزونه در دسترس نیست.")
+                    return
+
                 query = f"chrome web store extension {text}"
 
                 def perform_search(q):
@@ -232,7 +238,7 @@ async def handle_chrome_callback(update: Update, context: ContextTypes.DEFAULT_T
     data = query.data
     if data.startswith("dlchrome_"):
         ext_id = data.split("_", 1)[1]
-        chat_id = query.message.chat_id
+        chat_id = str(query.message.chat_id)
 
         await query.message.reply_text("⏳ دانلود در پس‌زمینه شروع شد...")
         download_url = (

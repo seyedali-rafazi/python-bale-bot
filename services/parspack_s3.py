@@ -51,25 +51,28 @@ class ProgressPercentage(object):
         self._filename = filename
         self._size = float(os.path.getsize(filename))
         self._seen_so_far = 0
+        self._last_reported_pct = -1
         self._lock = threading.Lock()
         self._progress_dict = progress_dict
 
     def __call__(self, bytes_amount):
+        if self._size <= 0:
+            return
         with self._lock:
             self._seen_so_far += bytes_amount
-            percentage = (self._seen_so_far / self._size) * 100
+            percentage = min(100.0, (self._seen_so_far / self._size) * 100)
+            whole_pct = int(percentage)
+            if whole_pct == self._last_reported_pct and percentage < 100.0:
+                return
+            self._last_reported_pct = whole_pct
 
             # آپدیت دیکشنری برای تلگرام
             if self._progress_dict is not None:
-                # import تابع ساخت نوار از youtube.py در بالای فایل یا کپی آن
                 filled = int((percentage / 100) * 10)
                 bar = "█" * filled + "░" * (10 - filled)
                 self._progress_dict["text"] = (
                     f"☁️ در حال آپلود ابری...\n[{bar}] $$ {percentage:.1f} \\% $$"
                 )
-
-            sys.stdout.write(f"\r⏳ Uploading: {percentage:.2f}%")
-            sys.stdout.flush()
 
 
 def upload_to_s3(

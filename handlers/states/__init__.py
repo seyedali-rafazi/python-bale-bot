@@ -146,7 +146,7 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_github_state(update, context, step, text, chat_id, state_data)
 
     elif step.startswith("waiting_google_search"):
-        await handle_web_search_state(update, context, text, chat_id)
+        await handle_web_search_state(update, context, text, chat_id, state_data=state_data)
         return
 
     elif step == "img_create_pdf":

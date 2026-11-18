@@ -30,13 +30,17 @@ def _archive_period_key(vip_status: int | bool) -> str:
     return get_tehran_archive_week_key()
 
 
-async def get_user_archive_limit(user_id: str) -> int:
-    vip = await is_vip(user_id)
+async def get_user_archive_limit(
+    user_id: str, *, is_vip_status: int | bool | None = None
+) -> int:
+    vip = await is_vip(user_id) if is_vip_status is None else is_vip_status
     return ARCHIVE_LIMIT_VIP if vip == 1 else ARCHIVE_LIMIT_FREE
 
 
-async def get_archive_fetches_used(user_id: str) -> int:
-    vip = await is_vip(user_id)
+async def get_archive_fetches_used(
+    user_id: str, *, is_vip_status: int | bool | None = None
+) -> int:
+    vip = await is_vip(user_id) if is_vip_status is None else is_vip_status
     period = _archive_period_key(vip)
     return await get_period_usage(
         user_id,
@@ -51,15 +55,20 @@ async def get_archive_fetches_today(user_id: str) -> int:
     return await get_archive_fetches_used(user_id)
 
 
-async def can_user_fetch_from_archive(user_id: str) -> tuple[bool, int, int]:
+async def can_user_fetch_from_archive(
+    user_id: str, *, is_vip_status: int | bool | None = None
+) -> tuple[bool, int, int]:
     """Returns (allowed, used_in_period, limit)."""
-    limit = await get_user_archive_limit(user_id)
-    used = await get_archive_fetches_used(user_id)
+    vip = await is_vip(user_id) if is_vip_status is None else is_vip_status
+    limit = ARCHIVE_LIMIT_VIP if vip == 1 else ARCHIVE_LIMIT_FREE
+    used = await get_archive_fetches_used(user_id, is_vip_status=vip)
     return used < limit, used, limit
 
 
-async def increment_archive_fetch(user_id: str):
-    vip = await is_vip(user_id)
+async def increment_archive_fetch(
+    user_id: str, *, is_vip_status: int | bool | None = None
+):
+    vip = await is_vip(user_id) if is_vip_status is None else is_vip_status
     period = _archive_period_key(vip)
     await increment_period_usage(
         user_id,

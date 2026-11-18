@@ -15,7 +15,7 @@ from services import telegram_telethon
 from telegram import Update
 from telegram.ext import ContextTypes
 from core.state_manager import set_state
-from core.database import is_vip, get_tg_downloads, increment_tg_downloads, log_upload_success
+from core.database import is_vip, get_tg_downloads, increment_tg_downloads
 from core.limits import get_limit
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,11 @@ processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
 
 async def check_tg_limit(update: Update, user_id: str) -> bool:
-    vip = await is_vip(user_id)
+    vip, current = await asyncio.gather(
+        is_vip(user_id),
+        get_tg_downloads(user_id),
+    )
     max_dl = get_limit("telegram_download", vip)
-    current = await get_tg_downloads(user_id)
     if current >= max_dl:
         await update.message.reply_text(
             f"❌ محدودیت روزانه تلگرام شما تمام شده است.\n"
@@ -76,26 +78,37 @@ async def _send_latest_via_telethon(bot, chat_id: str, channel_id: str) -> bool:
     return any_sent
 
 
+def _parse_latest_html_messages(html_content: str, limit: int) -> list:
+    soup = BeautifulSoup(html_content, "html.parser")
+    messages = _parse_channel_messages_from_html(soup)
+    latest = messages[-limit:]
+    return [parse_message_element(msg) for msg in latest]
+
+
+def _parse_single_html_message(html_content: str):
+    soup = BeautifulSoup(html_content, "html.parser")
+    return parse_html_message(soup)
+
+
 async def _send_latest_via_scrape(bot, chat_id: str, channel_id: str) -> bool:
     channel_id = telegram_telethon.normalize_channel_id(channel_id)
     url = f"https://t.me/s/{channel_id}"
     html_content = await fetch_url_async(url)
-    soup = await asyncio.to_thread(BeautifulSoup, html_content, "html.parser")
-    messages = _parse_channel_messages_from_html(soup)
+    parsed_list = await asyncio.to_thread(
+        _parse_latest_html_messages, html_content, LATEST_MESSAGE_COUNT
+    )
     logger.info(
-        "HTML scrape @%s: html_len=%s message_divs=%s",
+        "HTML scrape @%s: html_len=%s parsed_msgs=%s",
         channel_id,
         len(html_content),
-        len(messages),
+        len(parsed_list),
     )
-    latest_messages = messages[-LATEST_MESSAGE_COUNT:]
 
-    if not latest_messages:
+    if not parsed_list:
         return False
 
     any_sent = False
-    for msg in latest_messages:
-        parsed = parse_message_element(msg)
+    for parsed in parsed_list:
         if await send_parsed_message(bot, chat_id, parsed):
             any_sent = True
     return any_sent
@@ -151,10 +164,9 @@ async def handle_telegram_state(
                     if not success:
                         embed_url = link + ("&" if "?" in link else "?") + "embed=1"
                         html_content = await fetch_url_async(embed_url)
-                        soup = await asyncio.to_thread(
-                            BeautifulSoup, html_content, "html.parser"
+                        parsed = await asyncio.to_thread(
+                            _parse_single_html_message, html_content
                         )
-                        parsed = parse_html_message(soup)
                         success = await send_parsed_message(bot, chat_id, parsed)
 
                     if not success:
@@ -228,7 +240,6 @@ async def handle_telegram_state(
 
             if success:
                 await increment_tg_downloads(user_id)
-                await log_upload_success("telegram", user_id)
 
     except Exception as general_err:
         print(f"Queue/Processing Error: {general_err}")

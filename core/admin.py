@@ -41,6 +41,7 @@ from core.database.youtube import (
     drop_legacy_user_youtube_archive_table,
 )
 from datetime import datetime
+from core.task_utils import track_task
 
 
 load_dotenv()
@@ -469,7 +470,41 @@ async def cmd_clean_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+_yt_fix_task: asyncio.Task | None = None
+_yt_fix_lock = asyncio.Lock()
+
+
+async def _run_fix_yt_cache_job(bot, admin_chat_id: str, limit: int) -> None:
+    try:
+        result = await backfill_youtube_cache_metadata(
+            batch_size=40,
+            max_total=limit,
+            delay_sec=0.35,
+        )
+        still = await count_cache_needing_metadata()
+        await bot.send_message(
+            chat_id=admin_chat_id,
+            text=(
+                f"✅ پایان بروزرسانی کش یوتیوب:\n"
+                f"• موفق: {result['fixed']}\n"
+                f"• ناموفق: {result['failed']}\n"
+                f"• پردازش‌شده: {result['processed']}\n"
+                f"• باقی‌مانده در صف: {still}\n\n"
+                f"اگر هنوز موردی مانده، دوباره `/fixytcache {limit}` بزنید."
+            ),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("Background fix_yt_cache job failed")
+        try:
+            await bot.send_message(chat_id=admin_chat_id, text=f"❌ خطا: {e}")
+        except Exception:
+            pass
+
+
 async def cmd_fix_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global _yt_fix_task
     chat_id = str(update.effective_chat.id)
     if chat_id != ADMIN_ID:
         return
@@ -482,29 +517,20 @@ async def cmd_fix_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ limit باید عدد باشد. مثال: `/fixytcache 1000`")
             return
 
-    pending = await count_cache_needing_metadata()
-    await update.message.reply_text(
-        f"⏳ بروزرسانی نام کانال و عنوان ویدیوها...\n"
-        f"در صف: **{pending}** — حداکثر **{limit}** مورد در این اجرا."
-    )
+    async with _yt_fix_lock:
+        if _yt_fix_task is not None and not _yt_fix_task.done():
+            await update.message.reply_text("⚠️ یک عملیات بروزرسانی کش یوتیوب در حال اجراست.")
+            return
 
-    try:
-        result = await backfill_youtube_cache_metadata(
-            batch_size=40,
-            max_total=limit,
-            delay_sec=0.35,
-        )
-        still = await count_cache_needing_metadata()
+        pending = await count_cache_needing_metadata()
         await update.message.reply_text(
-            f"✅ پایان بروزرسانی کش یوتیوب:\n"
-            f"• موفق: {result['fixed']}\n"
-            f"• ناموفق: {result['failed']}\n"
-            f"• پردازش‌شده: {result['processed']}\n"
-            f"• باقی‌مانده در صف: {still}\n\n"
-            f"اگر هنوز موردی مانده، دوباره `/fixytcache {limit}` بزنید."
+            f"⏳ بروزرسانی نام کانال و عنوان ویدیوها در پس‌زمینه آغاز شد...\n"
+            f"در صف: **{pending}** — حداکثر **{limit}** مورد در این اجرا."
         )
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطا: {e}")
+        _yt_fix_task = track_task(
+            _run_fix_yt_cache_job(context.bot, chat_id, limit),
+            name="admin_fix_yt_cache",
+        )
 
 
 async def cmd_addcloud(update: Update, context: ContextTypes.DEFAULT_TYPE):

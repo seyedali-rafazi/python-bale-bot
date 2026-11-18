@@ -11,7 +11,7 @@ import aiohttp
 from bs4 import Tag
 from telegram import Bot
 
-from core.task_utils import remove_file_async
+from core.task_utils import FileTooLargeError, remove_file_async, stream_aiohttp_to_file
 from services.http_client import get_http_session
 
 MAX_MEDIA_BYTES = 50 * 1024 * 1024
@@ -208,32 +208,14 @@ def caption_for(text: str, use: bool) -> str:
     return text if len(text) <= 1024 else ""
 
 
-async def _head_content_length(session, url: str) -> Optional[int]:
-    try:
-        async with session.head(
-            url, headers={"User-Agent": USER_AGENT}, allow_redirects=True, timeout=15
-        ) as resp:
-            cl = resp.headers.get("Content-Length")
-            if cl and cl.isdigit():
-                return int(cl)
-    except Exception:
-        pass
-    return None
-
-
 async def download_media(
     url: str, filename: str, max_bytes: int = MAX_MEDIA_BYTES
 ) -> tuple[Optional[str], Optional[str]]:
     """Download to temp file. Returns (path, error_message)."""
-    os.makedirs("downloads", exist_ok=True)
     safe_name = os.path.basename(filename or "file.bin")
     temp_path = os.path.join("downloads", f"tgpub_{uuid.uuid4().hex}_{safe_name}")
     session = await get_http_session()
     headers = {"User-Agent": USER_AGENT}
-
-    content_length = await _head_content_length(session, url)
-    if content_length is not None and content_length > max_bytes:
-        return None, "over_20mb"
 
     try:
         async with session.get(
@@ -241,19 +223,19 @@ async def download_media(
         ) as resp:
             if resp.status != 200:
                 return None, f"http_{resp.status}"
-            downloaded = 0
-            with open(temp_path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(1024 * 512):
-                    downloaded += len(chunk)
-                    if downloaded > max_bytes:
-                        f.close()
-                        await remove_file_async(temp_path)
-                        return None, "over_20mb"
-                    f.write(chunk)
+            cl = resp.headers.get("Content-Length")
+            if cl and cl.isdigit() and int(cl) > max_bytes:
+                return None, "over_20mb"
+
+            downloaded = await stream_aiohttp_to_file(
+                resp, temp_path, chunk_size=512 * 1024, max_bytes=max_bytes
+            )
             if downloaded == 0:
                 await remove_file_async(temp_path)
                 return None, "empty"
             return temp_path, None
+    except FileTooLargeError:
+        return None, "over_20mb"
     except Exception:
         await remove_file_async(temp_path)
         return None, "download_failed"

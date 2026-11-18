@@ -52,7 +52,6 @@ async def process_ai_chat(
             message_id=message_id,
             text=answer[:4096],
         )
-        await log_upload_success("ai_chat", chat_id)
 
     except Exception:
         logger.exception("process_ai_chat failed")
@@ -213,22 +212,24 @@ async def handle_ai_state(
                 )
                 return
 
-            await increment_ai_question(chat_id)
             _ai_chat_in_flight += 1
-
-            msg = await update.message.reply_text(
-                "⏳ درخواست شما در صف پردازش قرار گرفت..."
-            )
-
-            track_task(
-                process_ai_chat(
-                    context=context,
-                    chat_id=chat_id,
-                    message_id=msg.message_id,
-                    text=text,
-                ),
-                name=f"ai_chat_{chat_id}",
-            )
+            try:
+                await increment_ai_question(chat_id)
+                msg = await update.message.reply_text(
+                    "⏳ درخواست شما در صف پردازش قرار گرفت..."
+                )
+                track_task(
+                    process_ai_chat(
+                        context=context,
+                        chat_id=chat_id,
+                        message_id=msg.message_id,
+                        text=text,
+                    ),
+                    name=f"ai_chat_{chat_id}",
+                )
+            except Exception:
+                _ai_chat_in_flight = max(0, _ai_chat_in_flight - 1)
+                raise
 
             return
 

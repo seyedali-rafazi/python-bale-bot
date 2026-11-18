@@ -26,7 +26,6 @@ from core.database import (
     get_kaggle_downloads,
     increment_kaggle_downloads,
     is_vip,
-    log_upload_success,
     log_upload_failed,
     KAGGLE_LIMIT_FREE,
     KAGGLE_LIMIT_VIP,
@@ -127,9 +126,8 @@ async def process_kaggle_download(
       download → split into ≤19 MB ZIPs → send all parts → cleanup.
     """
     # ── Re-check quota (someone else may have used the slot while in queue) ──
-    vip = await is_vip(user_id)
+    vip, used = await asyncio.gather(is_vip(user_id), get_kaggle_downloads(user_id))
     limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-    used = await get_kaggle_downloads(user_id)
     if used >= limit:
         await context.bot.send_message(
             chat_id,
@@ -140,7 +138,7 @@ async def process_kaggle_download(
 
     await context.bot.send_message(chat_id, f"🔄 نوبت شما رسید! در حال دانلود «{ref}» از کاگل...")
 
-    dl_dir, zip_dir = make_temp_dirs()
+    dl_dir, zip_dir = await asyncio.to_thread(make_temp_dirs)
     safe_name = ref.replace("/", "_")
 
     try:
@@ -216,7 +214,6 @@ async def process_kaggle_download(
         # ── Step 5: Increment counter & log (only if at least part 1 sent) ──
         if sent_ok or i > 1:
             await increment_kaggle_downloads(user_id)
-            await log_upload_success("kaggle", user_id)
 
         if sent_ok:
             remaining = max(0, limit - used - 1)

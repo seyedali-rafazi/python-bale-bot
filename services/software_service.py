@@ -443,31 +443,31 @@ class SoftwareService:
             show_results = await asyncio.gather(*tasks, return_exceptions=True)
 
             results: List[Dict[str, Any]] = []
+            valid_candidates: List[tuple[dict, dict]] = []
             for cand, show_res in zip(candidates, show_results):
-                if not isinstance(show_res, dict) or not show_res.get("download_url"):
-                    continue
+                if isinstance(show_res, dict) and show_res.get("download_url"):
+                    valid_candidates.append((cand, show_res))
+                    if len(valid_candidates) >= limit:
+                        break
 
-                installer_url = show_res["download_url"]
-                version = show_res.get("version") or cand["version"] or "نامشخص"
-                ext = show_res.get("extension", "exe")
-                updated = show_res.get("updated", "نامشخص")
-                size_mb = await cls._get_remote_file_size_mb(installer_url)
-
-                results.append(
-                    {
-                        "name": cand["name"],
-                        "package": cand["id"],
-                        "version": version,
-                        "size_mb": size_mb,
-                        "download_url": installer_url,
-                        "updated": updated,
-                        "platform": "windows",
-                        "extension": ext,
-                    }
+            if valid_candidates:
+                sizes = await asyncio.gather(
+                    *(cls._get_remote_file_size_mb(sr["download_url"]) for _, sr in valid_candidates),
+                    return_exceptions=True,
                 )
-
-                if len(results) >= limit:
-                    break
+                for (cand, show_res), sz in zip(valid_candidates, sizes):
+                    results.append(
+                        {
+                            "name": cand["name"],
+                            "package": cand["id"],
+                            "version": show_res.get("version") or cand["version"] or "نامشخص",
+                            "size_mb": sz if isinstance(sz, (int, float)) else 0.0,
+                            "download_url": show_res["download_url"],
+                            "updated": show_res.get("updated", "نامشخص"),
+                            "platform": "windows",
+                            "extension": show_res.get("extension", "exe"),
+                        }
+                    )
 
             return results
         except Exception as e:
@@ -511,7 +511,7 @@ class SoftwareService:
         Download a file asynchronously with size guard and stream write.
         Cleans up partial files if download fails.
         """
-        Path(dest_dir).mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(Path(dest_dir).mkdir, parents=True, exist_ok=True)
 
         if not filename:
             clean_url = url.split("?")[0].split("#")[0]
@@ -522,8 +522,8 @@ class SoftwareService:
 
         dest_path = os.path.join(dest_dir, filename)
 
-        headers = {"User-Agent": USER_AGENT}
         total_downloaded = 0
+        f = None
 
         try:
             client = await get_software_httpx_client()
@@ -534,19 +534,25 @@ class SoftwareService:
                 if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
                     raise ValueError(f"File size exceeds maximum allowed limit ({max_bytes // (1024 * 1024)} MB).")
 
-                with open(dest_path, "wb") as f:
-                    async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
-                        total_downloaded += len(chunk)
-                        if total_downloaded > max_bytes:
-                            raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
-                        f.write(chunk)
+                f = await asyncio.to_thread(open, dest_path, "wb")
+                async for chunk in response.aiter_bytes(chunk_size=256 * 1024):
+                    total_downloaded += len(chunk)
+                    if total_downloaded > max_bytes:
+                        raise ValueError(f"Downloaded stream exceeded limit ({max_bytes // (1024 * 1024)} MB).")
+                    await asyncio.to_thread(f.write, chunk)
 
             return os.path.abspath(dest_path)
         except Exception:
+            if f is not None:
+                await asyncio.to_thread(f.close)
+                f = None
             # Clean up partial/corrupted file
             if os.path.isfile(dest_path):
                 try:
-                    os.remove(dest_path)
+                    await asyncio.to_thread(os.remove, dest_path)
                 except OSError:
                     pass
             raise
+        finally:
+            if f is not None:
+                await asyncio.to_thread(f.close)

@@ -16,10 +16,21 @@ async def check_membership(bot, user_id):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    username = update.effective_chat.username
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
 
-    # ثبت کاربر در دیتابیس (اضافه شدن await)
+    chat = update.effective_chat
+    msg = update.effective_message
+    if not chat or not msg:
+        return
+
+    chat_id = str(chat.id)
+    username = chat.username
+
+    # ثبت کاربر در دیتابیس
     await add_user(chat_id, username)
     await log_user_active(chat_id)
 
@@ -27,14 +38,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_member = await check_membership(context.bot, chat_id)
     if not is_member:
         keyboard = [[InlineKeyboardButton("📢 عضویت در کانال", url=CHANNEL_URL)]]
-        await update.message.reply_text(
+        await msg.reply_text(
             "🛑 برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید.\nپس از عضویت مجدداً /start را ارسال کنید.",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
     clear_state(chat_id)
-    await update.message.reply_text(
+    await msg.reply_text(
         "👋 به ربات خوش آمدید!\n\nلطفاً یک گزینه را انتخاب کنید 👇",
         reply_markup=get_main_menu_keyboard(),
     )

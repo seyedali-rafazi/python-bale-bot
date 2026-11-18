@@ -85,10 +85,7 @@ async def youtube_destination_callback(
         delivery_mode=delivery_mode,
     )
 
-    if destination == "telegram":
-        keyboard = get_yt_quality_telegram_keyboard()
-    else:
-        keyboard = get_yt_quality_server_keyboard()
+    keyboard = get_yt_quality_telegram_keyboard()
 
     await query.edit_message_text(
         _quality_prompt(format_type), reply_markup=keyboard
@@ -140,16 +137,14 @@ async def youtube_delivery_callback(
 
 async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-
-    try:
-        await query.answer()
-    except Exception as e:
-        print(f"⚠️ Error answering callback query: {e}")
-
     data = query.data
     chat_id = str(query.message.chat_id)
 
     if not data.startswith("ytqual_"):
+        try:
+            await query.answer()
+        except Exception:
+            pass
         return
 
     quality = data.split("_")[1]
@@ -157,8 +152,16 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
     async with user_action_lock(user_id, "yt_qual", timeout_sec=30) as acquired:
         if not acquired:
-            await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
+            try:
+                await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
+            except Exception:
+                pass
             return
+
+        try:
+            await query.answer()
+        except Exception as e:
+            print(f"⚠️ Error answering callback query: {e}")
 
         user_state = await async_get_state(chat_id)
         if not user_state or user_state.get("step") not in [
@@ -171,7 +174,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         if user_state.get("step") == "processing_yt_quality":
-            await query.answer("⏳ در حال پردازش... لطفا صبر کنید.")
+            await query.message.reply_text("⏳ در حال پردازش... لطفا صبر کنید.")
             return
 
         url = user_state.get("yt_url")
@@ -210,19 +213,11 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
             if estimated_size and estimated_size > limit:
                 size_mb = round(estimated_size / (1024 * 1024), 1)
-
-                if destination == "telegram":
-                    msg = (
-                        f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
-                        "لطفاً کیفیت پایین‌تری انتخاب کنید."
-                    )
-                    keyboard = get_yt_quality_telegram_keyboard()
-                else:
-                    msg = (
-                        f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
-                        "لطفاً کیفیت پایین‌تری انتخاب کنید."
-                    )
-                    keyboard = get_yt_quality_server_keyboard()
+                msg = (
+                    f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
+                    "لطفاً کیفیت پایین‌تری انتخاب کنید."
+                )
+                keyboard = get_yt_quality_telegram_keyboard()
 
                 set_state(
                     chat_id,
@@ -236,10 +231,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                 return
         except Exception as e:
             print(f"⚠️ Error checking filesize: {e}")
-            if destination == "telegram":
-                keyboard = get_yt_quality_telegram_keyboard()
-            else:
-                keyboard = get_yt_quality_server_keyboard()
+            keyboard = get_yt_quality_telegram_keyboard()
             set_state(
                 chat_id,
                 "waiting_yt_quality",

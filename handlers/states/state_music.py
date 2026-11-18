@@ -18,7 +18,10 @@ from core.database import (
     log_upload_success,
     log_upload_failed,
 )
+from core.state_manager import StateCache
+from core.limits import get_limit
 from core.task_utils import remove_file_async, track_task
+from services.rate_limiter import user_action_lock
 from services.music import (
     async_search_track,
     async_search_album,
@@ -49,6 +52,7 @@ except ImportError:
 # صف دانلود برای جلوگیری از فشار به سرور و محدودیت‌های یوتیوب
 MAX_MUSIC_CONCURRENT = 3
 music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
+_music_track_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 
 
 async def background_download_task(
@@ -68,7 +72,7 @@ async def background_download_task(
     file_path = None  # برای استفاده در بلاک finally
 
     try:
-        # قفل صف (فقط 3 دانلود همزمان انجام می‌شود)
+        # قفل صف فقط برای مرحله دانلود (آپلود به بله/S3 سمافور دانلود را اشغال نمی‌کند)
         async with music_download_semaphore:
             try:
                 await context.bot.edit_message_text(
@@ -82,7 +86,7 @@ async def background_download_task(
             # دانلود در ترد جداگانه
             file_path = await asyncio.to_thread(download_youtube_audio, track_id)
 
-            if file_path and os.path.exists(file_path):
+        if file_path and os.path.exists(file_path):
                 # =====================================
                 # چک فضای ابری برای آپلود به سرور
                 # =====================================
@@ -145,7 +149,6 @@ async def background_download_task(
                         )
 
                         await increment_music_downloads(chat_id)
-                        await log_upload_success("music", chat_id)
                         return
 
                     else:
@@ -172,9 +175,8 @@ async def background_download_task(
                         connect_timeout=60,
                     )
 
-                    # ثبت آمار پس از موفقیت (اصلاح شد: اضافه شدن await)
+                    # ثبت آمار پس از موفقیت
                     await increment_music_downloads(chat_id)
-                    await log_upload_success("music", chat_id)
 
                     try:
                         await context.bot.edit_message_text(
@@ -184,7 +186,7 @@ async def background_download_task(
                         )
                     except BadRequest:
                         pass
-            else:
+        else:
                 await context.bot.send_message(
                     chat_id, "❌ دانلود از سرور مبدا شکست خورد یا فایل یافت نشد."
                 )
@@ -211,9 +213,11 @@ def _make_safe_filename(title: str, performer: str) -> str:
 
 
 async def _can_download_music(chat_id: str) -> tuple[bool, int]:
-    user_vip_status = await is_vip(chat_id)
-    limit = 20 if user_vip_status else 6
-    current_downloads = await get_music_downloads(chat_id)
+    user_vip_status, current_downloads = await asyncio.gather(
+        is_vip(chat_id),
+        get_music_downloads(chat_id),
+    )
+    limit = get_limit("music_download", int(bool(user_vip_status)))
     return current_downloads < limit, limit
 
 
@@ -505,39 +509,46 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # ===================================
     # بررسی کال‌بک‌های دانلود به بله و ابری (قبل از dltrack_ عام)
     # ===================================
-    elif data.startswith("dltrack_tel_"):
+    elif data.startswith("dltrack_tel_") or data.startswith("dltrack_cloud_"):
+        is_cloud = data.startswith("dltrack_cloud_")
         track_id = data.split("_", 3)[2]
-        track_info = context.user_data.get(f"track_{track_id}", {})
+        destination = "server" if is_cloud else "telegram"
 
-        track_task(
-            background_download_task(
-                context,
-                chat_id,
-                track_id,
-                track_info.get("title", "Unknown"),
-                track_info.get("performer", "Unknown"),
-                track_info.get("safe_filename", "track"),
-                destination="telegram",
-            ),
-            name=f"music_dl_tel_{chat_id}",
-        )
+        async with user_action_lock(chat_id, "music_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await query.message.reply_text("⏳ درخواست شما در حال ثبت است. لطفاً صبر کنید.")
+                return
 
-    elif data.startswith("dltrack_cloud_"):
-        track_id = data.split("_", 3)[2]
-        track_info = context.user_data.get(f"track_{track_id}", {})
+            can_download, limit = await _can_download_music(chat_id)
+            if not can_download:
+                await query.message.reply_text(
+                    f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ($ {limit} $ آهنگ).\nفردا مجدداً تلاش کنید."
+                )
+                return
 
-        track_task(
-            background_download_task(
-                context,
-                chat_id,
-                track_id,
-                track_info.get("title", "Unknown"),
-                track_info.get("performer", "Unknown"),
-                track_info.get("safe_filename", "track"),
-                destination="server",
-            ),
-            name=f"music_dl_cloud_{chat_id}",
-        )
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            track_info = (
+                _music_track_cache.pop(f"{chat_id}:{track_id}", None)
+                or context.user_data.pop(f"track_{track_id}", None)
+                or {}
+            )
+
+            track_task(
+                background_download_task(
+                    context,
+                    chat_id,
+                    track_id,
+                    track_info.get("title", "Unknown"),
+                    track_info.get("performer", "Unknown"),
+                    track_info.get("safe_filename", "track"),
+                    destination=destination,
+                ),
+                name=f"music_dl_{'cloud' if is_cloud else 'tel'}_{chat_id}",
+            )
 
     # ===================================
     # کال‌بک دانلود عام (انتخاب مقصد)
@@ -545,12 +556,8 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("dltrack_"):
         track_id = data.split("_", 1)[1]
 
-        # 1. بررسی محدودیت کاربر (اصلاح شد: اضافه شدن await)
-        user_vip_status = await is_vip(chat_id)
-        limit = 20 if user_vip_status else 6
-        current_downloads = await get_music_downloads(chat_id)
-
-        if current_downloads >= limit:
+        can_download, limit = await _can_download_music(chat_id)
+        if not can_download:
             await query.message.reply_text(
                 f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ($ {limit} $ آهنگ).\nفردا مجدداً تلاش کنید."
             )
@@ -601,8 +608,8 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-        # ذخیره اطلاعات برای استفاده بعدی
-        context.user_data[f"track_{track_id}"] = {
+        # ذخیره اطلاعات در کش محدود با TTL (جلوگیری از رشد بی‌حد context.user_data)
+        _music_track_cache[f"{chat_id}:{track_id}"] = {
             "title": title,
             "performer": performer,
             "safe_filename": safe_filename,

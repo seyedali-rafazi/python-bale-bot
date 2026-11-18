@@ -8,10 +8,13 @@ import logging
 import urllib.parse
 import html
 import re
+import time
 from dotenv import load_dotenv
 
+from core.task_utils import remove_file_async, stream_aiohttp_to_file
 from services.http_client import get_http_session
 from services.flaresolverr import flaresolverr_request
+from services.youtube import get_ytdlp_executable
 
 load_dotenv()
 
@@ -21,6 +24,18 @@ DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
+_tikwm_last_call = 0.0
+_tikwm_rate_lock = asyncio.Lock()
+
+
+async def _pace_tikwm_request(min_interval: float = 0.5) -> None:
+    global _tikwm_last_call
+    async with _tikwm_rate_lock:
+        now = time.monotonic()
+        wait = min_interval - (now - _tikwm_last_call)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _tikwm_last_call = time.monotonic()
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -100,24 +115,17 @@ async def _download_stream_to_file(
                 logger.warning("[TikTok] Direct stream download returned HTTP %s for URL: %s", resp.status, download_url[:100])
                 return False
 
-            with open(output_path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    if chunk:
-                        f.write(chunk)
+            downloaded = await stream_aiohttp_to_file(
+                resp, output_path, chunk_size=64 * 1024
+            )
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1024:
+        if downloaded > 1024:
             return True
-        else:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            return False
+        await remove_file_async(output_path)
+        return False
     except Exception as e:
         logger.warning("[TikTok] Stream download exception: %s", e)
-        if os.path.exists(output_path):
-            try:
-                os.remove(output_path)
-            except Exception:
-                pass
+        await remove_file_async(output_path)
         return False
 
 
@@ -267,14 +275,10 @@ async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> lis
 
 
 async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None:
-    import sys
     req_id = uuid.uuid4().hex
     output_template = os.path.join(DOWNLOAD_DIR, f"tt_{req_id}.%(ext)s")
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "yt_dlp",
+    cmd = get_ytdlp_executable() + [
         "-f",
         "bv*+ba/b",
         "--merge-output-format",
@@ -440,23 +444,19 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
         return []
 
     results = []
+    cf_blocked = False
+    session = await get_http_session()
+    endpoints = [
+        "https://www.tikwm.com/api/feed/search",
+        "https://tikwm.com/api/feed/search",
+    ]
+    proxy = _get_proxy()
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+        kwargs["proxy"] = proxy
 
     async with TIKWM_API_SEMAPHORE:
-        await asyncio.sleep(0.5)
-
-        session = await get_http_session()
-
-        endpoints = [
-            "https://www.tikwm.com/api/feed/search",
-            "https://tikwm.com/api/feed/search",
-        ]
-
-        proxy = _get_proxy()
-        kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
-        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
-            kwargs["proxy"] = proxy
-
-        cf_blocked = False
+        await _pace_tikwm_request()
 
         for endpoint in endpoints:
             # روش ۱: ارسال POST مستقیم با فرم دیتا
@@ -506,48 +506,48 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
             except Exception as e:
                 logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
 
-        # روش ۳: استفاده از Byparr / FlareSolverr برای حل چالش کلادفلر در صورت 403
-        if cf_blocked or not results:
-            logger.info("[TikTok] Attempting Byparr/FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
+    # روش ۳: استفاده از Byparr / FlareSolverr خارج از سمافور TikWM تا بقیه درخواست‌ها بلاک نشوند
+    if cf_blocked or not results:
+        logger.info("[TikTok] Attempting Byparr/FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
 
-            target_url = "https://www.tikwm.com/api/feed/search"
-            encoded_query = urllib.parse.quote(clean_query)
-            target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+        target_url = "https://www.tikwm.com/api/feed/search"
+        encoded_query = urllib.parse.quote(clean_query)
+        target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
 
-            # اول درخواست GET (سازگار با Byparr و بدون پارامتر منسوخ headers)
+        # اول درخواست GET (سازگار با Byparr و بدون پارامتر منسوخ headers)
+        solution = await flaresolverr_request(
+            url=target_get_url,
+            method="GET",
+            timeout=60,
+        )
+
+        # اگر GET پاسخ نداد، POST را بدون headers امتحان می‌کنیم
+        if not solution:
+            post_payload = f"keywords={encoded_query}&count={max_results}&cursor=0&web=1"
             solution = await flaresolverr_request(
-                url=target_get_url,
-                method="GET",
+                url=target_url,
+                method="POST",
+                post_data=post_payload,
                 timeout=60,
             )
 
-            # اگر GET پاسخ نداد، POST را بدون headers امتحان می‌کنیم
-            if not solution:
-                post_payload = f"keywords={encoded_query}&count={max_results}&cursor=0&web=1"
-                solution = await flaresolverr_request(
-                    url=target_url,
-                    method="POST",
-                    post_data=post_payload,
-                    timeout=60,
-                )
+        if solution and solution.get("response"):
+            raw_resp = solution["response"]
+            data = _extract_json_data(raw_resp)
+            if data:
+                results = _parse_tikwm_search_response(data, max_results)
+                if results:
+                    logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
+                    return results
+            else:
+                logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
 
-            if solution and solution.get("response"):
-                raw_resp = solution["response"]
-                data = _extract_json_data(raw_resp)
-                if data:
-                    results = _parse_tikwm_search_response(data, max_results)
-                    if results:
-                        logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
-                        return results
-                else:
-                    logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
-
-        if not results:
-            logger.error(
-                "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and Byparr/FlareSolverr did not return results. "
-                "Ensure Byparr/FlareSolverr container is running on port 8191.",
-                clean_query,
-            )
+    if not results:
+        logger.error(
+            "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and Byparr/FlareSolverr did not return results. "
+            "Ensure Byparr/FlareSolverr container is running on port 8191.",
+            clean_query,
+        )
 
     return results
 
@@ -616,23 +616,19 @@ def _parse_tikwm_search_response(data: dict, max_results: int) -> list:
 async def get_tiktok_trends(count: int = 10):
     """گرفتن ویدیوهای ترند تیک‌تاک با پشتیبانی بای‌پاس کلادفلر FlareSolverr"""
     results = []
+    cf_blocked = False
+    session = await get_http_session()
+    endpoints = [
+        f"https://www.tikwm.com/api/feed/list?region=US&count={count}",
+        f"https://tikwm.com/api/feed/list?region=US&count={count}",
+    ]
+    proxy = _get_proxy()
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+        kwargs["proxy"] = proxy
 
     async with TIKWM_API_SEMAPHORE:
-        await asyncio.sleep(0.5)
-
-        session = await get_http_session()
-
-        endpoints = [
-            f"https://www.tikwm.com/api/feed/list?region=US&count={count}",
-            f"https://tikwm.com/api/feed/list?region=US&count={count}",
-        ]
-
-        proxy = _get_proxy()
-        kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
-        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
-            kwargs["proxy"] = proxy
-
-        cf_blocked = False
+        await _pace_tikwm_request()
 
         for url in endpoints:
             try:
@@ -680,46 +676,46 @@ async def get_tiktok_trends(count: int = 10):
             except Exception as e:
                 logger.warning("[TikTok] Trends API Error for %s: %s", url, e)
 
-        # تلاش با Byparr / FlareSolverr در صورت کلادفلر
-        if cf_blocked or not results:
-            target_url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
-            solution = await flaresolverr_request(url=target_url, method="GET", timeout=60)
+    # تلاش با Byparr / FlareSolverr خارج از سمافور TikWM
+    if cf_blocked or not results:
+        target_url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
+        solution = await flaresolverr_request(url=target_url, method="GET", timeout=60)
 
-            if solution and solution.get("response"):
-                raw_resp = solution["response"]
-                data = _extract_json_data(raw_resp)
-                if isinstance(data, dict) and data.get("code") == 0:
-                    data_block = data.get("data")
-                    videos = []
-                    if isinstance(data_block, list):
-                        videos = data_block
-                    elif isinstance(data_block, dict):
-                        videos = data_block.get("videos") or data_block.get("list") or []
+        if solution and solution.get("response"):
+            raw_resp = solution["response"]
+            data = _extract_json_data(raw_resp)
+            if isinstance(data, dict) and data.get("code") == 0:
+                data_block = data.get("data")
+                videos = []
+                if isinstance(data_block, list):
+                    videos = data_block
+                elif isinstance(data_block, dict):
+                    videos = data_block.get("videos") or data_block.get("list") or []
 
-                    for item in videos:
-                        if not isinstance(item, dict):
-                            continue
+                for item in videos:
+                    if not isinstance(item, dict):
+                        continue
 
-                        title = item.get("title") or item.get("desc") or "Trending video"
-                        video_id = item.get("video_id") or item.get("id")
+                    title = item.get("title") or item.get("desc") or "Trending video"
+                    video_id = item.get("video_id") or item.get("id")
 
-                        author_data = item.get("author")
-                        if isinstance(author_data, dict):
-                            author = author_data.get("unique_id", "user")
-                        else:
-                            author = "user"
+                    author_data = item.get("author")
+                    if isinstance(author_data, dict):
+                        author = author_data.get("unique_id", "user")
+                    else:
+                        author = "user"
 
-                        if not video_id:
-                            continue
+                    if not video_id:
+                        continue
 
-                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
 
-                        results.append({"title": title, "url": link})
+                    results.append({"title": title, "url": link})
 
-                        if len(results) >= count:
-                            break
+                    if len(results) >= count:
+                        break
 
-                    if results:
-                        return results
+                if results:
+                    return results
 
     return results

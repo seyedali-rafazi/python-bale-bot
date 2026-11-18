@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+from core.task_utils import remove_files_async
 from core.database import (
     is_vip,
     decrement_yt_downloads,
@@ -12,7 +13,6 @@ from core.database import (
     reduce_cloud_storage,
     add_cloud_file,
     get_available_cloud_mb,
-    log_upload_success,
     log_upload_failed,
 )
 from services.youtube import (
@@ -115,9 +115,8 @@ async def background_yt_download(
                 context,
                 chat_id,
                 cached_files,
-                effective_format,
+                (meta.get("format_type") if meta else None) or effective_format,
             )
-            await log_upload_success("youtube", chat_id)
             await increment_yt_video_view(cache_key)
 
             if not has_meta and info_cached:
@@ -128,6 +127,7 @@ async def background_yt_download(
                     title=info_cached.get("title"),
                     channel_name=info_cached.get("uploader"),
                     uploaded_at=uploaded_at_from_video_info(info_cached),
+                    resolve_missing_meta=False,
                 )
 
             return
@@ -147,17 +147,14 @@ async def background_yt_download(
     # چک سایز قبل دانلود
     # =========================================
 
+    estimated_size = None
     try:
         if format_type == "video":
             estimated_size = await get_video_filesize_cached(url, quality)
         else:
             estimated_size = await get_video_filesize_cached(url, "bestaudio")
 
-        limit = (
-            1 * 1024 * 1024 * 1024
-            if destination == "telegram"
-            else 1 * 1024 * 1024 * 1024
-        )
+        limit = 1 * 1024 * 1024 * 1024
 
         if estimated_size:
             # 1. چک کردن محدودیت کلی سرور/تلگرام
@@ -311,12 +308,9 @@ async def background_yt_download(
                     downloaded_files = []
                     zip_artifacts = []
 
+                    raw_file = None
                     try:
-                        max_size = (
-                            1 * 1024 * 1024 * 1024
-                            if destination == "telegram"
-                            else 1 * 1024 * 1024 * 1024
-                        )
+                        max_size = 1 * 1024 * 1024 * 1024
                         raw_file = await asyncio.to_thread(
                             download_youtube_video,
                             url,
@@ -332,19 +326,11 @@ async def background_yt_download(
                         # =========================
 
                         if raw_file == "TOO_LARGE":
-                            if destination == "telegram":
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ حجم فایل بیش از 1 گیگابایت است.",
-                                )
-                            else:
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ حجم فایل بیش از 1 گیگابایت است.",
-                                )
-
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ حجم فایل بیش از 1 گیگابایت است.",
+                            )
                             await decrement_yt_downloads(chat_id)
-
                             return
 
                         # =========================
@@ -483,7 +469,6 @@ async def background_yt_download(
                                         text=f"✅ فایل با موفقیت در فضای ابری ذخیره شد.\n\n📉 حجم کسر شده: {total_size_mb} مگابایت\n⏳ تاریخ انقضای لینک‌ها: 3 ساعت\n\n{links_text}",
                                         parse_mode="Markdown",
                                     )
-                                    await log_upload_success("youtube", chat_id)
 
                                 else:
                                     await context.bot.send_message(
@@ -522,7 +507,6 @@ async def background_yt_download(
                                         video_id=video_id,
                                         label=f"Video ID: {video_id}",
                                     )
-                                await log_upload_success("youtube", chat_id)
 
                         else:
                             raise Exception("Download failed")
@@ -532,20 +516,13 @@ async def background_yt_download(
 
                         error_text = str(send_err).lower()
 
-                        # =========================================
-                        # فایل بزرگ — بدون تلاش مجدد از سرور دیگر
-                        # =========================================
-
                         if raw_file == "TOO_LARGE" or any(
                             keyword in error_text
-                            for keyword in [
+                            for keyword in (
+                                "file is larger than max-filesize",
                                 "too large",
                                 "max-filesize",
-                                "1000",
-                                "size",
-                                "exceed",
-                                "limit",
-                            ]
+                            )
                         ):
                             await context.bot.send_message(
                                 chat_id=chat_id,
@@ -564,18 +541,7 @@ async def background_yt_download(
                         await decrement_yt_downloads(chat_id)
 
                     finally:
-                        for file_path in downloaded_files:
-                            if os.path.exists(file_path):
-                                try:
-                                    await asyncio.to_thread(os.remove, file_path)
-                                except Exception:
-                                    pass
-                        for z in zip_artifacts:
-                            if z and isinstance(z, str) and os.path.exists(z):
-                                try:
-                                    await asyncio.to_thread(os.remove, z)
-                                except Exception:
-                                    pass
+                        await remove_files_async([*downloaded_files, *zip_artifacts])
 
                 # =========================================
                 # AUDIO
@@ -586,11 +552,7 @@ async def background_yt_download(
                     zip_artifacts = []
 
                     try:
-                        max_size = (
-                            1 * 1024 * 1024 * 1024
-                            if destination == "telegram"
-                            else 1 * 1024 * 1024 * 1024
-                        )
+                        max_size = 1 * 1024 * 1024 * 1024
                         file_path = await asyncio.to_thread(
                             download_youtube_audio,
                             url,
@@ -604,19 +566,11 @@ async def background_yt_download(
                         # =========================
 
                         if file_path == "TOO_LARGE":
-                            if destination == "telegram":
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ حجم فایل صوتی بیش از 1 گیگابایت است.",
-                                )
-                            else:
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="❌ حجم فایل صوتی بیشتر از 1 گیگابایت است.",
-                                )
-
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text="❌ حجم فایل صوتی بیش از 1 گیگابایت است.",
+                            )
                             await decrement_yt_downloads(chat_id)
-
                             return
 
                         # =========================
@@ -698,7 +652,6 @@ async def background_yt_download(
                                         text=f"✅ فایل صوتی با موفقیت ذخیره شد:\n\n📉 حجم کسر شده: {audio_size_mb} مگابایت\n\n🔗 [لینک دانلود]({s3_url})",
                                         parse_mode="Markdown",
                                     )
-                                    await log_upload_success("youtube", chat_id)
 
                                 else:
                                     await context.bot.send_message(
@@ -713,12 +666,12 @@ async def background_yt_download(
                             # =====================
 
                             else:
-                                # Telegram destination: Send as audio file first, then ZIP
                                 file_size_mb = os.path.getsize(file_path) / (
                                     1024 * 1024
                                 )
+                                sent_direct_audio = False
 
-                                # Send as audio file if under 50MB
+                                # Send & cache directly as audio if under 50MB (skip redundant ZIP)
                                 if file_size_mb < 50:
                                     try:
                                         await context.bot.send_message(
@@ -732,62 +685,67 @@ async def background_yt_download(
                                             caption=f"🎵 {info.get('title') if info else video_id}",
                                         )
 
-                                        # Send audio to user
-                                        await send_audio_once(
+                                        sent_ok = await send_audio_once(
                                             context, chat_id, audio_file_id
                                         )
-
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text="✅ فایل صوتی ارسال شد!",
-                                        )
+                                        if sent_ok:
+                                            await save_cached_video(
+                                                cache_key,
+                                                [audio_file_id],
+                                                title=info.get("title") if info else None,
+                                                channel_name=info.get("uploader") if info else None,
+                                                yt_video_id=video_id,
+                                                format_type="audio",
+                                                quality="best",
+                                                uploaded_at=uploaded_at_from_video_info(info),
+                                            )
+                                            await context.bot.send_message(
+                                                chat_id=chat_id,
+                                                text="✅ فایل صوتی ارسال شد!",
+                                            )
+                                            sent_direct_audio = True
                                     except Exception as audio_err:
                                         print(f"⚠️ Could not send as audio: {audio_err}")
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text="⚠️ ارسال به صورت فایل صوتی ناموفق بود. در حال ارسال ZIP...",
-                                        )
 
-                                # Also send as ZIP for backup/compatibility
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 50MB...",
-                                )
-                                zip_basename = f"youtube_audio_{video_id}"
-                                (
-                                    zip_parts,
-                                    archive_basename,
-                                    split_method,
-                                ) = await asyncio.to_thread(
-                                    build_zip_and_split,
-                                    file_path,
-                                    os.path.dirname(file_path) or ".",
-                                    zip_basename,
-                                    50 * 1024 * 1024,
-                                )
-                                zip_artifacts.extend(zip_parts)
-                                if split_method == "concat":
-                                    full_zip = os.path.join(
-                                        os.path.dirname(file_path) or ".",
-                                        f"{archive_basename}.zip",
+                                if not sent_direct_audio:
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text="📦 در حال ساخت ZIP و تقسیم به پارت‌های 50MB...",
                                     )
-                                    if os.path.isfile(full_zip):
-                                        zip_artifacts.append(full_zip)
+                                    zip_basename = f"youtube_audio_{video_id}"
+                                    (
+                                        zip_parts,
+                                        archive_basename,
+                                        split_method,
+                                    ) = await asyncio.to_thread(
+                                        build_zip_and_split,
+                                        file_path,
+                                        os.path.dirname(file_path) or ".",
+                                        zip_basename,
+                                        50 * 1024 * 1024,
+                                    )
+                                    zip_artifacts.extend(zip_parts)
+                                    if split_method == "concat":
+                                        full_zip = os.path.join(
+                                            os.path.dirname(file_path) or ".",
+                                            f"{archive_basename}.zip",
+                                        )
+                                        if os.path.isfile(full_zip):
+                                            zip_artifacts.append(full_zip)
 
-                                await process_and_send_document_parts(
-                                    context,
-                                    chat_id,
-                                    zip_parts,
-                                    label=f"Audio ID: {video_id}",
-                                    cache_key=cache_key,
-                                    archive_basename=archive_basename,
-                                    split_method=split_method,
-                                    video_id=video_id,
-                                    title=info.get("title") if info else None,
-                                    channel_name=info.get("uploader") if info else None,
-                                    uploaded_at=uploaded_at_from_video_info(info),
-                                )
-                                await log_upload_success("youtube", chat_id)
+                                    await process_and_send_document_parts(
+                                        context,
+                                        chat_id,
+                                        zip_parts,
+                                        label=f"Audio ID: {video_id}",
+                                        cache_key=cache_key,
+                                        archive_basename=archive_basename,
+                                        split_method=split_method,
+                                        video_id=video_id,
+                                        title=info.get("title") if info else None,
+                                        channel_name=info.get("uploader") if info else None,
+                                        uploaded_at=uploaded_at_from_video_info(info),
+                                    )
 
                         else:
                             await context.bot.send_message(
@@ -808,20 +766,7 @@ async def background_yt_download(
                         await decrement_yt_downloads(chat_id)
 
                     finally:
-                        if file_path and os.path.exists(file_path):
-                            try:
-                                await asyncio.to_thread(
-                                    os.remove,
-                                    file_path,
-                                )
-                            except:
-                                pass
-                        for z in zip_artifacts:
-                            if z and isinstance(z, str) and os.path.exists(z):
-                                try:
-                                    await asyncio.to_thread(os.remove, z)
-                                except Exception:
-                                    pass
+                        await remove_files_async([file_path, *zip_artifacts])
 
             except Exception as e:
                 progress_dict["is_finished"] = True

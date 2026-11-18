@@ -24,8 +24,8 @@ from core.database import (
     get_pinterest_downloads,
     increment_pinterest_downloads,
     is_vip,
-    log_upload_success,
 )
+from services.rate_limiter import user_action_lock
 
 from core.limits import get_limit
 
@@ -146,46 +146,6 @@ async def get_image_bytes(
                         continue
                     break
         return None
-
-
-async def fetch_image_bytes(
-    urls: List[str],
-) -> List[BytesIO]:
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/124.0.0.0 "
-            "Safari/537.36"
-        ),
-        "Referer": "https://www.pinterest.com/",
-    }
-
-    session = await get_http_session()
-    tasks = [
-        get_image_bytes(
-            session,
-            url,
-            headers=headers,
-        )
-        for url in urls
-    ]
-
-    results = await asyncio.gather(
-        *tasks,
-        return_exceptions=True,
-    )
-
-    images = []
-
-    for item in results:
-        if isinstance(item, BytesIO):
-            images.append(item)
-
-    return images
 
 
 async def send_image_batch(
@@ -365,7 +325,6 @@ async def process_pinterest_search(
         return
 
     await increment_pinterest_downloads(user_id)
-    await log_upload_success("pinterest", user_id)
 
     if SEND_BATCH_SIZE < len(image_urls):
         _pin_pagination_cache[str(chat_id)] = {
@@ -397,11 +356,14 @@ async def handle_pinterest_state(
 
     user_id = str(update.effective_user.id)
 
-    usage = await get_pinterest_downloads(user_id)
+    usage, vip_status = await asyncio.gather(
+        get_pinterest_downloads(user_id),
+        is_vip(user_id),
+    )
 
     limit = get_limit(
         "pinterest_search",
-        await is_vip(user_id),
+        vip_status,
     )
 
     if usage >= limit:
@@ -440,70 +402,81 @@ async def process_more_pins(
 
     query = update.callback_query
     pin_key = str(query.message.chat_id)
-    cached_pin = _pin_pagination_cache.get(pin_key)
-    images = (cached_pin or {}).get("images") or context.user_data.get("pin_images", [])
-    index = (cached_pin or {}).get("index") if cached_pin is not None else context.user_data.get("pin_index", 0)
+    user_id = str(query.from_user.id) if query.from_user else pin_key
 
-    if not images:
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="❌ داده‌ای یافت نشد",
+    async with user_action_lock(user_id, "more_pins", timeout_sec=15) as acquired:
+        if not acquired:
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="⏳ درخواست قبلی شما در حال ارسال است. لطفاً صبر کنید.",
+            )
+            return
+
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        cached_pin = _pin_pagination_cache.get(pin_key)
+        images = (cached_pin or {}).get("images") or context.user_data.get("pin_images", [])
+        index = (cached_pin or {}).get("index") if cached_pin is not None else context.user_data.get("pin_index", 0)
+
+        if not images:
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="❌ داده‌ای یافت نشد",
+            )
+            return
+
+        next_batch = images[index : index + SEND_BATCH_SIZE]
+
+        if not next_batch:
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="✅ همه تصاویر ارسال شدند",
+            )
+            return
+
+        msg = await context.bot.send_message(
+            chat_id=pin_key,
+            text="⏳ در حال ارسال...",
         )
 
-        return
-
-    next_batch = images[index : index + SEND_BATCH_SIZE]
-
-    if not next_batch:
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="✅ همه تصاویر ارسال شدند",
+        sent_count = await send_image_batch(
+            pin_key,
+            context,
+            next_batch,
         )
 
-        return
+        try:
+            await msg.delete()
+        except Exception:
+            pass
 
-    msg = await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text="⏳ در حال ارسال...",
-    )
+        if sent_count == 0:
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="❌ خطا در ارسال تصاویر",
+            )
+            return
 
-    sent_count = await send_image_batch(
-        query.message.chat_id,
-        context,
-        next_batch,
-    )
-
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
-    if sent_count == 0:
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="❌ خطا در ارسال تصاویر",
-        )
-
-        return
-
-    next_index = index + SEND_BATCH_SIZE
-    if next_index < len(images):
-        _pin_pagination_cache[pin_key] = {
-            "images": images,
-            "index": next_index,
-        }
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="برای تصاویر بیشتر روی دکمه زیر بزنید:",
-            reply_markup=build_more_keyboard(),
-        )
-
-    else:
-        _pin_pagination_cache.pop(pin_key, None)
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="✅ همه تصاویر ارسال شدند",
-        )
+        next_index = index + SEND_BATCH_SIZE
+        if next_index < len(images):
+            _pin_pagination_cache[pin_key] = {
+                "images": images,
+                "index": next_index,
+            }
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="برای تصاویر بیشتر روی دکمه زیر بزنید:",
+                reply_markup=build_more_keyboard(),
+            )
+        else:
+            _pin_pagination_cache.pop(pin_key, None)
+            await context.bot.send_message(
+                chat_id=pin_key,
+                text="✅ همه تصاویر ارسال شدند",
+            )
 
 
 async def handle_more_pins_callback(

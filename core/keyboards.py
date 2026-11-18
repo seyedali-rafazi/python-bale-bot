@@ -1,5 +1,6 @@
 # core/keyboards.py
 
+from functools import lru_cache
 from telegram import (
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -9,6 +10,7 @@ from telegram import (
 from .constants import *
 
 
+@lru_cache(maxsize=1)
 def get_main_menu_keyboard():
     keyboard = [
         [
@@ -36,6 +38,7 @@ def get_main_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_software_menu_keyboard():
     keyboard = [
         [
@@ -48,6 +51,7 @@ def get_software_menu_keyboard():
 
 
 
+@lru_cache(maxsize=1)
 def get_yt_format_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_VIDEO)],
@@ -57,6 +61,7 @@ def get_yt_format_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_ai_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_AI_CHAT), KeyboardButton(BTN_AI_OCR)],
@@ -66,6 +71,7 @@ def get_ai_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_music_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_MUSIC_TRACK), KeyboardButton(BTN_MUSIC_ALBUM)],
@@ -76,6 +82,7 @@ def get_music_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_telegram_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_TG_SINGLE)],
@@ -85,6 +92,7 @@ def get_telegram_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_youtube_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_LAST5), KeyboardButton(BTN_YT_CH_SEARCH)],
@@ -96,6 +104,7 @@ def get_youtube_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_yt_archive_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_YT_CACHE_SEARCH_TITLE)],
@@ -105,6 +114,7 @@ def get_yt_archive_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_insta_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_IG_LINK_DL)],
@@ -113,6 +123,7 @@ def get_insta_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_translation_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_TR_FA_EN)],
@@ -122,6 +133,7 @@ def get_translation_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_programming_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_PROG_GITHUB)],
@@ -132,6 +144,7 @@ def get_programming_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_tiktok_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_TT_LINK)],
@@ -141,6 +154,7 @@ def get_tiktok_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_github_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_GH_DL_REPO)],
@@ -150,6 +164,7 @@ def get_github_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_yt_delivery_keyboard():
     keyboard = InlineKeyboardMarkup(
         [
@@ -170,8 +185,9 @@ def get_yt_delivery_keyboard():
     return keyboard
 
 
+@lru_cache(maxsize=1)
 def get_yt_quality_telegram_keyboard():
-    keyboard = InlineKeyboardMarkup(
+    return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("144p", callback_data="ytqual_144")],
             [InlineKeyboardButton("240p", callback_data="ytqual_240")],
@@ -180,22 +196,13 @@ def get_yt_quality_telegram_keyboard():
             [InlineKeyboardButton("720p", callback_data="ytqual_720")],
         ]
     )
-    return keyboard
 
 
 def get_yt_quality_server_keyboard():
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("144p", callback_data="ytqual_144")],
-            [InlineKeyboardButton("240p", callback_data="ytqual_240")],
-            [InlineKeyboardButton("360p", callback_data="ytqual_360")],
-            [InlineKeyboardButton("480p", callback_data="ytqual_480")],
-            [InlineKeyboardButton("720p", callback_data="ytqual_720")],
-        ]
-    )
-    return keyboard
+    return get_yt_quality_telegram_keyboard()
 
 
+@lru_cache(maxsize=1)
 def get_cloud_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_UPLOAD_TO_CLOUD)],
@@ -206,6 +213,7 @@ def get_cloud_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_cloud_buy_keyboard():
     keyboard = InlineKeyboardMarkup(
         [
@@ -218,6 +226,7 @@ def get_cloud_buy_keyboard():
     return keyboard
 
 
+@lru_cache(maxsize=1)
 def get_google_search_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_GOOGLE_SEARCH_SUBJECT)],
@@ -227,6 +236,7 @@ def get_google_search_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_image_processing_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_IMG_CREATE_PDF), KeyboardButton(BTN_IMG_CONVERT_FORMAT)],
@@ -237,6 +247,7 @@ def get_image_processing_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_research_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_KAGGLE)],
@@ -246,6 +257,7 @@ def get_research_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_book_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_BOOK_SEARCH)],
@@ -254,6 +266,7 @@ def get_book_menu_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+@lru_cache(maxsize=1)
 def get_kaggle_menu_keyboard():
     keyboard = [
         [KeyboardButton(BTN_KAGGLE_SEARCH)],

@@ -15,7 +15,6 @@ from core.database import (
     get_web_search_downloads,
     increment_web_search_downloads,
     is_vip,
-    log_upload_success,
 )
 from core.limits import get_limit
 
@@ -38,9 +37,11 @@ async def _download_and_send_webpage(
             await message.reply_text("⏳ درخواست قبلی شما هنوز در حال پردازش است. لطفاً صبر کنید.")
             return False
 
-        vip = await is_vip(user_id)
+        vip, current_downloads = await asyncio.gather(
+            is_vip(user_id),
+            get_web_search_downloads(user_id),
+        )
         daily_limit = get_limit("web_search", vip)
-        current_downloads = await get_web_search_downloads(user_id)
 
         if current_downloads >= daily_limit:
             await message.reply_text(
@@ -51,7 +52,7 @@ async def _download_and_send_webpage(
             return False
 
         wait_msg = await message.reply_text(wait_text)
-        os.makedirs("downloads", exist_ok=True)
+        await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
         output_filename = (
             f"downloads/page_{chat_id}_{int(time.time())}_{uuid.uuid4().hex[:6]}.html"
         )
@@ -72,7 +73,6 @@ async def _download_and_send_webpage(
                         filename=filename,
                         caption=f"{caption_label}: {target_url}\n\n📊 دانلود‌های امروز: {new_count}/{daily_limit}",
                     )
-                await log_upload_success("web_search", chat_id)
                 return True
             except Exception as e:
                 print(f"Send Document Error: {e}")
@@ -125,10 +125,21 @@ async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_web_search_state(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, chat_id: str
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    chat_id: str,
+    state_data: dict | None = None,
 ):
-    state_data = await async_get_state(chat_id)
+    if state_data is None:
+        state_data = await async_get_state(chat_id)
     step = state_data.get("step")
+
+    if step == "waiting_google_search_menu":
+        await update.message.reply_text(
+            "لطفاً یکی از گزینه‌های منوی جستجوی وب را انتخاب کنید."
+        )
+        return
 
     if step == "waiting_google_search_subject":
         # بخش جستجو با موضوع

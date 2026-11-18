@@ -173,7 +173,9 @@ class PlaywrightBrowserManager:
                 print(
                     f"❌ Context creation failed (Attempt {attempt + 1}/{max_retries}): {e}"
                 )
-                await self._restart_browser()
+                async with self._init_lock:
+                    if not self._active_context_ids or not self._is_browser_alive():
+                        await self._restart_browser()
                 if attempt == max_retries - 1:
                     raise e
 

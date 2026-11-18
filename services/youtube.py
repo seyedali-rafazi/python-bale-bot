@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 from collections import deque
+from functools import lru_cache
 from dotenv import load_dotenv
 import random
 import json
@@ -70,16 +71,21 @@ def _cookie_args():
     return []
 
 
-def get_ytdlp_executable() -> list[str]:
+@lru_cache(maxsize=1)
+def _cached_ytdlp_executable() -> tuple[str, ...]:
     which = shutil.which("yt-dlp")
     if which:
-        return [which]
+        return (which,)
     venv_dir = os.path.dirname(sys.executable)
     for name in ("yt-dlp.exe", "yt-dlp"):
         candidate = os.path.join(venv_dir, name)
         if os.path.exists(candidate):
-            return [candidate]
-    return [sys.executable, "-m", "yt_dlp"]
+            return (candidate,)
+    return (sys.executable, "-m", "yt_dlp")
+
+
+def get_ytdlp_executable() -> list[str]:
+    return list(_cached_ytdlp_executable())
 
 
 def get_base_search_cmd() -> list[str]:
@@ -560,7 +566,6 @@ def _run_subprocess_and_capture(
             for line in process.stdout:
                 line = line.rstrip()
                 output_lines.append(line)
-                print(line)
 
                 if progress_dict is not None:
                     if "[download]" in line and "%" in line:
@@ -578,6 +583,9 @@ def _run_subprocess_and_capture(
 
                     elif "Destination:" in line:
                         progress_dict["text"] = "📥 شروع دانلود..."
+                        print(line)
+                elif not line.startswith("[download]"):
+                    print(line)
 
         process.wait()
     finally:

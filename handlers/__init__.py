@@ -170,78 +170,92 @@ def register_all_handlers(application):
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("tr", cmd_tr))
 
-    # دکمه‌های بازگشت
+    # جدول مسیریابی O(1) برای دکمه‌های ثابت منو (به جای بررسی خطی ۶۰+ Regex روی هر پیام)
+    menu_button_handlers = {
+        BTN_BACK: btn_back_action,
+        BTN_DL_YOUTUBE: btn_yt_req,
+        BTN_YT_MY_CACHE: btn_yt_my_cache_req,
+        BTN_AI: btn_ai_menu,
+        BTN_AI_CHAT: btn_ai_chat_req,
+        BTN_AI_OCR: btn_ai_ocr_req,
+        BTN_AI_TTS: btn_ai_tts_req,
+        BTN_AI_IMAGE: btn_ai_image_req,
+        BTN_TELEGRAM: btn_telegram_menu,
+        BTN_TG_SINGLE: btn_tg_single_req,
+        BTN_TG_LATEST: btn_tg_latest_req,
+        BTN_YT_LAST5: btn_yt_last5_req,
+        BTN_YT_CH_SEARCH: btn_yt_ch_search_req,
+        BTN_YT_GLOBAL: btn_yt_global_req,
+        BTN_YT_LINK_VID: btn_yt_link_vid_req,
+        BTN_YT_LINK_MP3: btn_yt_link_mp3_req,
+        BTN_YT_TOP_VIDEOS: btn_yt_top_videos_req,
+        BTN_YT_CACHE_SEARCH_CHANNEL: btn_yt_cache_search_channel_req,
+        BTN_YT_CACHE_SEARCH_TITLE: btn_yt_cache_search_title_req,
+        BTN_DL_INSTA: btn_ig_req,
+        BTN_IG_LINK_DL: btn_ig_link_dl_req,
+        BTN_TRANSLATE: btn_tr_help,
+        BTN_TR_FA_EN: btn_tr_fa_en_req,
+        BTN_TR_EN_FA: btn_tr_en_fa_req,
+        BTN_WEATHER: btn_weather_req,
+        BTN_PROGRAMMING: btn_programming_menu,
+        BTN_PROG_CHROME: btn_prog_chrome_req,
+        BTN_PROG_FIREFOX: btn_prog_firefox_req,
+        BTN_PROG_VSCODE: btn_prog_vscode_req,
+        BTN_PROG_GITHUB: btn_prog_github_menu,
+        BTN_GH_DL_REPO: btn_gh_dl_req,
+        BTN_GH_USER: btn_gh_user_req,
+        BTN_GH_SEARCH: btn_gh_search_req,
+        BTN_MUSIC: btn_music_menu,
+        BTN_MUSIC_TRACK: btn_music_track_req,
+        BTN_MUSIC_ALBUM: btn_music_album_req,
+        BTN_MUSIC_ARTIST: btn_music_artist_req,
+        BTN_MUSIC_PLAYLIST: btn_music_playlist_req,
+        BTN_MUSIC_IDENTIFY: btn_music_identify_req,
+        BTN_BUY_VIP: btn_buy_vip,
+        BTN_PINTEREST: btn_pinterest_req,
+        BTN_GOOGLE_SEARCH: btn_web_search_req,
+        BTN_GOOGLE_SEARCH_SUBJECT: btn_google_search_subject_req,
+        BTN_GOOGLE_SEARCH_LINK: btn_google_search_link_req,
+        BTN_IMAGE_PROCESSING: btn_image_processing_menu,
+        BTN_IMG_CREATE_PDF: btn_img_create_pdf_req,
+        BTN_IMG_CONVERT_FORMAT: btn_img_convert_format_req,
+        BTN_IMG_RESIZE: btn_img_resize_req,
+        BTN_IMG_REMOVE_BG: btn_img_remove_bg_req,
+        BTN_MEDIA_VIDEO_TO_GIF: btn_img_video_to_gif_req,
+        BTN_MEDIA_EXTRACT_AUDIO: btn_img_extract_audio_req,
+        BTN_DL_TIKTOK: btn_tiktok_req,
+        BTN_TT_LINK: btn_tt_link_req,
+        BTN_TT_SEARCH: btn_tt_search_req,
+        BTN_TT_TREND: btn_tt_trend_req,
+        BTN_RESEARCH: btn_research_menu,
+        BTN_KAGGLE: btn_kaggle_menu,
+        BTN_KAGGLE_SEARCH: btn_kaggle_search_req,
+        BTN_KAGGLE_POPULAR: btn_kaggle_popular_req,
+        BTN_KAGGLE_DL_LINK: btn_kaggle_dl_link_req,
+        BTN_BOOK_DOWNLOAD: btn_book_menu,
+        BTN_BOOK_SEARCH: btn_book_search_req,
+        BTN_SOFTWARE: btn_software_menu,
+        BTN_SOFTWARE_ANDROID: btn_software_android_req,
+        BTN_SOFTWARE_WINDOWS: btn_software_windows_req,
+        BTN_SUPPORT: btn_support_req,
+        BTN_PROFILE: btn_profile_req,
+        BTN_CLOUD_STORAGE: btn_cloud_storage_menu,
+    }
+
+    async def dispatch_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = (update.message.text or "").strip() if update.message else ""
+        handler_fn = menu_button_handlers.get(text)
+        if handler_fn is not None:
+            await handler_fn(update, context)
+
     application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_BACK)}$"), btn_back_action)
+        MessageHandler(
+            filters.Text(tuple(menu_button_handlers.keys())),
+            dispatch_menu_button,
+        )
     )
 
-    # دکمه‌های منوی اصلی
-
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_YOUTUBE)}$"), btn_yt_req)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_MY_CACHE)}$"), btn_yt_my_cache_req
-        )
-    )
-
-    # هندلرهای هوش مصنوعی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_AI)}$"), btn_ai_menu)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_CHAT)}$"), btn_ai_chat_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_OCR)}$"), btn_ai_ocr_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_TTS)}$"), btn_ai_tts_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_AI_IMAGE)}$"), btn_ai_image_req)
-    )
-
-    # هندلز های تلگرام
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TELEGRAM)}$"), btn_telegram_menu)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_TG_SINGLE)}$"), btn_tg_single_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_TG_LATEST)}$"), btn_tg_latest_req
-        )
-    )
-
-    #  هندلرهای منوی یوتیوب
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_YT_LAST5)}$"), btn_yt_last5_req)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_CH_SEARCH)}$"), btn_yt_ch_search_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_GLOBAL)}$"), btn_yt_global_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_LINK_VID)}$"), btn_yt_link_vid_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_LINK_MP3)}$"), btn_yt_link_mp3_req
-        )
-    )
+    # کال‌بک‌های یوتیوب و آرشیو
     application.add_handler(
         CallbackQueryHandler(youtube_destination_callback, pattern="^ytdest_")
     )
@@ -252,129 +266,19 @@ def register_all_handlers(application):
         CallbackQueryHandler(youtube_quality_callback, pattern="^ytqual_")
     )
     application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_TOP_VIDEOS)}$"), btn_yt_top_videos_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_CACHE_SEARCH_CHANNEL)}$"),
-            btn_yt_cache_search_channel_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_YT_CACHE_SEARCH_TITLE)}$"),
-            btn_yt_cache_search_title_req,
-        )
-    )
-    application.add_handler(
         CallbackQueryHandler(yt_archive_callback, pattern=r"^ytarc_")
     )
-    #  هندلرهای منوی اینستاگرام
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_INSTA)}$"), btn_ig_req)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IG_LINK_DL)}$"), btn_ig_link_dl_req
-        )
-    )
 
-    #  هندلرهای منوی ترجمه
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TRANSLATE)}$"), btn_tr_help)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TR_FA_EN)}$"), btn_tr_fa_en_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TR_EN_FA)}$"), btn_tr_en_fa_req)
-    )
-
-    # هندلر هواشناسی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_WEATHER)}$"), btn_weather_req)
-    )
-
-    # هندلرهای منوی برنامه‌نویسی
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PROGRAMMING)}$"), btn_programming_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PROG_CHROME)}$"), btn_prog_chrome_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PROG_FIREFOX)}$"), btn_prog_firefox_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PROG_VSCODE)}$"), btn_prog_vscode_req
-        )
-    )
-
-    # --- کدهای جدید گیت‌هاب ---
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PROG_GITHUB)}$"), btn_prog_github_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_GH_DL_REPO)}$"), btn_gh_dl_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_GH_USER)}$"), btn_gh_user_req)
-    )
-    # ثبت کال‌بک دکمه‌های شیشه‌ای (جستجوی کروم)
+    # کال‌بک‌های برنامه‌نویسی، موسیقی، اینستاگرام، پینترست، وب، گیت‌هاب، کاگل، کتاب، نرم‌افزار
     application.add_handler(
         CallbackQueryHandler(handle_chrome_callback, pattern=r"^dlchrome_")
     )
-
-    # هندلرهای موسیقی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_MUSIC)}$"), btn_music_menu)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_TRACK)}$"), btn_music_track_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_ALBUM)}$"), btn_music_album_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_ARTIST)}$"), btn_music_artist_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_PLAYLIST)}$"), btn_music_playlist_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MUSIC_IDENTIFY)}$"), btn_music_identify_req
-        )
-    )
-
-    # ثبت کال‌بک دکمه‌های شیشه‌ای مربوط به موسیقی
     application.add_handler(
         CallbackQueryHandler(
             handle_music_callback,
             pattern=r"^(album_|playlist_|artist_|toptracks_|dltrack_)",
         )
     )
-
-    # ثبت کال‌بک دکمه‌های شیشه‌ای مربوط به اینستاگرام
     application.add_handler(
         CallbackQueryHandler(
             handle_insta_callback,
@@ -382,211 +286,31 @@ def register_all_handlers(application):
         )
     )
     application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_BUY_VIP)}$"), btn_buy_vip)
-    )
-    application.add_handler(
-        CallbackQueryHandler(handle_tos_acceptance, pattern="^accept_tos$")
-    )
-    application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
-    application.add_handler(
-        MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
-    )
-
-    # هندلر های پینترست
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_PINTEREST)}$"), btn_pinterest_req
-        )
-    )
-    application.add_handler(
         CallbackQueryHandler(handle_more_pins_callback, pattern="^more_pins$")
     )
-
-    # هندلرهای جست جو وب
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH)}$"), btn_web_search_req
-        )
-    )
-
-    # هندلرهای دکمه‌های منوی جستجوی وب
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH_SUBJECT)}$"),
-            btn_google_search_subject_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_GOOGLE_SEARCH_LINK)}$"),
-            btn_google_search_link_req,
-        )
-    )
-
-    # اضافه کردن کال‌بک دکمه‌های نتایج جستجو
     application.add_handler(
         CallbackQueryHandler(web_search_callback, pattern=r"^webres_\d+$")
-    )
-
-    # هندلرهای پردازش تصویر
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IMAGE_PROCESSING)}$"),
-            btn_image_processing_menu,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IMG_CREATE_PDF)}$"),
-            btn_img_create_pdf_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IMG_CONVERT_FORMAT)}$"),
-            btn_img_convert_format_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IMG_RESIZE)}$"),
-            btn_img_resize_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_IMG_REMOVE_BG)}$"),
-            btn_img_remove_bg_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MEDIA_VIDEO_TO_GIF)}$"),
-            btn_img_video_to_gif_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_MEDIA_EXTRACT_AUDIO)}$"),
-            btn_img_extract_audio_req,
-        )
-    )
-
-    # هندلر های تیک تاک
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_DL_TIKTOK)}$"), btn_tiktok_req)
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_LINK)}$"), btn_tt_link_req)
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_TT_SEARCH)}$"), btn_tt_search_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_TT_TREND)}$"), btn_tt_trend_req)
     )
     application.add_handler(
         CallbackQueryHandler(github_callback_handler, pattern=r"^ghdl_")
     )
     application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_GH_SEARCH)}$"), btn_gh_search_req
-        )
-    )
-
-    # ─── هندلرهای مقاله و تحقیقات (کاگل) ───
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_RESEARCH)}$"), btn_research_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_KAGGLE)}$"), btn_kaggle_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_KAGGLE_SEARCH)}$"), btn_kaggle_search_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_KAGGLE_POPULAR)}$"), btn_kaggle_popular_req
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_KAGGLE_DL_LINK)}$"), btn_kaggle_dl_link_req
-        )
-    )
-    application.add_handler(
         CallbackQueryHandler(kaggle_callback_handler, pattern=r"^kgdl_")
-    )
-
-    # ─── هندلرهای دانلود کتاب ───
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_BOOK_DOWNLOAD)}$"), btn_book_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_BOOK_SEARCH)}$"), btn_book_search_req
-        )
     )
     application.add_handler(
         CallbackQueryHandler(book_callback_handler, pattern=r"^bookdl_")
-    )
-
-    # ─── هندلرهای دانلود نرم‌افزار ───
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_SOFTWARE)}$"), btn_software_menu
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_SOFTWARE_ANDROID)}$"),
-            btn_software_android_req,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_SOFTWARE_WINDOWS)}$"),
-            btn_software_windows_req,
-        )
     )
     application.add_handler(
         CallbackQueryHandler(software_callback_handler, pattern=r"^dl_soft_")
     )
 
-    # هندلر های پرداخت
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_BUY_VIP)}$"), btn_buy_vip)
-    )
+    # هندلرهای پرداخت (فقط یک‌بار)
     application.add_handler(
         CallbackQueryHandler(handle_tos_acceptance, pattern="^accept_tos$")
     )
     application.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     application.add_handler(
         MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
-    )
-
-    # هندلر پشتیبانی
-    application.add_handler(
-        MessageHandler(filters.Regex(f"^{re.escape(BTN_SUPPORT)}$"), btn_support_req)
-    )
-
-    application.add_handler(MessageHandler(filters.Text(BTN_PROFILE), btn_profile_req))
-
-    # هندلر ذخیره ابری
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(f"^{re.escape(BTN_CLOUD_STORAGE)}$"), btn_cloud_storage_menu
-        )
     )
 
     # Cloud upload conversation handler

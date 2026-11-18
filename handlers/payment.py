@@ -60,13 +60,25 @@ async def handle_tos_acceptance(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
 
     # (اختیاری) حذف پیام قوانین برای خلوت شدن صفحه
-    await query.message.delete()
+    try:
+        await query.message.delete()
+    except Exception:
+        pass
+
+    try:
+        payment_amount = int(PAYMENT_VALUE)
+    except (TypeError, ValueError):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ مبلغ پرداخت در تنظیمات سرور تعریف نشده است.",
+        )
+        return
 
     title = "اشتراک VIP"
     description = f"ارتقا به حساب ویژه برای $ {VIP_LIMIT_VALUE} $ روز"
     payload = f"vip_charge_{chat_id}"
     currency = "IRR"
-    prices = [LabeledPrice(f"اشتراک $ {VIP_LIMIT_VALUE} $ روزه", int(PAYMENT_VALUE))]
+    prices = [LabeledPrice(f"اشتراک $ {VIP_LIMIT_VALUE} $ روزه", payment_amount)]
 
     # ارسال فاکتور پرداخت (درگاه)
     await context.bot.send_invoice(

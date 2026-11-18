@@ -1,7 +1,7 @@
 # core/database/users.py
 
 from .connection import get_db
-from .utils import get_tehran_now_full, get_tehran_today
+from .utils import get_tehran_archive_week_key, get_tehran_now_full, get_tehran_today
 from .web_scrapping import (
     get_web_search_downloads,
     increment_web_search_downloads,
@@ -124,11 +124,77 @@ async def reset_all_user_limits():
     await invalidate_all_cached_usage()
 
 
+async def get_user_profile_summary(user_id) -> dict | None:
+    """Fetch user info, all period usage counters, and cloud stats in one DB query."""
+    uid = str(user_id)
+    today = get_tehran_today()
+    week_key = get_tehran_archive_week_key()
+    pool = await get_db()
+    row = await pool.fetchrow(
+        """
+        SELECT
+            u.username,
+            u.is_vip,
+            u.join_date,
+            u.vip_expire_date,
+            u.yt_count, u.yt_date,
+            u.music_count, u.music_date,
+            u.pinterest_count, u.pinterest_date,
+            u.tt_dl_count, u.tt_dl_date,
+            u.gh_count, u.gh_date,
+            u.web_search_dl_count, u.web_search_dl_date,
+            u.ai_chat_count, u.ai_chat_date,
+            u.arc_fetch_count, u.arc_fetch_date,
+            u.tg_count, u.tg_date,
+            u.cloud_total_mb,
+            u.cloud_used_mb,
+            COALESCE(cf.file_count, 0) AS cloud_file_count
+        FROM users u
+        LEFT JOIN (
+            SELECT user_id, COUNT(*) AS file_count
+            FROM cloud_files
+            WHERE user_id = $1
+            GROUP BY user_id
+        ) cf ON cf.user_id = u.user_id
+        WHERE u.user_id = $1
+        """,
+        uid,
+    )
+    if not row:
+        return None
+
+    def _period_val(count_col: str, date_col: str, expected_key: str) -> int:
+        return int(row[count_col] or 0) if row[date_col] == expected_key else 0
+
+    is_vip_val = int(row["is_vip"] or 0)
+    arc_period_key = today if is_vip_val == 1 else week_key
+
+    return {
+        "username": row["username"],
+        "is_vip": is_vip_val,
+        "join_date": row["join_date"],
+        "vip_expire_date": row["vip_expire_date"],
+        "yt_count": _period_val("yt_count", "yt_date", today),
+        "music_count": _period_val("music_count", "music_date", today),
+        "pinterest_count": _period_val("pinterest_count", "pinterest_date", today),
+        "tt_dl_count": _period_val("tt_dl_count", "tt_dl_date", today),
+        "gh_count": _period_val("gh_count", "gh_date", today),
+        "web_search_count": _period_val("web_search_dl_count", "web_search_dl_date", today),
+        "ai_count": _period_val("ai_chat_count", "ai_chat_date", today),
+        "arc_count": _period_val("arc_fetch_count", "arc_fetch_date", arc_period_key),
+        "tg_count": _period_val("tg_count", "tg_date", today),
+        "cloud_file_count": int(row["cloud_file_count"] or 0),
+        "cloud_total_quota": float(row["cloud_total_mb"] or 0),
+        "cloud_used_quota": float(row["cloud_used_mb"] or 0),
+    }
+
+
 __all__ = [
     "add_user",
     "set_vip",
     "get_user_info",
     "get_full_user_info",
+    "get_user_profile_summary",
     "get_total_users",
     "get_all_users",
     "get_users_batch",

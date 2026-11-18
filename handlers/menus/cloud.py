@@ -138,7 +138,7 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 file_id, file_name, file_size_mb, download_link, upload_date = file_info
                 files_text += f"{idx}. **{file_name}** ({file_size_mb} MB)\n"
                 files_text += f"   📅 {upload_date}\n"
-                files_text += f"   🔗 [دانلود](continue)\n\n"
+                files_text += f"   🔗 [دانلود]({download_link})\n\n"
 
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="cloud_back")]]
 

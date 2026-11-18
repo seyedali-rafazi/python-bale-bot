@@ -16,6 +16,7 @@ import asyncio
 from core.state_manager import StateCache, get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.database import log_upload_success
+from core.task_utils import remove_file_async, remove_files_async, track_task
 import time
 
 # Try to import rembg, but make it optional
@@ -32,19 +33,11 @@ MEDIA_MAX_CONCURRENT = 2
 media_processing_semaphore = asyncio.Semaphore(MEDIA_MAX_CONCURRENT)
 
 _IMG_TMP_DIR = os.path.join("downloads", "img_tmp")
-_background_tasks: set[asyncio.Task] = set()
 
 # Bounded TTL caches storing temp disk paths (never raw image bytes in RAM)
 _pdf_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
 _convert_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
 _resize_images_cache = StateCache(max_capacity=400, default_ttl=1800.0)
-
-
-def _track_background_task(coro) -> asyncio.Task:
-    task = asyncio.create_task(coro)
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    return task
 
 
 def _remove_files_quietly(paths) -> None:
@@ -61,7 +54,7 @@ def _remove_files_quietly(paths) -> None:
 
 
 async def _download_image_to_disk(bot, file_id: str, prefix: str) -> str:
-    os.makedirs(_IMG_TMP_DIR, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, _IMG_TMP_DIR, exist_ok=True)
     dest_path = os.path.join(_IMG_TMP_DIR, f"{prefix}_{uuid.uuid4().hex[:10]}.img")
     tg_file = await bot.get_file(file_id)
     await tg_file.download_to_drive(dest_path)
@@ -116,8 +109,8 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
             clear_state(chat_id)
         finally:
             _pdf_images_cache.pop(chat_id, None)
-            _remove_files_quietly(pending_images)
-            _remove_files_quietly(pdf_path)
+            await remove_files_async(pending_images)
+            await remove_file_async(pdf_path)
 
         return
 
@@ -191,8 +184,8 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                 clear_state(chat_id)
             finally:
                 _convert_images_cache.pop(chat_id, None)
-                _remove_files_quietly(raw_img)
-                _remove_files_quietly(converted_path)
+                await remove_file_async(raw_img)
+                await remove_file_async(converted_path)
 
             return
 
@@ -210,7 +203,7 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                 file_id = update.message.document.file_id
 
             old_path = _convert_images_cache.pop(chat_id, None)
-            _remove_files_quietly(old_path)
+            await remove_file_async(old_path)
             img_path = await _download_image_to_disk(context.bot, file_id, f"conv_{chat_id}")
             _convert_images_cache[chat_id] = img_path
 
@@ -256,7 +249,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await log_upload_success("image_processing", chat_id)
 
             _resize_images_cache.pop(chat_id, None)
-            _remove_files_quietly(raw_img)
+            await remove_file_async(raw_img)
             clear_state(chat_id)
 
             await update.message.reply_text(
@@ -268,7 +261,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ خطا در تغییر اندازه: {str(e)}\n\nفرمت صحیح: 800x600 یا 50%"
             )
         finally:
-            _remove_files_quietly(resized_path)
+            await remove_file_async(resized_path)
 
         return
 
@@ -286,7 +279,7 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 file_id = update.message.document.file_id
 
             old_path = _resize_images_cache.pop(chat_id, None)
-            _remove_files_quietly(old_path)
+            await remove_file_async(old_path)
             img_path = await _download_image_to_disk(context.bot, file_id, f"resize_{chat_id}")
             _resize_images_cache[chat_id] = img_path
 
@@ -361,8 +354,8 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(f"❌ خطا در حذف پس‌زمینه: {str(e)}")
             clear_state(chat_id)
         finally:
-            _remove_files_quietly(input_path)
-            _remove_files_quietly(output_path)
+            await remove_file_async(input_path)
+            await remove_file_async(output_path)
     else:
         await update.message.reply_text("❌ لطفاً یک عکس ارسال کنید!")
 
@@ -526,7 +519,7 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
     clear_state(chat_id)
 
     timestamp = int(time.time())
-    os.makedirs("downloads", exist_ok=True)
+    await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
     temp_video_path = f"downloads/temp_video_{chat_id}_{timestamp}"
     
     ext = ".mp4"
@@ -536,8 +529,8 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
             ext = file_ext
     temp_video_path += ext
 
-    # Launch background task
-    _track_background_task(
+    # Launch background task tracked for clean shutdown
+    track_task(
         background_video_to_gif(
             context,
             chat_id,
@@ -546,7 +539,8 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
             timestamp,
             temp_video_path,
             in_queue
-        )
+        ),
+        name=f"img_gif_{chat_id}",
     )
 
 
@@ -559,6 +553,7 @@ async def background_video_to_gif(
     temp_video_path: str,
     in_queue: bool,
 ):
+    gif_path = ""
     try:
         async with media_processing_semaphore:
             if in_queue:
@@ -588,11 +583,6 @@ async def background_video_to_gif(
                 await log_upload_success("image_processing", chat_id)
                 
                 try:
-                    os.remove(gif_path)
-                except Exception:
-                    pass
-                
-                try:
                     await status_msg.delete()
                 except Exception:
                     pass
@@ -616,11 +606,7 @@ async def background_video_to_gif(
             reply_markup=get_main_menu_keyboard(),
         )
     finally:
-        if os.path.exists(temp_video_path):
-            try:
-                os.remove(temp_video_path)
-            except Exception:
-                pass
+        await remove_files_async([temp_video_path, gif_path])
 
 
 async def _run_ffmpeg(cmd: list[str], timeout_sec: float = 180.0) -> bool:
@@ -714,7 +700,7 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
     clear_state(chat_id)
 
     timestamp = int(time.time())
-    os.makedirs("downloads", exist_ok=True)
+    await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
     temp_media_path = f"downloads/temp_media_{chat_id}_{timestamp}"
     
     ext = ".mp4"
@@ -724,8 +710,8 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
             ext = file_ext
     temp_media_path += ext
 
-    # Launch background task
-    _track_background_task(
+    # Launch background task tracked for clean shutdown
+    track_task(
         background_extract_audio(
             context,
             chat_id,
@@ -734,7 +720,8 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
             timestamp,
             temp_media_path,
             in_queue
-        )
+        ),
+        name=f"img_audio_{chat_id}",
     )
 
 
@@ -747,6 +734,7 @@ async def background_extract_audio(
     temp_media_path: str,
     in_queue: bool,
 ):
+    mp3_path = ""
     try:
         async with media_processing_semaphore:
             if in_queue:
@@ -776,11 +764,6 @@ async def background_extract_audio(
                 await log_upload_success("image_processing", chat_id)
                 
                 try:
-                    os.remove(mp3_path)
-                except Exception:
-                    pass
-                
-                try:
                     await status_msg.delete()
                 except Exception:
                     pass
@@ -804,11 +787,7 @@ async def background_extract_audio(
             reply_markup=get_main_menu_keyboard(),
         )
     finally:
-        if os.path.exists(temp_media_path):
-            try:
-                os.remove(temp_media_path)
-            except Exception:
-                pass
+        await remove_files_async([temp_media_path, mp3_path])
 
 
 async def extract_audio_from_video(media_path: str, chat_id: str, timestamp: int) -> str:

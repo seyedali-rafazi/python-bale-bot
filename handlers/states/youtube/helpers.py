@@ -61,9 +61,11 @@ async def save_to_global_cache(
     title: str | None = None,
     channel_name: str | None = None,
     uploaded_at: str | None = None,
+    *,
+    resolve_missing_meta: bool = True,
 ):
     yt_id = video_id or extract_yt_id(cache_key)
-    if not (uploaded_at or "").strip() and yt_id:
+    if resolve_missing_meta and not (uploaded_at or "").strip() and yt_id:
         try:
             from services.youtube import get_video_info_cached, uploaded_at_from_video_info
 

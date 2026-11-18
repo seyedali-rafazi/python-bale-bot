@@ -427,35 +427,43 @@ async def _download_url_async(
 
                 downloaded = 0
                 first_chunk = True
-                with open(dest_path, "wb") as fh:
+                fh = await asyncio.to_thread(open, dest_path, "wb")
+                try:
                     async for chunk in stream.aiter_bytes(chunk_size=65536):
                         if first_chunk:
                             first_chunk = False
                             chunk_start = chunk[:512].lower()
                             if b"<!doctype" in chunk_start or b"<html" in chunk_start or b"verify_human" in chunk_start:
                                 logger.warning("Downloaded payload is HTML page: %s", download_url)
-                                fh.close()
-                                _safe_unlink(dest_path)
+                                await asyncio.to_thread(fh.close)
+                                fh = None
+                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
 
                             if dest_path.endswith(".pdf") and b"%PDF-" not in chunk[:1024]:
                                 logger.warning("File missing PDF magic bytes: %s", download_url)
-                                fh.close()
-                                _safe_unlink(dest_path)
+                                await asyncio.to_thread(fh.close)
+                                fh = None
+                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
                             elif dest_path.endswith(".epub") and b"PK\x03\x04" not in chunk[:128]:
                                 logger.warning("File missing EPUB magic bytes: %s", download_url)
-                                fh.close()
-                                _safe_unlink(dest_path)
+                                await asyncio.to_thread(fh.close)
+                                fh = None
+                                await asyncio.to_thread(_safe_unlink, dest_path)
                                 return False
 
-                        fh.write(chunk)
+                        await asyncio.to_thread(fh.write, chunk)
                         downloaded += len(chunk)
                         if downloaded > MAX_BOOK_BYTES:
                             logger.warning("File too large (>50 MB): %s", download_url)
-                            fh.close()
-                            _safe_unlink(dest_path)
+                            await asyncio.to_thread(fh.close)
+                            fh = None
+                            await asyncio.to_thread(_safe_unlink, dest_path)
                             return False
+                finally:
+                    if fh is not None:
+                        await asyncio.to_thread(fh.close)
 
             if await asyncio.to_thread(_is_valid_file, dest_path):
                 return True

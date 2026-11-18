@@ -8,6 +8,20 @@ from typing import List, Tuple
 # split_method: "single" | "spanned" (zip -s, WinRAR/7-Zip) | "concat" (merge .zip.001+...)
 ZipSplitResult = Tuple[List[str], str, str]
 
+_INCOMPRESSIBLE_EXTS = frozenset(
+    {
+        ".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv",
+        ".mp3", ".m4a", ".ogg", ".aac", ".flac", ".opus",
+        ".jpg", ".jpeg", ".png", ".webp", ".gif",
+        ".apk", ".7z", ".rar", ".gz", ".xz", ".bz2", ".zip", ".zst",
+    }
+)
+
+
+def _is_incompressible(path: str) -> bool:
+    _, ext = os.path.splitext(path.lower())
+    return ext in _INCOMPRESSIBLE_EXTS
+
 
 def make_zip_single(
     input_path: str,
@@ -19,13 +33,13 @@ def make_zip_single(
         arcname = os.path.basename(input_path)
 
     os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
+    incompressible = _is_incompressible(input_path)
+    compression = zipfile.ZIP_STORED if incompressible else zipfile.ZIP_DEFLATED
+    zf_kwargs = {"mode": "w", "compression": compression}
+    if not incompressible:
+        zf_kwargs["compresslevel"] = compression_level
 
-    with zipfile.ZipFile(
-        zip_path,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=compression_level,
-    ) as zf:
+    with zipfile.ZipFile(zip_path, **zf_kwargs) as zf:
         zf.write(input_path, arcname=arcname)
 
     return zip_path
@@ -70,8 +84,12 @@ def _try_spanned_zip(
             pass
 
     try:
+        cmd = [zip_cmd, "-j"]
+        if _is_incompressible(input_path):
+            cmd.append("-0")
+        cmd.extend([f"-s{mb}m", archive_zip, input_path])
         proc = subprocess.run(
-            [zip_cmd, "-j", f"-s{mb}m", archive_zip, input_path],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,
@@ -214,7 +232,16 @@ def build_zip_and_split(
         parts = split_file_concat_parts(input_path, max_part_bytes, archive_basename)
         return parts, archive_basename, "concat"
 
-    # 2. For non-zip files: Always build a standard, valid single ZIP first
+    # 2. For clearly multi-part files (already compressed or >> max_part_bytes),
+    # try spanned zip directly first to avoid compressing the payload twice.
+    input_size = os.path.getsize(input_path)
+    if input_size > max_part_bytes and (_is_incompressible(input_path) or input_size > max_part_bytes * 2):
+        spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
+        if spanned:
+            method = "single" if len(spanned) == 1 else "spanned"
+            return spanned, archive_basename, method
+
+    # 3. Build a standard, valid single ZIP first
     zip_path = os.path.join(out_dir, f"{archive_basename}.zip")
     make_zip_single(input_path=input_path, zip_path=zip_path)
 
@@ -223,7 +250,7 @@ def build_zip_and_split(
     if os.path.getsize(zip_path) <= max_part_bytes:
         return [zip_path], archive_basename, "single"
 
-    # 3. If file exceeds max_part_bytes, try spanned zip or fallback to concat parts
+    # 4. If file exceeds max_part_bytes, try spanned zip or fallback to concat parts
     spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
     if spanned and len(spanned) > 1:
         return spanned, archive_basename, "spanned"

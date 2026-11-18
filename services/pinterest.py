@@ -40,6 +40,9 @@ USER_AGENT = (
 )
 
 
+_PIN_SIZE_PATH_RE = re.compile(r"/(236x|474x|564x|736x|1200x|originals)/", re.IGNORECASE)
+
+
 class PinterestService:
     def __init__(self):
         self.user_agent = USER_AGENT
@@ -75,19 +78,16 @@ class PinterestService:
         best_by_image: Dict[str, str] = {}
         verified_originals: set[str] = set()
 
-        for raw_url in raw_urls:
-            clean_url = self._clean_url(raw_url)
-            if not clean_url:
-                continue
-
+        for clean_url in raw_urls:
             image_key = self._get_image_key(clean_url)
             if not image_key:
                 continue
 
-            if "/originals/" in clean_url.lower() or "/1200x/" in clean_url.lower():
+            lower_url = clean_url.lower()
+            if "/originals/" in lower_url or "/1200x/" in lower_url:
                 verified_originals.add(image_key)
 
-            candidates = self._build_quality_candidates(clean_url)
+            candidates = self._build_quality_candidates(clean_url, already_clean=True)
             for candidate in candidates:
                 current = best_by_image.get(image_key)
                 if not current or self._quality_score(candidate) < self._quality_score(current):
@@ -249,8 +249,8 @@ class PinterestService:
 
         return url
 
-    def _build_quality_candidates(self, url: str) -> List[str]:
-        clean = self._clean_url(url)
+    def _build_quality_candidates(self, url: str, *, already_clean: bool = False) -> List[str]:
+        clean = url if already_clean else self._clean_url(url)
         if not clean:
             return []
 
@@ -258,34 +258,20 @@ class PinterestService:
         seen = set()
 
         def add(u: str):
-            u = self._clean_url(u)
             if u and u not in seen:
                 seen.add(u)
                 candidates.append(u)
 
-        originals_url = re.sub(
-            r"/(236x|474x|564x|736x|1200x)/", "/originals/", clean, flags=re.I
-        )
-        x736_url = re.sub(r"/(236x|474x|564x|originals|1200x)/", "/736x/", clean, flags=re.I)
-        x564_url = re.sub(r"/(236x|474x|736x|originals|1200x)/", "/564x/", clean, flags=re.I)
-        x474_url = re.sub(r"/(236x|564x|736x|originals|1200x)/", "/474x/", clean, flags=re.I)
-
-        add(originals_url)
-        add(x736_url)
-        add(x564_url)
-        add(x474_url)
+        for target_size in ("originals", "736x", "564x", "474x"):
+            add(_PIN_SIZE_PATH_RE.sub(f"/{target_size}/", clean, count=1))
         add(clean)
 
         candidates.sort(key=self._quality_score)
         return candidates
 
     def _get_image_key(self, url: str) -> Optional[str]:
-        clean = self._clean_url(url)
-        if not clean:
-            return None
-
         try:
-            path = urlparse(clean).path
+            path = urlparse(url).path
             m = _REAL_PIN_PATH_RE.match(path)
             if not m:
                 return None

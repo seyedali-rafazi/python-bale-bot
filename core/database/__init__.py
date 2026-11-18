@@ -11,6 +11,7 @@ from .users import (
     set_vip,
     get_user_info,
     get_full_user_info,
+    get_user_profile_summary,
     get_total_users,
     get_all_users,
     get_users_batch,

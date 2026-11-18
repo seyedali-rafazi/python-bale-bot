@@ -143,7 +143,7 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
     pool = await get_db()
     row = await pool.fetchrow(
         """
-        SELECT title, channel_name, yt_video_id, uploaded_at
+        SELECT title, channel_name, yt_video_id, uploaded_at, format_type
         FROM youtube_cache
         WHERE video_id = $1
         """,
@@ -157,6 +157,7 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
         "channel": row["channel_name"],
         "yt_video_id": row["yt_video_id"],
         "uploaded_at": row["uploaded_at"],
+        "format_type": row["format_type"],
     }
 
 

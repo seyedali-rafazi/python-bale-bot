@@ -1,11 +1,12 @@
-import aiohttp
 import asyncio
+from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from services.http_client import get_http_session
 from telegram.ext import ContextTypes
-from core.database import get_gh_downloads, increment_gh_downloads, is_vip, log_upload_success
-from core.state_manager import clear_state
-from core.task_utils import remove_file_async
+from core.database import get_gh_downloads, increment_gh_downloads, is_vip
+from core.limits import get_limit
+from core.state_manager import StateCache, clear_state
+from core.task_utils import FileTooLargeError, remove_file_async, stream_aiohttp_to_file
 import uuid
 import os
 
@@ -15,6 +16,16 @@ GITHUB_QUEUE_MAXSIZE = max(10, int(os.getenv("GITHUB_QUEUE_MAXSIZE", "100")))
 GITHUB_TEMP_DIR = os.path.join("downloads", "github")
 download_queue: asyncio.Queue = asyncio.Queue(maxsize=GITHUB_QUEUE_MAXSIZE)
 _worker_tasks: list[asyncio.Task] = []
+_gh_repo_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
+
+
+def _gh_callback_data(full_name: str) -> str:
+    direct = f"ghdl_{full_name}"
+    if len(direct.encode("utf-8")) <= 64:
+        return direct
+    token = uuid.uuid4().hex[:12]
+    _gh_repo_cache[token] = full_name
+    return f"ghdl_tok_{token}"
 
 
 async def download_worker():
@@ -83,11 +94,13 @@ async def handle_github_state(
     state_data: dict,
 ):
 
-    user_id = update.effective_user.id
-    vip_status = await is_vip(str(user_id))
-    max_dl = 20 if vip_status else 4
+    user_id = str(update.effective_user.id)
+    vip_status, downloads_count = await asyncio.gather(
+        is_vip(user_id),
+        get_gh_downloads(user_id),
+    )
+    max_dl = get_limit("github_download", vip_status)
 
-    downloads_count = await get_gh_downloads(str(user_id))
     if downloads_count >= max_dl:
         await update.message.reply_text(
             "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
@@ -98,13 +111,14 @@ async def handle_github_state(
     if step == "waiting_gh_dl":
         repo_path = text.replace("https://github.com/", "").strip()
         # به جای پردازش مستقیم، به صف اضافه می‌کنیم
-        await enqueue_download(update, context, chat_id, repo_path, str(user_id))
+        await enqueue_download(update, context, chat_id, repo_path, user_id)
 
     elif step == "waiting_gh_user":
         await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
         session = await get_http_session()
+        encoded_user = quote(text.strip().lstrip("@"), safe="")
         async with session.get(
-            f"https://api.github.com/users/{text}/repos?sort=updated&per_page=10",
+            f"https://api.github.com/users/{encoded_user}/repos?sort=updated&per_page=10",
             timeout=60,
         ) as resp:
             if resp.status == 200:
@@ -117,7 +131,7 @@ async def handle_github_state(
                         [
                             InlineKeyboardButton(
                                 f"📥 دانلود {repo['name']}",
-                                callback_data=f"ghdl_{repo['full_name']}",
+                                callback_data=_gh_callback_data(repo["full_name"]),
                             )
                         ]
                     )
@@ -132,7 +146,7 @@ async def handle_github_state(
         await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
         session = await get_http_session()
         async with session.get(
-            f"https://api.github.com/search/repositories?q={text}&per_page=10",
+            f"https://api.github.com/search/repositories?q={quote(text.strip(), safe='')}&per_page=10",
             timeout=60,
         ) as resp:
             if resp.status == 200:
@@ -150,7 +164,7 @@ async def handle_github_state(
                         [
                             InlineKeyboardButton(
                                 f"📥 دانلود {repo['name']}",
-                                callback_data=f"ghdl_{repo['full_name']}",
+                                callback_data=_gh_callback_data(repo["full_name"]),
                             )
                         ]
                     )
@@ -174,7 +188,7 @@ async def process_github_download(
         f"https://image.thum.io/get/width/1080/crop/800/https://github.com/{repo_path}"
     )
 
-    os.makedirs(GITHUB_TEMP_DIR, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, GITHUB_TEMP_DIR, exist_ok=True)
     file_name = f"{repo_path.replace('/', '_')}.zip"
     temp_path = os.path.join(GITHUB_TEMP_DIR, f"temp_{uuid.uuid4().hex}_{file_name}")
 
@@ -200,37 +214,29 @@ async def process_github_download(
             zip_url, headers=headers, allow_redirects=True, timeout=120
         ) as resp:
             if resp.status == 200:
-                downloaded_size = 0
-                is_oversized = False
                 max_bytes = 50 * 1024 * 1024  # محدودیت 50 مگابایت
-
-                with open(temp_path, "wb") as f:
-                    # دانلود تکه‌تکه برای کنترل حجم در حین دانلود
-                    async for chunk in resp.content.iter_chunked(1024 * 1024):
-                        downloaded_size += len(chunk)
-                        if downloaded_size > max_bytes:
-                            is_oversized = True
-                            break
-                        f.write(chunk)
-
-                if is_oversized:
+                try:
+                    downloaded_size = await stream_aiohttp_to_file(
+                        resp, temp_path, chunk_size=1024 * 1024, max_bytes=max_bytes
+                    )
+                except FileTooLargeError:
                     await context.bot.send_message(
                         chat_id,
                         "❌ بله پشتیبانی نمیشه (حجم فایل بالای ۵۰ مگابایت است).",
                     )
+                    return
+
+                file_size_mb = downloaded_size / (1024 * 1024)
+                if file_size_mb < 0.001:
+                    await context.bot.send_message(
+                        chat_id,
+                        "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
+                    )
                 else:
-                    file_size_mb = downloaded_size / (1024 * 1024)
-                    if file_size_mb < 0.001:
-                        await context.bot.send_message(
-                            chat_id,
-                            "❌ فایل دریافتی نامعتبر است (احتمالاً ریپازیتوری وجود ندارد یا پرایوت است).",
-                        )
-                    else:
-                        await context.bot.send_document(
-                            chat_id=chat_id, document=temp_path, filename=file_name
-                        )
-                        await increment_gh_downloads(user_id)
-                        await log_upload_success("github", user_id)
+                    await context.bot.send_document(
+                        chat_id=chat_id, document=temp_path, filename=file_name
+                    )
+                    await increment_gh_downloads(user_id)
             else:
                 await context.bot.send_message(
                     chat_id,
@@ -241,22 +247,32 @@ async def process_github_download(
         print(f"GitHub Error: {e}")
     finally:
         await remove_file_async(temp_path)
-        clear_state(chat_id)
+        clear_state(str(chat_id))
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    chat_id = query.message.chat_id
+    chat_id = str(query.message.chat_id)
     user_id = str(query.from_user.id)
 
     if data.startswith("ghdl_"):
-        repo_path = data.split("ghdl_")[1]
-        vip_status = await is_vip(user_id)
-        max_dl = 20 if vip_status else 4
+        raw_target = data.split("ghdl_", 1)[1]
+        if raw_target.startswith("tok_"):
+            repo_path = _gh_repo_cache.get(raw_target[4:])
+            if not repo_path:
+                await query.message.reply_text("❌ نشست منقضی شده است. لطفاً دوباره جستجو کنید.")
+                return
+        else:
+            repo_path = raw_target
 
-        downloads_count = await get_gh_downloads(user_id)
+        vip_status, downloads_count = await asyncio.gather(
+            is_vip(user_id),
+            get_gh_downloads(user_id),
+        )
+        max_dl = get_limit("github_download", vip_status)
+
         if downloads_count >= max_dl:
             await query.message.reply_text(
                 "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
