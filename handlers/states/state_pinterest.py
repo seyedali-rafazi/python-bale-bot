@@ -12,13 +12,13 @@ from telegram import (
     Update,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    InputMediaPhoto,
 )
 from telegram.error import RetryAfter
 from telegram.ext import ContextTypes
 
-from core.state_manager import StateCache, set_state
+from core.state_manager import StateCache, clear_state, set_state
 from core.task_utils import track_task
+from handlers.utils import safe_answer_query
 
 from core.database import (
     get_pinterest_downloads,
@@ -291,7 +291,7 @@ async def process_pinterest_search(
             ),
         )
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
         return
 
     except asyncio.TimeoutError:
@@ -310,7 +310,7 @@ async def process_pinterest_search(
             text="⏱️ جستجو بیش از حد طول کشید. لطفا دوباره تلاش کنید",
         )
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
         return
 
     except Exception as e:
@@ -329,7 +329,7 @@ async def process_pinterest_search(
             text="❌ خطا در جستجوی تصاویر Pinterest",
         )
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
         return
 
     image_urls = list(dict.fromkeys(image_urls))
@@ -348,7 +348,7 @@ async def process_pinterest_search(
             text="❌ تصویری پیدا نشد",
         )
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
         return
 
     first_batch = image_urls[:SEND_BATCH_SIZE]
@@ -373,7 +373,7 @@ async def process_pinterest_search(
             text=("❌ ارسال تصاویر با خطا مواجه شد"),
         )
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
         return
 
     await increment_pinterest_downloads(user_id)
@@ -396,7 +396,10 @@ async def process_pinterest_search(
             text="✅ همه تصاویر ارسال شدند.",
         )
 
-    set_state(chat_id, "")
+    clear_state(chat_id)
+
+
+_pending_pinterest_searches: dict[str, int] = {}
 
 
 async def handle_pinterest_state(
@@ -408,43 +411,61 @@ async def handle_pinterest_state(
 
     user_id = str(update.effective_user.id)
 
-    usage, vip_status = await asyncio.gather(
-        get_pinterest_downloads(user_id),
-        is_vip(user_id),
-    )
+    async with user_action_lock(user_id, "pinterest_search", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست جستجوی قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
 
-    limit = get_limit(
-        "pinterest_search",
-        vip_status,
-    )
-
-    if usage >= limit:
-        await update.message.reply_text(("❌ محدودیت روزانه شما به پایان رسیده است."))
-
-        set_state(chat_id, "")
-        return
-
-    wait_sec = estimate_pinterest_wait_seconds()
-    if wait_sec > 45:
-        msg = await update.message.reply_text(
-            f"⏳ در صف جستجو هستید (تخمین انتظار: حدود {wait_sec // 60 or 1} دقیقه)..."
+        usage, vip_status = await asyncio.gather(
+            get_pinterest_downloads(user_id),
+            is_vip(user_id),
         )
-    else:
-        msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر...")
 
-    # مهم:
-    # handler فوری آزاد می‌شود
-    track_task(
-        process_pinterest_search(
-            update=update,
-            context=context,
-            text=text,
-            chat_id=chat_id,
-            user_id=user_id,
-            loading_message_id=msg.message_id,
-        ),
-        name=f"pinterest_search_{chat_id}",
-    )
+        limit = get_limit(
+            "pinterest_search",
+            vip_status,
+        )
+        pending = _pending_pinterest_searches.get(user_id, 0)
+
+        if usage + pending >= limit:
+            await update.message.reply_text("❌ محدودیت روزانه شما به پایان رسیده است.")
+            clear_state(chat_id)
+            return
+
+        clear_state(chat_id)
+        _pending_pinterest_searches[user_id] = pending + 1
+
+        wait_sec = estimate_pinterest_wait_seconds()
+        if wait_sec > 45:
+            msg = await update.message.reply_text(
+                f"⏳ در صف جستجو هستید (تخمین انتظار: حدود {wait_sec // 60 or 1} دقیقه)..."
+            )
+        else:
+            msg = await update.message.reply_text("⏳ در حال جستجوی تصاویر...")
+
+        async def _tracked_search():
+            try:
+                await process_pinterest_search(
+                    update=update,
+                    context=context,
+                    text=text,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    loading_message_id=msg.message_id,
+                )
+            finally:
+                cur = _pending_pinterest_searches.get(user_id, 0)
+                if cur <= 1:
+                    _pending_pinterest_searches.pop(user_id, None)
+                else:
+                    _pending_pinterest_searches[user_id] = cur - 1
+
+        # مهم:
+        # handler فوری آزاد می‌شود
+        track_task(
+            _tracked_search(),
+            name=f"pinterest_search_{chat_id}",
+        )
 
 
 async def process_more_pins(
@@ -456,7 +477,7 @@ async def process_more_pins(
     pin_key = str(query.message.chat_id)
     user_id = str(query.from_user.id) if query.from_user else pin_key
 
-    async with user_action_lock(user_id, "more_pins", timeout_sec=15) as acquired:
+    async with user_action_lock(user_id, "more_pins", timeout_sec=60) as acquired:
         if not acquired:
             await context.bot.send_message(
                 chat_id=pin_key,
@@ -538,7 +559,7 @@ async def handle_more_pins_callback(
 
     query = update.callback_query
 
-    await query.answer()
+    await safe_answer_query(query)
 
     track_task(
         process_more_pins(

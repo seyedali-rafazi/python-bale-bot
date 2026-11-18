@@ -82,6 +82,18 @@ def _list_popular_datasets_sync(max_results: int = 8) -> list:
     return list(results)[:max_results]
 
 
+def _make_kaggle_cleanup(cache_key: str):
+    def _cleanup(t: asyncio.Task) -> None:
+        if _inflight_kaggle_search.get(cache_key) is t:
+            _inflight_kaggle_search.pop(cache_key, None)
+        if not t.cancelled():
+            try:
+                t.exception()
+            except Exception:
+                pass
+    return _cleanup
+
+
 async def search_datasets(query: str, max_results: int = 8) -> list:
     """Async wrapper: search Kaggle datasets by keyword with 10-min L1 cache and singleflight dedup."""
     cache_key = f"s:{max_results}:{(query or '').strip().lower()}"
@@ -94,18 +106,17 @@ async def search_datasets(query: str, max_results: int = 8) -> list:
         return await asyncio.shield(existing)
 
     async def _fetch():
-        res = await asyncio.to_thread(_search_datasets_sync, query, max_results)
+        res = await asyncio.wait_for(
+            asyncio.to_thread(_search_datasets_sync, query, max_results),
+            timeout=25.0,
+        )
         if res:
             _kaggle_search_cache[cache_key] = res
         return res
 
     task = asyncio.create_task(_fetch())
     _inflight_kaggle_search[cache_key] = task
-    task.add_done_callback(
-        lambda t: _inflight_kaggle_search.pop(cache_key, None)
-        if _inflight_kaggle_search.get(cache_key) is t
-        else None
-    )
+    task.add_done_callback(_make_kaggle_cleanup(cache_key))
     return await asyncio.shield(task)
 
 
@@ -121,18 +132,17 @@ async def list_popular_datasets(max_results: int = 8) -> list:
         return await asyncio.shield(existing)
 
     async def _fetch():
-        res = await asyncio.to_thread(_list_popular_datasets_sync, max_results)
+        res = await asyncio.wait_for(
+            asyncio.to_thread(_list_popular_datasets_sync, max_results),
+            timeout=25.0,
+        )
         if res:
             _kaggle_search_cache[cache_key] = res
         return res
 
     task = asyncio.create_task(_fetch())
     _inflight_kaggle_search[cache_key] = task
-    task.add_done_callback(
-        lambda t: _inflight_kaggle_search.pop(cache_key, None)
-        if _inflight_kaggle_search.get(cache_key) is t
-        else None
-    )
+    task.add_done_callback(_make_kaggle_cleanup(cache_key))
     return await asyncio.shield(task)
 
 
@@ -180,7 +190,10 @@ def _download_dataset_sync(ref: str, dest_dir: str) -> str:
 async def download_dataset(ref: str, dest_dir: str) -> str:
     """Async wrapper: download and unzip a dataset under bounded concurrency."""
     async with _KAGGLE_DOWNLOAD_SEMAPHORE:
-        return await asyncio.to_thread(_download_dataset_sync, ref, dest_dir)
+        return await asyncio.wait_for(
+            asyncio.to_thread(_download_dataset_sync, ref, dest_dir),
+            timeout=300.0,
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

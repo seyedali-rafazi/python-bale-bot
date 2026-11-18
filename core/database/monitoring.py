@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import datetime, timedelta
 import logging
 import time
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _PENDING_MONITOR_FLUSH_THRESHOLD = 25
 _PENDING_MONITOR_MAX_CAP = 5000
 _MONITOR_RETRY_COOLDOWN_SEC = 15.0
-_pending_monitor_events: list[tuple[str, str, str | None, str]] = []
+_pending_monitor_events: deque[tuple[str, str, str | None, str]] = deque()
 _monitor_flush_lock = asyncio.Lock()
 _monitor_retry_after = 0.0
 _active_user_hour_seen: OrderedDict[str, str] = OrderedDict()
@@ -55,7 +55,7 @@ async def flush_pending_monitoring_events() -> int:
     async with _monitor_flush_lock:
         if not _pending_monitor_events:
             return 0
-        batch = _pending_monitor_events.copy()
+        batch = list(_pending_monitor_events)
         _pending_monitor_events.clear()
 
         sections = [e[0] for e in batch]
@@ -77,13 +77,13 @@ async def flush_pending_monitoring_events() -> int:
             )
             _monitor_retry_after = 0.0
             return len(batch)
-        except Exception:
-            _monitor_retry_after = time.monotonic() + _MONITOR_RETRY_COOLDOWN_SEC
-            # Restore batch on transient DB error without exceeding memory cap
-            combined = batch + _pending_monitor_events
-            if len(combined) > _PENDING_MONITOR_MAX_CAP:
-                combined = combined[-_PENDING_MONITOR_MAX_CAP:]
-            _pending_monitor_events[:] = combined
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                _monitor_retry_after = time.monotonic() + _MONITOR_RETRY_COOLDOWN_SEC
+            # Restore batch on transient DB error or cancellation without exceeding memory cap
+            combined = (batch + list(_pending_monitor_events))[-_PENDING_MONITOR_MAX_CAP:]
+            _pending_monitor_events.clear()
+            _pending_monitor_events.extend(combined)
             raise
 
 
@@ -93,8 +93,8 @@ async def log_monitor_event(
     event_type: str = "upload_success",
 ) -> None:
     uid = str(user_id) if user_id is not None else None
-    if len(_pending_monitor_events) >= _PENDING_MONITOR_MAX_CAP:
-        del _pending_monitor_events[: len(_pending_monitor_events) - _PENDING_MONITOR_MAX_CAP + 1]
+    while len(_pending_monitor_events) >= _PENDING_MONITOR_MAX_CAP:
+        _pending_monitor_events.popleft()
     _pending_monitor_events.append(
         (section, event_type, uid, get_tehran_now_full())
     )

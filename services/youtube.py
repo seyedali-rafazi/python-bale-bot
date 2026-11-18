@@ -337,7 +337,7 @@ async def _run_async_subprocess(
             stdout_b.decode("utf-8", errors="replace") if stdout_b else "",
             stderr_b.decode("utf-8", errors="replace") if stderr_b else "",
         )
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         try:
             proc.kill()
             await proc.wait()
@@ -945,6 +945,16 @@ async def split_video_if_needed(original_file_path):
             output_pattern,
         ]
 
+        part_glob = f"{base_name}_temp_{part_counter - 1}_*{ext}"
+
+        def _cleanup_glob(pattern: str) -> None:
+            for p in glob.glob(pattern):
+                if p != original_file_path:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
         try:
             async with _FFMPEG_SPLIT_SEMAPHORE:
                 process = await asyncio.create_subprocess_exec(
@@ -961,11 +971,20 @@ async def split_video_if_needed(original_file_path):
                         await process.wait()
                     except Exception:
                         pass
+                    await asyncio.to_thread(_cleanup_glob, part_glob)
                     raise RuntimeError("ffmpeg segment timed out")
+                except asyncio.CancelledError:
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except Exception:
+                        pass
+                    await asyncio.to_thread(_cleanup_glob, part_glob)
+                    raise
 
             if process.returncode == 0:
                 new_parts = await asyncio.to_thread(
-                    lambda p=f"{base_name}_temp_{part_counter - 1}_*{ext}": sorted(glob.glob(p))
+                    lambda p=part_glob: sorted(glob.glob(p))
                 )
 
                 # Guard against infinite loop when keyframe spacing prevents splitting into smaller parts
@@ -986,10 +1005,15 @@ async def split_video_if_needed(original_file_path):
                     await asyncio.to_thread(os.remove, current_file)
 
             else:
+                await asyncio.to_thread(_cleanup_glob, part_glob)
                 final_valid_parts.append(current_file)
 
+        except asyncio.CancelledError:
+            await asyncio.to_thread(_cleanup_glob, f"{base_name}_temp_*{ext}")
+            raise
         except Exception as e:
             print(f"Error in ffmpeg: {e}")
+            await asyncio.to_thread(_cleanup_glob, part_glob)
             final_valid_parts.append(current_file)
 
     if original_file_path not in final_valid_parts and await asyncio.to_thread(
@@ -1160,9 +1184,22 @@ async def async_download_youtube_video(
         ]
     )
 
-    async with _YTDLP_DOWNLOAD_SEMAPHORE:
-        ok, output = await _run_async_subprocess_and_capture(cmd, progress_dict=progress_dict)
+    def _cleanup_req_files() -> None:
+        for p in glob.glob(os.path.join(DOWNLOAD_DIR, f"*_{req_id}*")):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    try:
+        async with _YTDLP_DOWNLOAD_SEMAPHORE:
+            ok, output = await _run_async_subprocess_and_capture(cmd, progress_dict=progress_dict)
+    except BaseException:
+        await asyncio.to_thread(_cleanup_req_files)
+        raise
+
     if not ok:
+        await asyncio.to_thread(_cleanup_req_files)
         if "File is larger than max-filesize" in output or "max-filesize" in output:
             return "TOO_LARGE"
         return None
@@ -1216,9 +1253,22 @@ async def async_download_youtube_audio(
         ]
     )
 
-    async with _YTDLP_DOWNLOAD_SEMAPHORE:
-        ok, output = await _run_async_subprocess_and_capture(cmd)
+    def _cleanup_audio_req_files() -> None:
+        for p in glob.glob(os.path.join(DOWNLOAD_DIR, f"*_{req_id}*")):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    try:
+        async with _YTDLP_DOWNLOAD_SEMAPHORE:
+            ok, output = await _run_async_subprocess_and_capture(cmd)
+    except BaseException:
+        await asyncio.to_thread(_cleanup_audio_req_files)
+        raise
+
     if not ok:
+        await asyncio.to_thread(_cleanup_audio_req_files)
         if "File is larger than max-filesize" in output or "max-filesize" in output:
             return "TOO_LARGE"
         return None

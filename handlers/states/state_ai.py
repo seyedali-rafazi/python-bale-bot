@@ -8,9 +8,11 @@ import os
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from core.state_manager import set_state
+from core.state_manager import clear_state, set_state
 from core.task_utils import track_task
 from core.database import can_user_ask_ai, decrement_ai_question, increment_ai_question, log_upload_success
+from handlers.utils import safe_edit_or_reply
+from services.rate_limiter import user_action_lock
 
 from services.ai import (
     ask_chatbot,
@@ -49,6 +51,8 @@ async def process_ai_chat(
 
         if not answer or answer.startswith(("⏳", "⛔", "❌")):
             await decrement_ai_question(chat_id)
+        else:
+            await log_upload_success("ai_chat", chat_id)
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
@@ -203,42 +207,49 @@ async def handle_ai_state(
                 )
                 return
 
-            allowed, used, limit = await can_user_ask_ai(chat_id)
-            if not allowed:
-                await update.message.reply_text(
-                    f"❌ سقف پرسش روزانه شما تمام شده است.\n\n"
-                    f"📊 امروز: {used} از {limit} پرسش\n"
-                    f"🔄 ریست: نیمه‌شب به وقت تهران\n"
-                    f"🌟 با اشتراک Pro تا {20} پرسش در روز دریافت کنید."
-                )
-                return
+            async with user_action_lock(chat_id, "ai_chat", timeout_sec=10) as acquired:
+                if not acquired:
+                    await update.message.reply_text(
+                        "⏳ درخواست قبلی شما در حال ثبت است. لطفاً کمی صبر کنید."
+                    )
+                    return
 
-            global _ai_chat_in_flight
-            if _ai_chat_in_flight >= MAX_AI_CHAT_QUEUE:
-                await update.message.reply_text(
-                    "⏳ صف دستیار هوشمند در حال حاضر شلوغ است. لطفاً چند ثانیه دیگر دوباره تلاش کنید."
-                )
-                return
+                allowed, used, limit = await can_user_ask_ai(chat_id)
+                if not allowed:
+                    await update.message.reply_text(
+                        f"❌ سقف پرسش روزانه شما تمام شده است.\n\n"
+                        f"📊 امروز: {used} از {limit} پرسش\n"
+                        f"🔄 ریست: نیمه‌شب به وقت تهران\n"
+                        f"🌟 با اشتراک Pro تا {20} پرسش در روز دریافت کنید."
+                    )
+                    return
 
-            _ai_chat_in_flight += 1
-            try:
-                await increment_ai_question(chat_id)
-                msg = await update.message.reply_text(
-                    "⏳ درخواست شما در صف پردازش قرار گرفت..."
-                )
-                track_task(
-                    process_ai_chat(
-                        context=context,
-                        chat_id=chat_id,
-                        message_id=msg.message_id,
-                        text=text,
-                    ),
-                    name=f"ai_chat_{chat_id}",
-                )
-                clear_after = True
-            except Exception:
-                _ai_chat_in_flight = max(0, _ai_chat_in_flight - 1)
-                raise
+                global _ai_chat_in_flight
+                if _ai_chat_in_flight >= MAX_AI_CHAT_QUEUE:
+                    await update.message.reply_text(
+                        "⏳ صف دستیار هوشمند در حال حاضر شلوغ است. لطفاً چند ثانیه دیگر دوباره تلاش کنید."
+                    )
+                    return
+
+                _ai_chat_in_flight += 1
+                try:
+                    await increment_ai_question(chat_id)
+                    msg = await update.message.reply_text(
+                        "⏳ درخواست شما در صف پردازش قرار گرفت..."
+                    )
+                    track_task(
+                        process_ai_chat(
+                            context=context,
+                            chat_id=chat_id,
+                            message_id=msg.message_id,
+                            text=text,
+                        ),
+                        name=f"ai_chat_{chat_id}",
+                    )
+                    clear_after = True
+                except Exception:
+                    _ai_chat_in_flight = max(0, _ai_chat_in_flight - 1)
+                    raise
 
             return
 
@@ -290,7 +301,7 @@ async def handle_ai_state(
 
     finally:
         if clear_after:
-            set_state(chat_id, "")
+            clear_state(chat_id)
 
 
 # =========================================================
@@ -307,15 +318,23 @@ async def handle_ai_photo(
     msg = await update.message.reply_text("⏳ در حال پردازش تصویر...")
 
     try:
+        file_size = None
         if update.message.photo:
-            file_id = update.message.photo[-1].file_id
+            photo_obj = update.message.photo[-1]
+            file_id = photo_obj.file_id
+            file_size = getattr(photo_obj, "file_size", None)
 
         elif update.message.document:
             file_id = update.message.document.file_id
+            file_size = getattr(update.message.document, "file_size", None)
 
         else:
             await msg.edit_text("❌ فایل پشتیبانی نمی‌شود.")
 
+            return
+
+        if file_size and file_size > 20 * 1024 * 1024:
+            await msg.edit_text("❌ حجم عکس نباید بیشتر از ۲۰ مگابایت باشد.")
             return
 
         file = await context.bot.get_file(file_id)
@@ -325,13 +344,14 @@ async def handle_ai_photo(
         async with ai_media_semaphore:
             extracted_text = await asyncio.wait_for(perform_ocr(image_bytes), timeout=35.0)
 
-        await msg.edit_text(f"✅ متن استخراج شده:\n\n{extracted_text}")
+        out_text = f"✅ متن استخراج شده:\n\n{extracted_text}"[:4096]
+        await msg.edit_text(out_text)
         await log_upload_success("ai_chat", chat_id)
 
     except Exception:
         logger.exception("handle_ai_photo failed")
 
-        await msg.edit_text("❌ خطا در پردازش تصویر")
+        await safe_edit_or_reply(msg, "❌ خطا در پردازش تصویر")
 
     finally:
-        set_state(chat_id, "")
+        clear_state(chat_id)

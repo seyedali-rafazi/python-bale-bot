@@ -98,7 +98,11 @@ async def increment_period_usage(
 
     post_tasks = []
     if cache_service:
-        post_tasks.append(set_cached_daily_usage(cache_service, uid, period_key, new_count))
+        post_tasks.append(
+            set_cached_daily_usage(
+                cache_service, uid, period_key, new_count, only_if_greater=True
+            )
+        )
     if monitor_section:
         post_tasks.append(log_upload_success(monitor_section, uid))
     if post_tasks:

@@ -8,6 +8,7 @@ import os
 import re
 from core.state_manager import set_state, clear_state
 from core.task_utils import async_temp_dir, get_file_size_async
+from handlers.utils import escape_markdown
 from core.database import (
     get_available_cloud_mb,
     reserve_cloud_quota,
@@ -134,7 +135,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
             reserved = False
             async with async_temp_dir(prefix="cloud_up_") as tmp_dir:
                 temp_file_path = os.path.join(tmp_dir, safe_name)
-                await file.download_to_drive(temp_file_path)
+                await asyncio.wait_for(file.download_to_drive(temp_file_path), timeout=120.0)
                 actual_size_mb = round(
                     (await get_file_size_async(temp_file_path)) / (1024 * 1024), 2
                 )
@@ -155,7 +156,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
                         f"{user_id}/{safe_name}",
                         upload_fn=upload_to_s3_with_key,
                     )
-                except Exception:
+                except BaseException:
                     await release_cloud_quota(user_id, actual_size_mb)
                     raise
 
@@ -176,7 +177,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
                 success_text = f"""
 ✅ **آپلود موفق**
 
-📄 نام فایل: **{safe_name}**
+📄 نام فایل: **{escape_markdown(safe_name)}**
 💾 حجم: **{actual_size_mb:.2f} MB**
 🔗 لینک دانلود: [دریافت]({download_link})
 
@@ -197,7 +198,7 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
         
     except Exception as e:
         print(f"Error uploading file to cloud: {e}")
-        await update.message.reply_text(f"❌ خطایی در آپلود رخ داد: {str(e)}")
+        await update.message.reply_text("❌ خطایی در آپلود رخ داد. لطفاً دوباره تلاش کنید.")
         clear_state(user_id)
         return ConversationHandler.END
 

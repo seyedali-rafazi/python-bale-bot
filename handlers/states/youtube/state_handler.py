@@ -31,13 +31,23 @@ async def handle_youtube_state(
     state_data: dict,
 ):
     if step == "waiting_yt_last5_channel":
-        channel = text.replace("@", "")
+        raw_ch = text.strip()
+        if "youtube.com/" in raw_ch:
+            raw_ch = raw_ch.rstrip("/").split("/")[-1]
+        channel = raw_ch.lstrip("@").strip()
+        if not channel:
+            await update.message.reply_text("❌ آیدی کانال نامعتبر است.")
+            return
         if not await check_channel_allowed(channel):
             await update.message.reply_text(MSG_BLOCKED_CHANNEL)
             return
         url = f"https://www.youtube.com/@{channel}/videos"
         await update.message.reply_text("⏳ در حال دریافت لیست ویدیوها...")
-        results = await async_search_yt_videos(url, 5)
+        try:
+            results = await async_search_yt_videos(url, 5)
+        except Exception:
+            await update.message.reply_text("❌ خطا در دریافت لیست ویدیوها. لطفاً دوباره تلاش کنید.")
+            return
 
         if not results:
             await update.message.reply_text("❌ کانال پیدا نشد یا ویدیویی ندارد.")
@@ -64,7 +74,11 @@ async def handle_youtube_state(
             await update.message.reply_text(MSG_BLOCKED_SEARCH)
             return
         await update.message.reply_text("⏳ در حال جستجو...")
-        results = await async_search_yt_videos(text, 10)
+        try:
+            results = await async_search_yt_videos(text, 10)
+        except Exception:
+            await update.message.reply_text("❌ خطا در جستجوی یوتیوب. لطفاً دوباره تلاش کنید.")
+            return
 
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
@@ -109,7 +123,11 @@ async def handle_youtube_state(
 
         await update.message.reply_text("⏳ در حال جستجو در کانال...")
         search_query = f"{channel} {query}"
-        results = await async_search_yt_videos(search_query, 5)
+        try:
+            results = await async_search_yt_videos(search_query, 5)
+        except Exception:
+            await update.message.reply_text("❌ خطا در جستجوی کانال. لطفاً دوباره تلاش کنید.")
+            return
 
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
@@ -165,7 +183,7 @@ async def handle_youtube_state(
                 await update.message.reply_text("❌ فرمت شماره اشتباه است.")
             except Exception as e:
                 print(f"❌ Error: {e}")
-                await update.message.reply_text(f"❌ خطا: {str(e)}")
+                await update.message.reply_text("❌ خطایی در انتخاب ویدیو رخ داد.")
         return
 
     elif step == "waiting_yt_link":

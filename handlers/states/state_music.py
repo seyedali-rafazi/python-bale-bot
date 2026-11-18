@@ -23,9 +23,10 @@ from core.database import (
     log_upload_success,
     log_upload_failed,
 )
-from core.state_manager import StateCache
+from core.state_manager import StateCache, clear_state
 from core.limits import get_limit
 from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, remove_files_async, track_task
+from handlers.utils import safe_answer_query, safe_edit_or_reply
 from services.rate_limiter import user_action_lock
 from services.music import (
     async_search_track,
@@ -61,6 +62,23 @@ MAX_MUSIC_CONCURRENT = 3
 music_download_semaphore = asyncio.Semaphore(MAX_MUSIC_CONCURRENT)
 _MUSIC_IDENTIFY_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("MUSIC_IDENTIFY_CONCURRENT", "3"))))
 _music_track_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
+_music_artist_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
+_pending_music_downloads: dict[str, int] = {}
+
+
+def _artist_callback_data(prefix: str, artist_id: str) -> str:
+    direct = f"{prefix}_{artist_id}"
+    if len(direct.encode("utf-8")) <= 64:
+        return direct
+    token = uuid.uuid4().hex[:12]
+    _music_artist_cache[token] = artist_id
+    return f"{prefix}_tok_{token}"
+
+
+def _resolve_artist_id(raw: str) -> str | None:
+    if raw.startswith("tok_"):
+        return _music_artist_cache.get(raw[4:])
+    return raw
 
 
 async def background_download_task(
@@ -158,7 +176,7 @@ async def background_download_task(
                                 progress_dict,
                             )
                             s3_key = None
-                    except Exception:
+                    except BaseException:
                         await release_cloud_quota(chat_id, file_size_mb)
                         raise
 
@@ -233,12 +251,21 @@ async def background_download_task(
 
     except Exception as e:
         print(f"Download/Upload Error: {e}")
-        await context.bot.send_message(
-            chat_id, "❌ خطایی در فرآیند دانلود یا ارسال رخ داد."
-        )
+        try:
+            await context.bot.send_message(
+                chat_id, "❌ خطایی در فرآیند دانلود یا ارسال رخ داد."
+            )
+        except Exception:
+            pass
         await log_upload_failed("music", chat_id)
 
     finally:
+        uid = str(chat_id)
+        cur = _pending_music_downloads.get(uid, 0)
+        if cur <= 1:
+            _pending_music_downloads.pop(uid, None)
+        else:
+            _pending_music_downloads[uid] = cur - 1
         # تضمین پاک شدن فایل از روی هارد سرور در هر شرایطی (حتی در صورت کرش یا قطعی اینترنت)
         await remove_file_async(file_path)
 
@@ -257,7 +284,8 @@ async def _can_download_music(chat_id: str) -> tuple[bool, int]:
         get_music_downloads(chat_id),
     )
     limit = get_limit("music_download", int(bool(user_vip_status)))
-    return current_downloads < limit, limit
+    pending = _pending_music_downloads.get(str(chat_id), 0)
+    return (current_downloads + pending) < limit, limit
 
 
 async def _run_music_identify_bg(
@@ -275,9 +303,14 @@ async def _run_music_identify_bg(
     paths_to_remove = []
 
     try:
+        file_size = getattr(file_obj, "file_size", None)
+        if file_size and file_size > 50 * 1024 * 1024:
+            await safe_edit_or_reply(status_msg, "❌ حجم فایل نباید بیشتر از ۵۰ مگابایت باشد.")
+            return
+
         async with _MUSIC_IDENTIFY_SEMAPHORE:
             tg_file = await context.bot.get_file(file_obj.file_id)
-            await tg_file.download_to_drive(raw_path)
+            await asyncio.wait_for(tg_file.download_to_drive(raw_path), timeout=60.0)
             paths_to_remove.append(raw_path)
 
             real_duration = await async_probe_media_duration_sec(raw_path)
@@ -333,34 +366,40 @@ async def _run_music_identify_bg(
 
         await update.message.reply_text(format_identified_info_message(identified))
 
-        can_download, limit = await _can_download_music(chat_id)
-        if not can_download:
-            await update.message.reply_text(
-                f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ({limit} آهنگ).\n"
-                "فردا مجدداً تلاش کنید."
+        async with user_action_lock(chat_id, "music_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ درخواست دانلود قبلی شما در حال ثبت است.")
+                return
+
+            can_download, limit = await _can_download_music(chat_id)
+            if not can_download:
+                await update.message.reply_text(
+                    f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ({limit} آهنگ).\n"
+                    "فردا مجدداً تلاش کنید."
+                )
+                return
+
+            best = results[0]
+            track_id = best["id"]
+            dl_title = best["name"]
+            dl_performer = (
+                best["artists"][0]["name"] if best.get("artists") else identified["artist"]
             )
-            return
+            safe_filename = _make_safe_filename(dl_title, dl_performer)
+            _pending_music_downloads[str(chat_id)] = _pending_music_downloads.get(str(chat_id), 0) + 1
 
-        best = results[0]
-        track_id = best["id"]
-        dl_title = best["name"]
-        dl_performer = (
-            best["artists"][0]["name"] if best.get("artists") else identified["artist"]
-        )
-        safe_filename = _make_safe_filename(dl_title, dl_performer)
-
-        track_task(
-            background_download_task(
-                context,
-                chat_id,
-                track_id,
-                dl_title,
-                dl_performer,
-                safe_filename,
-                destination="telegram",
-            ),
-            name=f"music_identify_dl_{chat_id}",
-        )
+            track_task(
+                background_download_task(
+                    context,
+                    chat_id,
+                    track_id,
+                    dl_title,
+                    dl_performer,
+                    safe_filename,
+                    destination="telegram",
+                ),
+                name=f"music_identify_dl_{chat_id}",
+            )
 
     except Exception as e:
         logger.warning("Music identify error: %s", e)
@@ -438,6 +477,7 @@ async def handle_music_state(
             "نتایج یافت شده. برای دانلود کلیک کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+        clear_state(chat_id)
 
     elif step == "waiting_music_album":
         async with user_action_lock(chat_id, "music_search", timeout_sec=10) as acquired:
@@ -462,6 +502,7 @@ async def handle_music_state(
         await update.message.reply_text(
             "آلبوم‌های یافت شده:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        clear_state(chat_id)
 
     elif step == "waiting_music_artist":
         results = search_artist(text)
@@ -474,7 +515,8 @@ async def handle_music_state(
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        item["name"], callback_data=f"artist_{item['id']}"
+                        item["name"],
+                        callback_data=_artist_callback_data("artist", str(item["id"])),
                     )
                 ]
             )
@@ -482,6 +524,7 @@ async def handle_music_state(
         await update.message.reply_text(
             "خواننده‌های یافت شده:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        clear_state(chat_id)
 
     elif step == "waiting_music_playlist":
         async with user_action_lock(chat_id, "music_search", timeout_sec=10) as acquired:
@@ -503,6 +546,7 @@ async def handle_music_state(
         await update.message.reply_text(
             "پلی‌لیست‌های یافت شده:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        clear_state(chat_id)
 
 
 # هندلر برای دریافت کال‌بک‌های دکمه‌های شیشه‌ای
@@ -557,12 +601,15 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("artist_"):
-        artist_id = data.split("_", 1)[1]
+        artist_id = _resolve_artist_id(data.split("_", 1)[1])
+        if not artist_id:
+            await query.message.reply_text("❌ نشست منقضی شده است. لطفاً دوباره جستجو کنید.")
+            return
         keyboard = [
             [
                 InlineKeyboardButton(
                     "🎧 دریافت آهنگ‌های برتر خواننده",
-                    callback_data=f"toptracks_{artist_id}",
+                    callback_data=_artist_callback_data("toptracks", artist_id),
                 )
             ]
         ]
@@ -572,7 +619,10 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     elif data.startswith("toptracks_"):
-        artist_id = data.split("_", 1)[1]
+        artist_id = _resolve_artist_id(data.split("_", 1)[1])
+        if not artist_id:
+            await query.message.reply_text("❌ نشست منقضی شده است. لطفاً دوباره جستجو کنید.")
+            return
         async with user_action_lock(chat_id, "music_browse", timeout_sec=10) as acquired:
             if not acquired:
                 await query.message.reply_text("⏳ درخواست قبلی شما در حال انجام است.")
@@ -595,7 +645,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # ===================================
     elif data.startswith("dltrack_tel_") or data.startswith("dltrack_cloud_"):
         is_cloud = data.startswith("dltrack_cloud_")
-        track_id = data.split("_", 3)[2]
+        track_id = data.split("_", 2)[2]
         destination = "server" if is_cloud else "telegram"
 
         async with user_action_lock(chat_id, "music_dl", timeout_sec=10) as acquired:
@@ -621,6 +671,7 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 or {}
             )
 
+            _pending_music_downloads[str(chat_id)] = _pending_music_downloads.get(str(chat_id), 0) + 1
             track_task(
                 background_download_task(
                     context,

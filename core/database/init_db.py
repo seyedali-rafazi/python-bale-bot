@@ -115,7 +115,6 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     s3_key TEXT,
     upload_date TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id);
 CREATE INDEX IF NOT EXISTS idx_cloud_files_user_date ON cloud_files(user_id, upload_date DESC);
 CREATE TABLE IF NOT EXISTS usage_stats (
     user_id TEXT,
@@ -195,6 +194,7 @@ async def init_db():
         await conn.execute(schema_sql)
         await conn.execute("DROP INDEX IF EXISTS idx_yt_cache_id_desc")
         await conn.execute("DROP INDEX IF EXISTS idx_yt_cache_views")
+        await conn.execute("DROP INDEX IF EXISTS idx_cloud_files_user")
         await conn.execute("ALTER TABLE cloud_files ADD COLUMN IF NOT EXISTS s3_key TEXT")
         await _ensure_float_cloud_columns(conn)
         await _ensure_trigram_indexes(conn)

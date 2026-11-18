@@ -1,5 +1,6 @@
 # services/telegram_telethon.py — fetch public Telegram content via Telethon (MTProto)
 
+import glob
 import os
 import re
 import uuid
@@ -36,6 +37,7 @@ _TG_FETCH_CONCURRENCY = max(1, int(os.getenv("TG_FETCH_CONCURRENCY", "3")))
 _tg_fetch_semaphore = asyncio.Semaphore(_TG_FETCH_CONCURRENCY)
 _tg_download_semaphore = asyncio.Semaphore(_TG_FETCH_CONCURRENCY)
 _channel_messages_cache = StateCache(max_capacity=150, default_ttl=90.0)
+_inflight_tg_channels: dict[str, asyncio.Task] = {}
 TG_DOWNLOAD_DIR = "tg_downloads"
 
 _MESSAGE_LINK_RE = re.compile(
@@ -165,6 +167,14 @@ async def _send_downloaded(
     return False
 
 
+async def _send_text_retry(bot, chat_id: str, text: str) -> None:
+    try:
+        await bot.send_message(chat_id=chat_id, text=text)
+    except RetryAfter as exc:
+        await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+        await bot.send_message(chat_id=chat_id, text=text)
+
+
 async def send_message_via_bot(bot, chat_id: str, message) -> bool:
     """Download one Telethon message (if media) and forward to Bale chat."""
     text = (message.message or message.text or "").strip()
@@ -172,71 +182,79 @@ async def send_message_via_bot(bot, chat_id: str, message) -> bool:
 
     size = _media_size(message)
     if size is not None and size > MAX_MEDIA_BYTES:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=f"⚠️ این فایل ({size // (1024 * 1024)} مگابایت) بیش از ۵۰ مگابایت است.",
+        await _send_text_retry(
+            bot,
+            chat_id,
+            f"⚠️ این فایل ({size // (1024 * 1024)} مگابایت) بیش از ۵۰ مگابایت است.",
         )
         if len(text) > 1024:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await _send_text_retry(bot, chat_id, text)
         elif text and not message.media:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await _send_text_retry(bot, chat_id, text)
         return bool(text)
 
     if not message.media:
         if text:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await _send_text_retry(bot, chat_id, text)
             return True
         return False
 
     await asyncio.to_thread(os.makedirs, TG_DOWNLOAD_DIR, exist_ok=True)
+    dl_prefix = os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
     temp_path = None
     try:
         async with _tg_download_semaphore:
             client = await get_telethon_client()
             temp_path = await asyncio.wait_for(
-                client.download_media(
-                    message, file=os.path.join(TG_DOWNLOAD_DIR, f"tg_{uuid.uuid4().hex}")
-                ),
+                client.download_media(message, file=dl_prefix),
                 timeout=180.0,
             )
         if not temp_path or not await asyncio.to_thread(os.path.exists, temp_path):
             return False
 
         if await get_file_size_async(temp_path) > MAX_MEDIA_BYTES:
-            await bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ فایل پس از دانلود بیش از ۵۰ مگابایت بود و ارسال نشد.",
+            await _send_text_retry(
+                bot,
+                chat_id,
+                "⚠️ فایل پس از دانلود بیش از ۵۰ مگابایت بود و ارسال نشد.",
             )
             if len(text) > 1024:
-                await bot.send_message(chat_id=chat_id, text=text)
+                await _send_text_retry(bot, chat_id, text)
             return bool(text)
 
         sent = await _send_downloaded(bot, chat_id, temp_path, message, cap)
         if sent and len(text) > 1024:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await _send_text_retry(bot, chat_id, text)
         return sent or bool(text and len(text) > 1024)
     except FloodWaitError as e:
         logger.warning("Telethon FloodWait during download_media: %ss", e.seconds)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=f"⛔ محدودیت موقت تلگرام. لطفاً {e.seconds} ثانیه بعد تلاش کنید.",
+        await _send_text_retry(
+            bot,
+            chat_id,
+            f"⛔ محدودیت موقت تلگرام. لطفاً {e.seconds} ثانیه بعد تلاش کنید.",
         )
         return False
     except Exception as e:
         logger.exception("telethon download/send failed: %s", e)
         if text:
-            await bot.send_message(chat_id=chat_id, text=text)
+            await _send_text_retry(bot, chat_id, text)
             return True
         return False
     finally:
-        if temp_path:
-            def _cleanup_temp(p: str):
-                if os.path.exists(p):
-                    os.remove(p)
-            try:
-                await asyncio.to_thread(_cleanup_temp, temp_path)
-            except OSError:
-                pass
+        def _cleanup_temp(path: Optional[str], prefix: str):
+            targets = set(glob.glob(f"{prefix}*"))
+            if path:
+                targets.add(path)
+            for p in targets:
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+        try:
+            await asyncio.to_thread(_cleanup_temp, temp_path, dl_prefix)
+        except OSError:
+            pass
 
 
 async def fetch_channel_messages(
@@ -251,18 +269,38 @@ async def fetch_channel_messages(
     if cached is not None:
         return cached
 
-    async with _tg_fetch_semaphore:
-        client = await get_telethon_client()
-        logger.info("Telethon: resolving channel @%s", channel_id)
-        entity = await asyncio.wait_for(client.get_entity(channel_id), timeout=30.0)
-        messages = await asyncio.wait_for(client.get_messages(entity, limit=limit), timeout=30.0)
-        result = list(messages or [])
-        logger.info(
-            "Telethon: got %s messages from @%s", len(result), channel_id
-        )
-        if result:
-            _channel_messages_cache[cache_key] = result
-        return result
+    existing = _inflight_tg_channels.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    async def _fetch() -> list:
+        async with _tg_fetch_semaphore:
+            client = await get_telethon_client()
+            logger.info("Telethon: resolving channel @%s", channel_id)
+            entity = await asyncio.wait_for(client.get_entity(channel_id), timeout=30.0)
+            messages = await asyncio.wait_for(client.get_messages(entity, limit=limit), timeout=30.0)
+            result = list(messages or [])
+            logger.info(
+                "Telethon: got %s messages from @%s", len(result), channel_id
+            )
+            if result:
+                _channel_messages_cache[cache_key] = result
+            return result
+
+    task = asyncio.create_task(_fetch())
+    _inflight_tg_channels[cache_key] = task
+
+    def _cleanup(t: asyncio.Task) -> None:
+        if _inflight_tg_channels.get(cache_key) is t:
+            _inflight_tg_channels.pop(cache_key, None)
+        if not t.cancelled():
+            try:
+                t.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 async def fetch_single_message(link: str):

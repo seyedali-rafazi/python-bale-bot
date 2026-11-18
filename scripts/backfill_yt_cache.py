@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.database import init_db, close_db
+from services.redis_client import init_redis, close_redis
 from core.database.youtube import (
     count_cache_needing_metadata,
     backfill_youtube_cache_metadata,
@@ -17,6 +18,7 @@ from core.database.youtube import (
 
 
 async def main():
+    await init_redis()
     await init_db()
     try:
         pending = await count_cache_needing_metadata()
@@ -44,6 +46,7 @@ async def main():
         print(f"Upload dates done. Batch result: {date_result}, still missing: {left_dates}")
     finally:
         await close_db()
+        await close_redis()
 
 
 if __name__ == "__main__":

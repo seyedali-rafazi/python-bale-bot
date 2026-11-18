@@ -17,12 +17,15 @@ import asyncio
 import logging
 import os
 import re
+import uuid
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from core.state_manager import clear_state, set_state
+from core.state_manager import StateCache, clear_state, set_state
 from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file
+from handlers.utils import escape_markdown, safe_answer_query
+from services.rate_limiter import user_action_lock
 from core.database import (
     get_kaggle_downloads,
     increment_kaggle_downloads,
@@ -50,6 +53,17 @@ _KAGGLE_QUEUE_MAXSIZE = max(10, int(os.getenv("KAGGLE_QUEUE_MAXSIZE", "100")))
 _kaggle_queue: asyncio.Queue = asyncio.Queue(maxsize=_KAGGLE_QUEUE_MAXSIZE)
 _worker_tasks: list[asyncio.Task] = []
 _NUM_WORKERS = 3
+_kaggle_ref_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
+_pending_kaggle_downloads: dict[str, int] = {}
+
+
+def kaggle_callback_data(ref: str) -> str:
+    direct = f"kgdl_{ref}"
+    if len(direct.encode("utf-8")) <= 64:
+        return direct
+    token = uuid.uuid4().hex[:12]
+    _kaggle_ref_cache[token] = ref
+    return f"kgdl_tok_{token}"
 
 
 async def _kaggle_worker():
@@ -189,7 +203,7 @@ async def process_kaggle_download(
         for i, part_path in enumerate(parts, 1):
             part_size_mb = (await get_file_size_async(part_path)) / (1024 * 1024)
             caption = (
-                f"📦 دیتاست: `{ref}`\n"
+                f"📦 دیتاست: `{escape_markdown(ref)}`\n"
                 f"قسمت {i} از {total_parts} | حجم: {part_size_mb:.1f} مگابایت"
             )
             try:
@@ -231,6 +245,12 @@ async def process_kaggle_download(
     finally:
         await asyncio.to_thread(cleanup_temp, dl_dir)
         clear_state(chat_id)
+        uid = str(user_id)
+        cur = _pending_kaggle_downloads.get(uid, 0)
+        if cur <= 1:
+            _pending_kaggle_downloads.pop(uid, None)
+        else:
+            _pending_kaggle_downloads[uid] = cur - 1
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -262,17 +282,17 @@ async def handle_kaggle_state(
             clear_state(chat_id)
             return
 
-        msg_text = f"🔍 نتایج جستجوی «{text}»:\n\n"
+        msg_text = f"🔍 نتایج جستجوی «{escape_markdown(text)}»:\n\n"
         keyboard = []
         for i, ds in enumerate(datasets, 1):
             ref = dataset_ref(ds)
             size = format_dataset_size(ds)
             title = getattr(ds, "title", ref) or ref
-            msg_text += f"{i}. `{ref}`\n   📦 {size}\n\n"
+            msg_text += f"{i}. `{escape_markdown(ref)}`\n   📦 {size}\n\n"
             keyboard.append([
                 InlineKeyboardButton(
                     f"⬇️ {title[:35]}",
-                    callback_data=f"kgdl_{ref}",
+                    callback_data=kaggle_callback_data(ref),
                 )
             ])
 
@@ -284,21 +304,6 @@ async def handle_kaggle_state(
         clear_state(chat_id)
 
     elif step == "waiting_kaggle_dl_link":
-        vip, used = await asyncio.gather(
-            is_vip(user_id),
-            get_kaggle_downloads(user_id),
-        )
-        limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-
-        if used >= limit:
-            await update.message.reply_text(
-                f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
-                f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
-                f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
-            )
-            clear_state(chat_id)
-            return
-
         # Parse URL or plain ref
         ref = _parse_kaggle_ref(text)
         if not ref:
@@ -309,8 +314,38 @@ async def handle_kaggle_state(
                 parse_mode="Markdown",
             )
             return
-        clear_state(chat_id)
-        await _enqueue(update, context, chat_id, ref, user_id)
+
+        async with user_action_lock(user_id, "kaggle_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+                return
+            vip, used = await asyncio.gather(
+                is_vip(user_id),
+                get_kaggle_downloads(user_id),
+            )
+            limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
+            pending = _pending_kaggle_downloads.get(user_id, 0)
+
+            if used + pending >= limit:
+                await update.message.reply_text(
+                    f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
+                    f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
+                    f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
+                )
+                clear_state(chat_id)
+                return
+
+            _pending_kaggle_downloads[user_id] = pending + 1
+            clear_state(chat_id)
+            try:
+                await _enqueue(update, context, chat_id, ref, user_id)
+            except BaseException:
+                cur = _pending_kaggle_downloads.get(user_id, 0)
+                if cur <= 1:
+                    _pending_kaggle_downloads.pop(user_id, None)
+                else:
+                    _pending_kaggle_downloads[user_id] = cur - 1
+                raise
 
 
 def _parse_kaggle_ref(text: str) -> str | None:
@@ -335,30 +370,52 @@ def _parse_kaggle_ref(text: str) -> str | None:
 async def kaggle_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles button clicks from search/popular result lists."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
 
     user_id = str(query.from_user.id)
     chat_id = str(query.message.chat_id)
-    ref = query.data.replace("kgdl_", "", 1)
+    raw_ref = (query.data or "").replace("kgdl_", "", 1)
+    if raw_ref.startswith("tok_"):
+        ref = _kaggle_ref_cache.get(raw_ref[4:])
+        if not ref:
+            await query.message.reply_text("❌ نشست منقضی شده است. لطفاً دوباره جستجو کنید.")
+            return
+    else:
+        ref = raw_ref
 
-    vip, used = await asyncio.gather(
-        is_vip(user_id),
-        get_kaggle_downloads(user_id),
-    )
-    limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
+    async with user_action_lock(user_id, "kaggle_dl", timeout_sec=10) as acquired:
+        if not acquired:
+            await query.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
 
-    if used >= limit:
-        await query.message.reply_text(
-            f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
-            f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
-            f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
+        vip, used = await asyncio.gather(
+            is_vip(user_id),
+            get_kaggle_downloads(user_id),
         )
-        return
+        limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
+        pending = _pending_kaggle_downloads.get(user_id, 0)
 
-    # Disable the button to prevent double-tapping
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+        if used + pending >= limit:
+            await query.message.reply_text(
+                f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
+                f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
+                f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
+            )
+            return
 
-    await _enqueue(update, context, chat_id, ref, user_id)
+        # Disable the button to prevent double-tapping
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        _pending_kaggle_downloads[user_id] = pending + 1
+        try:
+            await _enqueue(update, context, chat_id, ref, user_id)
+        except BaseException:
+            cur = _pending_kaggle_downloads.get(user_id, 0)
+            if cur <= 1:
+                _pending_kaggle_downloads.pop(user_id, None)
+            else:
+                _pending_kaggle_downloads[user_id] = cur - 1
+            raise

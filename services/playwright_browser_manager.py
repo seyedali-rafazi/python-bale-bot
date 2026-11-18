@@ -158,7 +158,10 @@ class PlaywrightBrowserManager:
                 logger.warning("Browser launch failed: %s", e)
                 self._browser = None
                 if self._playwright:
-                    await self._playwright.stop()
+                    try:
+                        await self._playwright.stop()
+                    except Exception:
+                        pass
                 self._playwright = None
                 raise
 
@@ -222,13 +225,18 @@ class PlaywrightBrowserManager:
                     raise e
 
     async def _cleanup_unlocked(self):
-        if self._idle_close_task is not None and not self._idle_close_task.done():
+        current_task = asyncio.current_task()
+        if (
+            self._idle_close_task is not None
+            and not self._idle_close_task.done()
+            and self._idle_close_task is not current_task
+        ):
             self._idle_close_task.cancel()
-            self._idle_close_task = None
+        self._idle_close_task = None
 
         try:
             if self._browser:
-                await self._browser.close()
+                await asyncio.wait_for(self._browser.close(), timeout=10.0)
         except Exception as e:
             logger.debug("Error closing browser: %s", e)
         finally:
@@ -236,7 +244,7 @@ class PlaywrightBrowserManager:
 
         try:
             if self._playwright:
-                await self._playwright.stop()
+                await asyncio.wait_for(self._playwright.stop(), timeout=10.0)
         except Exception as e:
             logger.debug("Error closing playwright: %s", e)
         finally:

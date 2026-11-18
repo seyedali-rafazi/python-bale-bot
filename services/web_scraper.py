@@ -379,10 +379,13 @@ async def _create_single_file_with_playwright(
                     page = await context.new_page()
 
                     async def _block_media(route):
-                        if route.request.resource_type == "media":
-                            await route.abort()
-                        else:
-                            await route.continue_()
+                        try:
+                            if route.request.resource_type == "media":
+                                await route.abort()
+                            else:
+                                await route.continue_()
+                        except Exception:
+                            pass
 
                     await page.route("**/*", _block_media)
                     await page.goto(

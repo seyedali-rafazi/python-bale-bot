@@ -4,6 +4,7 @@ import os
 import re
 import uuid
 import asyncio
+from urllib.parse import quote_plus
 import aiohttp
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -79,7 +80,11 @@ async def background_download(chat_id, bot, download_url, filename, caption):
                         f"❌ خطا در دریافت فایل. کد خطا: {response.status}",
                     )
     except Exception as e:
-        await bot.send_message(chat_id_str, f"❌ خطای غیرمنتظره در دانلود: {e}")
+        print(f"Programming download error: {e}")
+        try:
+            await bot.send_message(chat_id_str, "❌ خطای غیرمنتظره در دانلود فایل.")
+        except Exception:
+            pass
     finally:
         await remove_file_async(temp_filepath)
 
@@ -179,7 +184,8 @@ async def handle_programming_state(
                                 "❌ شناسه‌ای یافت نشد. لطفاً لینک دقیق را ارسال کنید."
                             )
                 except Exception as e:
-                    await update.message.reply_text(f"❌ خطا در جستجو: {e}")
+                    print(f"Programming search error: {e}")
+                    await update.message.reply_text("❌ خطا در جستجو. لطفاً دوباره تلاش کنید.")
 
     elif step == "waiting_prog_firefox":
         async with user_action_lock(user_id, "prog_dl", timeout_sec=15) as acquired:
@@ -187,7 +193,7 @@ async def handle_programming_state(
                 await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
                 return
             await update.message.reply_text("⏳ در صف دانلود...")
-            search_url = f"https://addons.mozilla.org/api/v5/addons/search/?q={text}"
+            search_url = f"https://addons.mozilla.org/api/v5/addons/search/?q={quote_plus(text.strip())}"
             try:
                 session = await get_http_session()
                 async with session.get(
@@ -220,12 +226,17 @@ async def handle_programming_state(
                         )
                         clear_state(chat_id)
             except Exception as e:
-                await update.message.reply_text(f"❌ خطا در ارتباط: {e}")
+                print(f"Firefox addon error: {e}")
+                await update.message.reply_text("❌ خطا در ارتباط با سرور فایرفاکس.")
                 clear_state(chat_id)
 
     elif step == "waiting_prog_vscode":
-        parts = text.split(".")
-        if len(parts) != 2:
+        parts = text.strip().split(".")
+        if (
+            len(parts) != 2
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", parts[0])
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+", parts[1])
+        ):
             await update.message.reply_text(
                 "❌ فرمت اشتباه است. مثال: `esbenp.prettier-vscode`",
                 parse_mode="Markdown",

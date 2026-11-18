@@ -123,6 +123,13 @@ async def async_probe_media_duration_sec(file_path: str) -> Optional[float]:
             except Exception:
                 pass
             return None
+        except asyncio.CancelledError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            raise
         if proc.returncode != 0 or not stdout_b:
             return None
         value = float(stdout_b.decode("utf-8", errors="replace").strip())
@@ -202,6 +209,13 @@ async def async_extract_audio_to_mp3(
                 except Exception:
                     pass
                 return False
+            except asyncio.CancelledError:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+                raise
         return proc.returncode == 0 and await asyncio.to_thread(os.path.exists, output_path)
     except Exception as e:
         logger.warning("ffmpeg extract audio error: %s", e)
@@ -244,6 +258,9 @@ def _parse_shazam_result(data: dict) -> Optional[dict]:
     return result
 
 
+_IDENTIFY_API_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("MUSIC_IDENTIFY_API_CONCURRENT", "4"))))
+
+
 async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
     global _shazam_instance
     try:
@@ -253,13 +270,20 @@ async def _recognize_with_shazam(file_path: str) -> Optional[dict]:
         return None
 
     try:
-        if _shazam_instance is None:
-            _shazam_instance = Shazam()
-        out = await _shazam_instance.recognize(
-            file_path,
-            options=SearchParams(segment_duration_seconds=12),
-        )
+        async with _IDENTIFY_API_SEMAPHORE:
+            if _shazam_instance is None:
+                _shazam_instance = Shazam()
+            out = await asyncio.wait_for(
+                _shazam_instance.recognize(
+                    file_path,
+                    options=SearchParams(segment_duration_seconds=12),
+                ),
+                timeout=25.0,
+            )
         return _parse_shazam_result(out)
+    except asyncio.TimeoutError:
+        logger.warning("Shazam recognize timed out after 25s")
+        return None
     except Exception as e:
         logger.warning("Shazam recognize error: %s", e)
         return None
@@ -270,22 +294,29 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
     if not token:
         return None
 
-    audio_file = None
+    def _read_audio_bytes() -> bytes:
+        with open(file_path, "rb") as f:
+            return f.read()
+
     try:
-        audio_file = await asyncio.to_thread(open, file_path, "rb")
+        audio_bytes = await asyncio.to_thread(_read_audio_bytes)
         session = await get_http_session()
         form = aiohttp.FormData()
         form.add_field("api_token", token)
         form.add_field("return", "apple_music,spotify")
         form.add_field(
             "file",
-            audio_file,
+            audio_bytes,
             filename=os.path.basename(file_path),
             content_type="audio/mpeg",
         )
         timeout = aiohttp.ClientTimeout(total=30)
-        async with session.post("https://api.audd.io/", data=form, timeout=timeout) as resp:
-            data = await resp.json()
+        async with _IDENTIFY_API_SEMAPHORE:
+            async with session.post("https://api.audd.io/", data=form, timeout=timeout) as resp:
+                if resp.status != 200:
+                    logger.warning("AudD HTTP status %s", resp.status)
+                    return None
+                data = await resp.json()
 
         if data.get("status") != "success" or not data.get("result"):
             return None
@@ -307,9 +338,6 @@ async def _recognize_with_audd(file_path: str) -> Optional[dict]:
     except Exception as e:
         logger.warning("AudD recognize error: %s", e)
         return None
-    finally:
-        if audio_file is not None:
-            await asyncio.to_thread(audio_file.close)
 
 
 def format_identified_info_message(identified: dict, *, pending_download: bool = True) -> str:

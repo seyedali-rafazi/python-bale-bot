@@ -349,19 +349,23 @@ async def send_parsed_message(
         elif reason == "over_20mb":
             skipped_large += 1
 
+    async def _send_msg(text_val: str):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text_val)
+        except RetryAfter as exc:
+            await asyncio.sleep(max(1.0, float(exc.retry_after)) + 0.5)
+            await bot.send_message(chat_id=chat_id, text=text_val)
+
     if parsed.text and len(parsed.text) > 1024:
-        await bot.send_message(chat_id=chat_id, text=parsed.text)
+        await _send_msg(parsed.text)
         sent_any = True
     elif parsed.text and not sent_any:
-        await bot.send_message(chat_id=chat_id, text=parsed.text)
+        await _send_msg(parsed.text)
         sent_any = True
 
     if skipped_large:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=(
-                f"⚠️ {skipped_large} فایل به‌دلیل حجم بالای ۵۰ مگابایت ارسال نشد."
-            ),
+        await _send_msg(
+            f"⚠️ {skipped_large} فایل به‌دلیل حجم بالای ۵۰ مگابایت ارسال نشد."
         )
 
     return sent_any

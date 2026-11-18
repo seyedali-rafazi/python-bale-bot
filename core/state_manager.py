@@ -125,13 +125,20 @@ class StateCache(MutableMapping):
             return default
 
     def pop(self, key, default=None):
+        evicted_val = None
+        expired = False
         with self._lock:
-            try:
-                val = self[key]
-                self._remove_key(key)
-                return val
-            except KeyError:
+            now = time.monotonic()
+            if key not in self._data:
                 return default
+            if now > self._expires.get(key, 0):
+                evicted_val = self._remove_key(key)
+                expired = True
+            else:
+                return self._remove_key(key)
+        if expired:
+            self._notify_evicted([(key, evicted_val)])
+        return default
 
     def _remove_key(self, key):
         val = self._data.pop(key, None)
@@ -183,6 +190,12 @@ def _next_version(chat_id) -> int:
         while len(_state_versions) > max_ver_entries:
             _state_versions.popitem(last=False)
         return ver
+
+
+def _current_version(chat_id) -> int | None:
+    key = str(chat_id)
+    with _version_lock:
+        return _state_versions.get(key)
 
 
 def _is_latest_version(chat_id, version: int) -> bool:
@@ -262,7 +275,7 @@ def get_state(chat_id) -> dict:
     key = str(chat_id)
     cached = user_states.get(key)
     if cached is not None:
-        return cached
+        return dict(cached) if isinstance(cached, dict) else cached
 
     try:
         asyncio.get_running_loop()
@@ -274,11 +287,12 @@ def get_state(chat_id) -> dict:
     sync_redis = get_sync_redis()
     if sync_redis is not None:
         try:
+            start_ver = _current_version(key)
             val = sync_redis.get(_make_key(key))
-            if val:
+            if val and _current_version(key) == start_ver:
                 data = json.loads(val)
                 user_states[key] = data
-                return data
+                return dict(data) if isinstance(data, dict) else data
         except Exception as e:
             logger.debug("Failed to retrieve state from Redis for %s: %s", key, e)
 
@@ -333,16 +347,22 @@ async def async_get_state(chat_id) -> dict:
     key = str(chat_id)
     cached = user_states.get(key)
     if cached is not None:
-        return cached
+        return dict(cached) if isinstance(cached, dict) else cached
 
     redis = get_async_redis()
     if redis is not None:
         try:
+            start_ver = _current_version(key)
             val = await redis.get(_make_key(key))
+            if _current_version(key) != start_ver:
+                newer = user_states.get(key)
+                if newer is not None:
+                    return dict(newer) if isinstance(newer, dict) else newer
+                return {}
             if val:
                 data = json.loads(val)
                 user_states[key] = data
-                return data
+                return dict(data) if isinstance(data, dict) else data
         except Exception as e:
             logger.debug("Async Redis get_state failed for %s: %s", key, e)
 

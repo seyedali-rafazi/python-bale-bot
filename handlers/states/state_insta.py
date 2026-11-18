@@ -8,6 +8,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import StateCache, clear_state
 from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
+from handlers.utils import safe_answer_query, safe_edit_or_reply
 
 logger = logging.getLogger(__name__)
 _ig_link_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
@@ -122,7 +123,7 @@ async def background_download_insta_link(
                             None,
                             progress_dict,
                         )
-                except Exception:
+                except BaseException:
                     await release_cloud_quota(chat_id, file_size_mb)
                     raise
 
@@ -193,13 +194,14 @@ async def background_download_insta_link(
             await log_upload_failed("instagram", chat_id)
 
     except asyncio.TimeoutError:
-        await processing_msg.edit_text(
-            "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه)."
+        await safe_edit_or_reply(
+            processing_msg,
+            "⏳ زمان درخواست به پایان رسید (بیش از ۶۰ ثانیه).",
         )
         await log_upload_failed("instagram", chat_id)
     except Exception as e:
         print(f"Insta DL Error: {e}")
-        await processing_msg.edit_text("❌ خطای غیرمنتظره‌ای رخ داد.")
+        await safe_edit_or_reply(processing_msg, "❌ خطای غیرمنتظره‌ای رخ داد.")
         await log_upload_failed("instagram", chat_id)
     finally:
         await remove_file_async(file_path)
@@ -207,10 +209,7 @@ async def background_download_insta_link(
 
 async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    try:
-        await query.answer()
-    except Exception:
-        pass
+    await safe_answer_query(query)
 
     data = query.data
     chat_id = str(update.effective_chat.id)

@@ -69,6 +69,8 @@ async def flaresolverr_request(
             req_timeout = aiohttp.ClientTimeout(total=timeout + 5)
             async with session.post(fs_url, json=payload, timeout=req_timeout) as resp:
                 if resp.status != 200:
+                    if resp.status >= 500:
+                        _flaresolverr_down_until = time.monotonic() + _FLARESOLVERR_COOLDOWN_SEC
                     logger.warning(
                         "[FlareSolverr] HTTP status %s from FlareSolverr at %s",
                         resp.status,

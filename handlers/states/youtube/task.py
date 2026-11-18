@@ -98,6 +98,22 @@ async def background_yt_download(
     video_id = extract_yt_id(url)
     effective_format = _effective_format(format_type, destination, delivery_mode)
     cache_key = f"{video_id}_{effective_format}_{destination}_{quality}"
+    quota_refunded = False
+
+    async def _refund_quota_once() -> None:
+        nonlocal quota_refunded
+        if not quota_refunded:
+            quota_refunded = True
+            try:
+                await decrement_yt_downloads(chat_id)
+            except Exception:
+                logger.exception("Failed decrementing yt quota for %s", chat_id)
+
+    async def _safe_notify(text_msg: str) -> None:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text_msg)
+        except Exception:
+            pass
 
     # =========================================
     # کش
@@ -116,18 +132,24 @@ async def background_yt_download(
             info_cached = meta if has_meta else await get_video_info_cached(url)
 
             if not await check_video_info_allowed(info_cached):
-                await context.bot.send_message(
-                    chat_id=chat_id, text=MSG_BLOCKED_CHANNEL
-                )
-                await decrement_yt_downloads(chat_id)
+                await _safe_notify(MSG_BLOCKED_CHANNEL)
+                await _refund_quota_once()
                 return
 
-            await send_cached_files(
-                context,
-                chat_id,
-                cached_files,
-                (meta.get("format_type") if meta else None) or effective_format,
-            )
+            try:
+                await send_cached_files(
+                    context,
+                    chat_id,
+                    cached_files,
+                    (meta.get("format_type") if meta else None) or effective_format,
+                )
+            except Exception:
+                logger.exception("Failed sending cached YouTube files for %s", cache_key)
+                await _safe_notify("❌ ارسال فایل از کش ناموفق بود. لطفاً دوباره تلاش کنید.")
+                await log_upload_failed("youtube", chat_id)
+                await _refund_quota_once()
+                return
+
             await increment_yt_video_view(cache_key)
 
             if not has_meta and info_cached:
@@ -161,8 +183,8 @@ async def background_yt_download(
         user_storage_mb_prefetched = None
 
     if not await check_video_info_allowed(info):
-        await context.bot.send_message(chat_id=chat_id, text=MSG_BLOCKED_CHANNEL)
-        await decrement_yt_downloads(chat_id)
+        await _safe_notify(MSG_BLOCKED_CHANNEL)
+        await _refund_quota_once()
         return
 
     # =========================================
@@ -483,7 +505,7 @@ async def background_yt_download(
                                             total_size_mb += file_size_mb
                                             cloud_records.append((file_name, file_size_mb, s3_url, s3_key))
                                             s3_links.append(s3_url)
-                                except Exception:
+                                except BaseException:
                                     await release_cloud_quota(chat_id, total_video_size_mb)
                                     raise
 
@@ -512,12 +534,9 @@ async def background_yt_download(
 
                                 else:
                                     await release_cloud_quota(chat_id, total_video_size_mb)
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text="❌ خطا در آپلود ابری.",
-                                    )
+                                    await _safe_notify("❌ خطا در آپلود ابری.")
                                     await log_upload_failed("youtube", chat_id)
-                                    await decrement_yt_downloads(chat_id)
+                                    await _refund_quota_once()
 
                             # =========================
                             # telegram upload
@@ -565,21 +584,15 @@ async def background_yt_download(
                                 "max-filesize",
                             )
                         ):
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ حجم فایل بیشتر از 1 گیگابایت است.",
-                            )
-
-                            await decrement_yt_downloads(chat_id)
-
+                            await _safe_notify("❌ حجم فایل بیشتر از 1 گیگابایت است.")
+                            await _refund_quota_once()
                             return
 
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text="❌ خطا در دانلود یا ارسال ویدیو. لطفاً بعداً دوباره تلاش کنید.",
+                        await _safe_notify(
+                            "❌ خطا در دانلود یا ارسال ویدیو. لطفاً بعداً دوباره تلاش کنید."
                         )
                         await log_upload_failed("youtube", chat_id)
-                        await decrement_yt_downloads(chat_id)
+                        await _refund_quota_once()
 
                     finally:
                         await remove_files_async(list(dict.fromkeys([*downloaded_files, *zip_artifacts])))
@@ -714,13 +727,10 @@ async def background_yt_download(
 
                                 else:
                                     await release_cloud_quota(chat_id, audio_size_mb)
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text="❌ خطا در آپلود ابری.",
-                                    )
+                                    await _safe_notify("❌ خطا در آپلود ابری.")
 
                                     await log_upload_failed("youtube", chat_id)
-                                    await decrement_yt_downloads(chat_id)
+                                    await _refund_quota_once()
 
                             # =====================
                             # telegram
@@ -815,36 +825,29 @@ async def background_yt_download(
                                     )
 
                         else:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text="❌ دانلود شکست خورد.",
-                            )
+                            await _safe_notify("❌ دانلود شکست خورد.")
 
                             await log_upload_failed("youtube", chat_id)
-                            await decrement_yt_downloads(chat_id)
+                            await _refund_quota_once()
 
                     except Exception as send_err:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"❌ خطا: {str(send_err)}",
-                        )
+                        logger.warning("YouTube audio send/process error: %s", send_err)
+                        await _safe_notify("❌ خطایی در پردازش یا ارسال فایل رخ داد.")
 
                         await log_upload_failed("youtube", chat_id)
-                        await decrement_yt_downloads(chat_id)
+                        await _refund_quota_once()
 
                     finally:
                         await remove_files_async([file_path, *zip_artifacts])
 
             except Exception as e:
                 progress_dict["is_finished"] = True
+                logger.warning("YouTube task error: %s", e)
 
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"❌ خطا: {str(e)}",
-                )
+                await _safe_notify("❌ خطایی در پردازش درخواست رخ داد.")
 
                 await log_upload_failed("youtube", chat_id)
-                await decrement_yt_downloads(chat_id)
+                await _refund_quota_once()
 
             finally:
                 await _stop_updater_task(updater_task)
@@ -852,4 +855,4 @@ async def background_yt_download(
     except Exception as e:
         print(f"Semaphore Error: {e}")
 
-        await decrement_yt_downloads(chat_id)
+        await _refund_quota_once()

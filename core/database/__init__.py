@@ -17,8 +17,6 @@ from .users import (
     get_users_batch,
     reset_user_limits,
     reset_all_user_limits,
-    get_web_search_downloads,
-    increment_web_search_downloads,
 )
 from .vip import (
     is_vip,
@@ -94,6 +92,7 @@ from .user_yt_archive import (
     search_archive_by_channel,
     can_user_fetch_from_archive,
     increment_archive_fetch,
+    decrement_archive_fetch,
     get_archive_fetches_today,
     get_archive_fetches_used,
     archive_limit_period_label,

@@ -237,7 +237,57 @@ def register_all_handlers(application):
         text = (update.message.text or "").strip() if update.message else ""
         handler_fn = menu_button_handlers.get(text)
         if handler_fn is not None:
+            if not text.startswith(("🖼", "📄", "🔄", "📏", "✂️", "🎬", "🎵 استخراج")) and update.effective_chat:
+                from handlers.states.state_image_processing import cleanup_user_image_caches
+
+                cleanup_user_image_caches(str(update.effective_chat.id))
             await handler_fn(update, context)
+
+    # Cloud upload conversation handler (registered before dispatch_menu_button so fallbacks exit WAIT_FOR_FILE cleanly)
+    from telegram.ext import ConversationHandler
+
+    async def _cloud_exit_on_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat:
+            from core.state_manager import clear_state
+
+            clear_state(str(update.effective_chat.id))
+        await dispatch_menu_button(update, context)
+        return ConversationHandler.END
+
+    async def _cloud_exit_on_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await cmd_start(update, context)
+        return ConversationHandler.END
+
+    cloud_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.Regex(f"^{re.escape(BTN_UPLOAD_TO_CLOUD)}$"), start_cloud_upload
+            ),
+            CallbackQueryHandler(start_cloud_upload, pattern="^cloud_upload$"),
+        ],
+        states={
+            WAIT_FOR_FILE: [
+                MessageHandler(
+                    filters.Document.ALL
+                    | filters.VIDEO
+                    | filters.AUDIO
+                    | filters.PHOTO,
+                    handle_cloud_file_upload,
+                ),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_cloud_upload),
+            CommandHandler("start", _cloud_exit_on_start),
+            MessageHandler(
+                filters.Text(tuple(menu_button_handlers.keys())),
+                _cloud_exit_on_menu,
+            ),
+        ],
+        allow_reentry=True,
+        conversation_timeout=300,
+    )
+    application.add_handler(cloud_conv)
 
     application.add_handler(
         MessageHandler(
@@ -304,32 +354,6 @@ def register_all_handlers(application):
         MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_callback)
     )
 
-    # Cloud upload conversation handler
-    from telegram.ext import ConversationHandler
-
-    cloud_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(
-                filters.Regex(f"^{re.escape(BTN_UPLOAD_TO_CLOUD)}$"), start_cloud_upload
-            ),
-            CallbackQueryHandler(start_cloud_upload, pattern="^cloud_upload$"),
-        ],
-        states={
-            WAIT_FOR_FILE: [
-                MessageHandler(
-                    filters.Document.ALL
-                    | filters.VIDEO
-                    | filters.AUDIO
-                    | filters.PHOTO,
-                    handle_cloud_file_upload,
-                ),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_cloud_upload)],
-        conversation_timeout=300,
-    )
-    application.add_handler(cloud_conv)
-
     # Cloud storage callback handlers
     application.add_handler(
         CallbackQueryHandler(btn_cloud_storage_menu, pattern="^cloud_storage$")
@@ -351,6 +375,10 @@ def register_all_handlers(application):
 
     # Cloud purchase size handler (5/10/20/50 GB)
     async def handle_cloud_buy_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from handlers.ensure_membership import ensure_membership
+
+        if not await ensure_membership(update, context):
+            return
         query = update.callback_query
         match = re.match(r"^cloud_buy_(5|10|20|50)gb$", query.data or "")
         if match:
@@ -364,8 +392,12 @@ def register_all_handlers(application):
     async def handle_cloud_purchase_tos(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
+        from handlers.ensure_membership import ensure_membership
+
+        if not await ensure_membership(update, context):
+            return
         query = update.callback_query
-        match = re.search(r"accept_cloud_purchase_(\d+)", query.data)
+        match = re.search(r"accept_cloud_purchase_(\d+)", query.data or "")
         if match:
             size_gb = int(match.group(1))
             await accept_cloud_purchase_tos(update, context, size_gb)

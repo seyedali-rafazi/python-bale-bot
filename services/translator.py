@@ -155,15 +155,25 @@ async def async_translate_text(source_lang: str, target_lang: str, text: str) ->
 
     async def _do_translate() -> str:
         async with _TRANSLATE_SEMAPHORE:
-            if translate_text is not _ORIG_TRANSLATE_TEXT:
-                result = await asyncio.to_thread(
-                    translate_text, source_lang, target_lang, clean_text
-                )
-            else:
-                translated = await asyncio.to_thread(
-                    _translate_sync_no_cache, source_lang, target_lang, clean_text
-                )
-                result = translated or "❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید."
+            try:
+                if translate_text is not _ORIG_TRANSLATE_TEXT:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            translate_text, source_lang, target_lang, clean_text
+                        ),
+                        timeout=20.0,
+                    )
+                else:
+                    translated = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _translate_sync_no_cache, source_lang, target_lang, clean_text
+                        ),
+                        timeout=20.0,
+                    )
+                    result = translated or "❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید."
+            except asyncio.TimeoutError:
+                logger.warning("Translation timed out after 20s (%s->%s)", source_lang, target_lang)
+                return "❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید."
 
         if result and not result.startswith("❌"):
             await cache_set(sub_key, result, ttl_sec=86400 * 30)

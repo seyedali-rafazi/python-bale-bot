@@ -63,11 +63,14 @@ async def add_vip_time(user_id, days: int):
             )
 
             now = datetime.now()
+            base = now
             if result and result["is_vip"] == 1 and result["vip_expire_date"]:
-                current_expire = datetime.fromisoformat(result["vip_expire_date"])
-                base = current_expire if current_expire > now else now
-            else:
-                base = now
+                try:
+                    current_expire = datetime.fromisoformat(result["vip_expire_date"])
+                    if current_expire > now:
+                        base = current_expire
+                except ValueError:
+                    pass
 
             expire_date_str = (base + timedelta(days=days)).isoformat()
             await conn.execute(

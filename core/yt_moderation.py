@@ -46,7 +46,7 @@ def _get_compiled_blocked_matcher(words: list[str]) -> tuple[frozenset[str], re.
     if words is _compiled_words_ref and _compiled_matcher_key is not None:
         return _compiled_single_words, _compiled_phrase_re
 
-    cleaned = tuple(w.strip().lower() for w in words if w and w.strip())
+    cleaned = tuple(_normalize_search_text(w) for w in words if w and _normalize_search_text(w))
     if cleaned == _compiled_matcher_key:
         _compiled_words_ref = words
         return _compiled_single_words, _compiled_phrase_re

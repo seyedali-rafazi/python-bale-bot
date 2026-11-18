@@ -62,9 +62,9 @@ async def init_ai_client():
             _ai_client = _build_ai_client()
 
         if not _ai_connected:
-            await _ai_client.connect()
+            await asyncio.wait_for(_ai_client.connect(), timeout=20.0)
 
-            if not await _ai_client.is_user_authorized():
+            if not await asyncio.wait_for(_ai_client.is_user_authorized(), timeout=15.0):
                 raise Exception("Telethon account is not authorized")
 
             _ai_connected = True
@@ -74,16 +74,17 @@ async def init_ai_client():
 
 async def close_ai_client():
 
-    global _ai_connected
+    global _ai_client, _ai_connected
 
     async with _ai_client_lock:
         if _ai_client:
             try:
-                await _ai_client.disconnect()
+                await asyncio.wait_for(_ai_client.disconnect(), timeout=10.0)
 
             except Exception:
                 logger.exception("close_ai_client failed")
 
+        _ai_client = None
         _ai_connected = False
 
 
@@ -101,8 +102,8 @@ async def _ensure_ai_client() -> TelegramClient:
     if not _ai_client.is_connected():
         async with _ai_client_lock:
             if not _ai_client.is_connected():
-                await _ai_client.connect()
-                if not await _ai_client.is_user_authorized():
+                await asyncio.wait_for(_ai_client.connect(), timeout=20.0)
+                if not await asyncio.wait_for(_ai_client.is_user_authorized(), timeout=15.0):
                     _ai_connected = False
                     raise RuntimeError("Telethon account is not authorized")
                 _ai_connected = True

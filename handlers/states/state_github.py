@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip
 from core.limits import get_limit
 from core.state_manager import StateCache, clear_state
+from handlers.utils import safe_answer_query
 from core.task_utils import (
     FileTooLargeError,
     bounded_large_upload,
@@ -29,6 +30,7 @@ download_queue: asyncio.Queue = asyncio.Queue(maxsize=GITHUB_QUEUE_MAXSIZE)
 _worker_tasks: list[asyncio.Task] = []
 _gh_repo_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
 _inflight_gh_queries: dict[str, asyncio.Task] = {}
+_pending_gh_downloads: dict[str, int] = {}
 _GH_API_CACHE_TTL_SEC = 300
 
 
@@ -160,28 +162,42 @@ async def handle_github_state(
     user_id = str(update.effective_user.id)
 
     if step == "waiting_gh_dl":
-        vip_status, downloads_count = await asyncio.gather(
-            is_vip(user_id),
-            get_gh_downloads(user_id),
-        )
-        max_dl = get_limit("github_download", vip_status)
-
-        if downloads_count >= max_dl:
-            await update.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
-            )
-            clear_state(chat_id)
-            return
-
         repo_path = _normalize_github_repo(text)
         if not repo_path:
             await update.message.reply_text(
                 "❌ فرمت ریپازیتوری نامعتبر است. مثال:\n`owner/repo` یا `https://github.com/owner/repo`"
             )
             return
-        # به جای پردازش مستقیم، به صف اضافه می‌کنیم
-        clear_state(chat_id)
-        await enqueue_download(update, context, chat_id, repo_path, user_id)
+
+        async with user_action_lock(user_id, "gh_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+                return
+            vip_status, downloads_count = await asyncio.gather(
+                is_vip(user_id),
+                get_gh_downloads(user_id),
+            )
+            max_dl = get_limit("github_download", vip_status)
+            pending = _pending_gh_downloads.get(user_id, 0)
+
+            if downloads_count + pending >= max_dl:
+                await update.message.reply_text(
+                    "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+                )
+                clear_state(chat_id)
+                return
+
+            _pending_gh_downloads[user_id] = pending + 1
+            clear_state(chat_id)
+            try:
+                await enqueue_download(update, context, chat_id, repo_path, user_id)
+            except BaseException:
+                cur = _pending_gh_downloads.get(user_id, 0)
+                if cur <= 1:
+                    _pending_gh_downloads.pop(user_id, None)
+                else:
+                    _pending_gh_downloads[user_id] = cur - 1
+                raise
 
     elif step == "waiting_gh_user":
         async with user_action_lock(user_id, "gh_search", timeout_sec=15) as acquired:
@@ -351,12 +367,18 @@ async def process_github_download(
     finally:
         await remove_file_async(temp_path)
         clear_state(str(chat_id))
+        uid = str(user_id)
+        cur = _pending_gh_downloads.get(uid, 0)
+        if cur <= 1:
+            _pending_gh_downloads.pop(uid, None)
+        else:
+            _pending_gh_downloads[uid] = cur - 1
 
 
 async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    data = query.data
+    await safe_answer_query(query)
+    data = query.data or ""
     chat_id = str(query.message.chat_id)
     user_id = str(query.from_user.id)
 
@@ -370,18 +392,32 @@ async def github_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         else:
             repo_path = raw_target
 
-        vip_status, downloads_count = await asyncio.gather(
-            is_vip(user_id),
-            get_gh_downloads(user_id),
-        )
-        max_dl = get_limit("github_download", vip_status)
+        async with user_action_lock(user_id, "gh_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await query.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+                return
 
-        if downloads_count >= max_dl:
-            await query.message.reply_text(
-                "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+            vip_status, downloads_count = await asyncio.gather(
+                is_vip(user_id),
+                get_gh_downloads(user_id),
             )
-            return
+            max_dl = get_limit("github_download", vip_status)
+            pending = _pending_gh_downloads.get(user_id, 0)
 
-        # به جای پردازش مستقیم، به صف اضافه می‌کنیم
-        clear_state(chat_id)
-        await enqueue_download(update, context, chat_id, repo_path, user_id)
+            if downloads_count + pending >= max_dl:
+                await query.message.reply_text(
+                    "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+                )
+                return
+
+            _pending_gh_downloads[user_id] = pending + 1
+            clear_state(chat_id)
+            try:
+                await enqueue_download(update, context, chat_id, repo_path, user_id)
+            except BaseException:
+                cur = _pending_gh_downloads.get(user_id, 0)
+                if cur <= 1:
+                    _pending_gh_downloads.pop(user_id, None)
+                else:
+                    _pending_gh_downloads[user_id] = cur - 1
+                raise

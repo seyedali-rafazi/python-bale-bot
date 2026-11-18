@@ -164,7 +164,10 @@ async def send_hourly_monitoring_report(
                 data["hour_end"],
             )
 
-        await asyncio.gather(*(_send_one(cid) for cid in targets))
+        results = await asyncio.gather(*(_send_one(cid) for cid in targets), return_exceptions=True)
+        for cid, res in zip(targets, results):
+            if isinstance(res, Exception):
+                logger.warning("Failed sending monitoring report to %s: %s", cid, res)
 
         deleted = await purge_old_monitoring_events(days=14)
         if deleted:

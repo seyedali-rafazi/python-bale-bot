@@ -8,6 +8,8 @@ from telegram.ext import ContextTypes
 from core.state_manager import set_state
 from core.database import get_kaggle_downloads, is_vip, KAGGLE_LIMIT_FREE, KAGGLE_LIMIT_VIP
 from handlers.ensure_membership import ensure_membership
+from handlers.states.state_kaggle import kaggle_callback_data
+from handlers.utils import escape_markdown
 from services.kaggle import search_datasets, list_popular_datasets, format_dataset_size, dataset_ref
 
 logger = logging.getLogger(__name__)
@@ -97,11 +99,11 @@ async def btn_kaggle_popular_req(update: Update, context: ContextTypes.DEFAULT_T
             ref = dataset_ref(ds)
             size = format_dataset_size(ds)
             title = getattr(ds, "title", ref) or ref
-            text += f"{i}. `{ref}`\n   📦 {size}\n\n"
+            text += f"{i}. `{escape_markdown(ref)}`\n   📦 {size}\n\n"
             keyboard.append([
                 InlineKeyboardButton(
                     f"⬇️ {title[:35]}",
-                    callback_data=f"kgdl_{ref}",
+                    callback_data=kaggle_callback_data(ref),
                 )
             ])
 

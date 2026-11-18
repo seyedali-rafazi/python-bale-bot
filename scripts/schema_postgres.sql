@@ -84,9 +84,16 @@ CREATE INDEX IF NOT EXISTS idx_yt_cache_missing_upload_date
     WHERE file_ids IS NOT NULL AND file_ids != '[]'
       AND (uploaded_at IS NULL OR TRIM(uploaded_at) = '');
 
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS idx_yt_cache_title_trgm ON youtube_cache USING gin (title gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_trgm ON youtube_cache USING gin (channel_name gin_trgm_ops);
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS idx_yt_cache_title_trgm ON youtube_cache USING gin (title gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_yt_cache_channel_trgm ON youtube_cache USING gin (channel_name gin_trgm_ops);
+EXCEPTION
+    WHEN insufficient_privilege OR undefined_object OR feature_not_supported THEN
+        NULL;
+END
+$$;
 
 -- 3. جدول اکسپلور اینستاگرام
 CREATE TABLE IF NOT EXISTS instagram_explore (
@@ -121,7 +128,6 @@ CREATE TABLE IF NOT EXISTS cloud_files (
     s3_key TEXT,
     upload_date TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_cloud_files_user ON cloud_files(user_id);
 CREATE INDEX IF NOT EXISTS idx_cloud_files_user_date ON cloud_files(user_id, upload_date DESC);
 
 -- 7. جدول آمار استفاده

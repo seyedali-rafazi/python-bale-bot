@@ -3,7 +3,7 @@
 # Free: 2 per week (reset Saturday 00:00 Tehran). VIP: 20 per day.
 
 from core.limits import FREE_LIMITS, VIP_LIMITS
-from .counters import get_period_usage, increment_period_usage
+from .counters import decrement_period_usage, get_period_usage, increment_period_usage
 from .utils import get_tehran_today, get_tehran_archive_week_key
 from .vip import is_vip
 from .youtube import (
@@ -78,6 +78,20 @@ async def increment_archive_fetch(
         "arc_fetch_date",
         period,
         monitor_section="yt_archive",
+        cache_service="yt_archive",
+    )
+
+
+async def decrement_archive_fetch(
+    user_id: str, *, is_vip_status: int | bool | None = None
+) -> None:
+    vip = await is_vip(user_id) if is_vip_status is None else is_vip_status
+    period = _archive_period_key(vip)
+    await decrement_period_usage(
+        user_id,
+        "arc_fetch_count",
+        "arc_fetch_date",
+        period,
         cache_service="yt_archive",
     )
 

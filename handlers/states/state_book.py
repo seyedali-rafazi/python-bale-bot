@@ -23,6 +23,7 @@ from telegram.ext import ContextTypes
 from core.state_manager import StateCache, clear_state
 from core.task_utils import async_temp_dir, bounded_large_upload, get_file_size_async, load_input_file
 from core.database import log_upload_success, log_upload_failed
+from handlers.utils import escape_markdown, safe_answer_query
 from services.book import search_books, download_book, format_book_info, SOURCE_LABELS
 from services.rate_limiter import user_action_lock
 
@@ -74,11 +75,11 @@ async def _handle_book_search(
     _books_cache[str(chat_id)] = books
 
     # Build result text + inline keyboard
-    result_text = f"📚 *نتایج جستجوی «{query}»:*\n\n"
+    result_text = f"📚 *نتایج جستجوی «{escape_markdown(query)}»:*\n\n"
     keyboard = []
 
     for i, book in enumerate(books):
-        result_text += f"{i + 1}. {format_book_info(book)}\n\n"
+        result_text += f"{i + 1}. {escape_markdown(format_book_info(book))}\n\n"
         title_short = book["title"][:35]
 
         if book["has_file"]:
@@ -117,7 +118,7 @@ async def _handle_book_search(
 async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles tap on a book download inline button."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
 
     data    = query.data
     chat_id = str(query.message.chat_id)
@@ -171,7 +172,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
         wait_msg = await query.message.reply_text(
             f"⏳ در حال دانلود کتاب از {source_label}...\n"
-            f"📖 *{book['title']}*\n"
+            f"📖 *{escape_markdown(book['title'])}*\n"
             f"📄 فرمت: {ext_tag}\n"
             "این ممکن است چند ثانیه طول بکشد.",
             parse_mode="Markdown",
@@ -196,7 +197,7 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 await context.bot.send_message(
                     chat_id,
                     f"❌ فایل این کتاب در دسترس نیست یا حجم آن بیش از ۵۰ مگابایت است.\n\n"
-                    f"📖 *{book['title']}*\n"
+                    f"📖 *{escape_markdown(book['title'])}*\n"
                     f"می‌توانید آن را مستقیماً از {source_label} دانلود کنید.",
                     parse_mode="Markdown",
                 )
@@ -206,8 +207,8 @@ async def book_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
             # Send the file
             file_size_mb = (await get_file_size_async(file_path)) / (1024 * 1024)
             caption = (
-                f"📖 *{book['title']}*\n"
-                f"✍️ {book['author']}\n"
+                f"📖 *{escape_markdown(book['title'])}*\n"
+                f"✍️ {escape_markdown(book['author'])}\n"
                 f"📦 حجم: {file_size_mb:.1f} مگابایت\n"
                 f"🌐 منبع: {source_label}"
             )

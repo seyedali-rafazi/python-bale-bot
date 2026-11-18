@@ -35,6 +35,16 @@ end
 return count
 """
 
+_SET_USAGE_MAX_LUA = """
+local cur = tonumber(redis.call("get", KEYS[1]))
+local nxt = tonumber(ARGV[1])
+if not cur or nxt > cur then
+    redis.call("set", KEYS[1], nxt, "EX", tonumber(ARGV[2]))
+    return nxt
+end
+return cur
+"""
+
 
 @asynccontextmanager
 async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 30):
@@ -91,6 +101,7 @@ async def user_action_lock(user_id: str | int, action: str, timeout_sec: int = 3
                     if existing and existing[0] == lock_token:
                         _local_locks.pop(lock_key, None)
             except Exception as e:
+                mark_redis_failure(e)
                 logger.debug("Error releasing lock for %s: %s", lock_key, e)
 
 
@@ -144,18 +155,31 @@ async def get_cached_daily_usage(service: str, user_id: str | int, today_str: st
             if val is not None:
                 return int(val)
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis get_cached_daily_usage error: %s", e)
     return None
 
 
-async def set_cached_daily_usage(service: str, user_id: str | int, today_str: str, count: int, ttl_sec: int = 86400) -> None:
+async def set_cached_daily_usage(
+    service: str,
+    user_id: str | int,
+    today_str: str,
+    count: int,
+    ttl_sec: int = 86400,
+    *,
+    only_if_greater: bool = False,
+) -> None:
     """Cache daily usage count in Redis with 24-hour expiration."""
     redis = get_async_redis()
     if redis is not None:
         try:
             key = f"bale:usage:{service}:{user_id}:{today_str}"
-            await redis.set(key, count, ex=ttl_sec)
+            if only_if_greater:
+                await redis.eval(_SET_USAGE_MAX_LUA, 1, key, int(count), max(1, int(ttl_sec)))
+            else:
+                await redis.set(key, count, ex=max(1, int(ttl_sec)))
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis set_cached_daily_usage error: %s", e)
 
 
@@ -171,6 +195,7 @@ async def incr_cached_daily_usage(service: str, user_id: str | int, today_str: s
             results = await pipe.execute()
             return int(results[0])
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis incr_cached_daily_usage error: %s", e)
     return -1
 
@@ -194,6 +219,7 @@ async def delete_cached_daily_usage(service: str, user_id: str | int, period_key
         try:
             await redis.delete(f"bale:usage:{service}:{user_id}:{period_key}")
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis delete_cached_daily_usage error: %s", e)
 
 
@@ -205,6 +231,7 @@ async def invalidate_cached_usage(user_id: str | int, service: Optional[str] = N
             pattern = f"bale:usage:{service or '*'}:{user_id}:*"
             await _delete_by_scan(redis, pattern)
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis invalidate_cached_usage error: %s", e)
 
 
@@ -215,4 +242,5 @@ async def invalidate_all_cached_usage() -> None:
         try:
             await _delete_by_scan(redis, "bale:usage:*")
         except Exception as e:
+            mark_redis_failure(e)
             logger.debug("Redis invalidate_all_cached_usage error: %s", e)

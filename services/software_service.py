@@ -40,6 +40,7 @@ _SCOOP_MANIFEST_SEMAPHORE = asyncio.Semaphore(5)
 
 _shared_httpx_client: Optional[httpx.AsyncClient] = None
 _httpx_lock = asyncio.Lock()
+_inflight_software_search: dict[str, asyncio.Task] = {}
 
 
 async def get_software_httpx_client() -> httpx.AsyncClient:
@@ -135,56 +136,76 @@ class SoftwareService:
         if isinstance(cached, list) and cached:
             return cached
 
-        url = "https://ws75.aptoide.com/api/7/apps/search"
-        params = {"query": norm_query, "limit": limit}
+        existing = _inflight_software_search.get(cache_key)
+        if existing is not None and not existing.done():
+            return await asyncio.shield(existing)
 
-        try:
-            client = await get_software_httpx_client()
-            resp = await client.get(url, params=params, timeout=12.0)
-            resp.raise_for_status()
-            data = resp.json()
+        async def _do_search() -> List[Dict[str, Any]]:
+            url = "https://ws75.aptoide.com/api/7/apps/search"
+            params = {"query": norm_query, "limit": limit}
 
-            items = data.get("datalist", {}).get("list", [])
-            results: List[Dict[str, Any]] = []
+            try:
+                client = await get_software_httpx_client()
+                resp = await client.get(url, params=params, timeout=12.0)
+                resp.raise_for_status()
+                data = resp.json()
 
-            for item in items:
-                name = item.get("name") or "نامشخص"
-                package = item.get("package") or ""
-                file_info = item.get("file", {})
-                download_url = file_info.get("path") or file_info.get("path_alt")
+                items = data.get("datalist", {}).get("list", [])
+                results: List[Dict[str, Any]] = []
 
-                if not download_url:
-                    continue
+                for item in items:
+                    name = item.get("name") or "نامشخص"
+                    package = item.get("package") or ""
+                    file_info = item.get("file", {})
+                    download_url = file_info.get("path") or file_info.get("path_alt")
 
-                version = file_info.get("vername") or item.get("vername") or "نامشخص"
-                size_bytes = item.get("size") or file_info.get("filesize") or 0
-                size_mb = round(size_bytes / (1024 * 1024), 1) if size_bytes else 0.0
-                icon = item.get("icon") or ""
-                updated = item.get("updated") or item.get("modified") or "نامشخص"
+                    if not download_url:
+                        continue
 
-                results.append(
-                    {
-                        "name": name,
-                        "package": package,
-                        "version": version,
-                        "size_mb": size_mb,
-                        "icon": icon,
-                        "download_url": download_url,
-                        "updated": updated,
-                        "platform": "android",
-                        "extension": "apk",
-                    }
-                )
+                    version = file_info.get("vername") or item.get("vername") or "نامشخص"
+                    size_bytes = item.get("size") or file_info.get("filesize") or 0
+                    size_mb = round(size_bytes / (1024 * 1024), 1) if size_bytes else 0.0
+                    icon = item.get("icon") or ""
+                    updated = item.get("updated") or item.get("modified") or "نامشخص"
 
-                if len(results) >= limit:
-                    break
+                    results.append(
+                        {
+                            "name": name,
+                            "package": package,
+                            "version": version,
+                            "size_mb": size_mb,
+                            "icon": icon,
+                            "download_url": download_url,
+                            "updated": updated,
+                            "platform": "android",
+                            "extension": "apk",
+                        }
+                    )
 
-            if results:
-                await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
-            return results
-        except Exception as e:
-            logger.exception("Error searching Android software for '%s': %s", query, e)
-            return []
+                    if len(results) >= limit:
+                        break
+
+                if results:
+                    await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
+                return results
+            except Exception as e:
+                logger.exception("Error searching Android software for '%s': %s", query, e)
+                return []
+
+        task = asyncio.create_task(_do_search())
+        _inflight_software_search[cache_key] = task
+
+        def _cleanup(t: asyncio.Task) -> None:
+            if _inflight_software_search.get(cache_key) is t:
+                _inflight_software_search.pop(cache_key, None)
+            if not t.cancelled():
+                try:
+                    t.exception()
+                except Exception:
+                    pass
+
+        task.add_done_callback(_cleanup)
+        return await asyncio.shield(task)
 
     @classmethod
     async def _get_remote_file_size_mb(cls, url: str) -> float:
@@ -494,17 +515,37 @@ class SoftwareService:
         if isinstance(cached, list) and cached:
             return cached
 
-        # 1. Primary: Cloud catalog search (works on Linux VPS, Docker, Windows)
-        results = await cls._search_windows_scoop(norm_query, limit=limit)
+        existing = _inflight_software_search.get(cache_key)
+        if existing is not None and not existing.done():
+            return await asyncio.shield(existing)
 
-        # 2. Fallback: If no results found and local winget CLI is installed
-        if not results and _has_winget():
-            results = await cls._search_windows_winget(norm_query, limit=limit)
+        async def _do_search() -> List[Dict[str, Any]]:
+            # 1. Primary: Cloud catalog search (works on Linux VPS, Docker, Windows)
+            results = await cls._search_windows_scoop(norm_query, limit=limit)
 
-        if results:
-            await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
+            # 2. Fallback: If no results found and local winget CLI is installed
+            if not results and _has_winget():
+                results = await cls._search_windows_winget(norm_query, limit=limit)
 
-        return results
+            if results:
+                await cache_set(cache_key, results, ttl_sec=_CACHE_TTL_SECONDS)
+
+            return results
+
+        task = asyncio.create_task(_do_search())
+        _inflight_software_search[cache_key] = task
+
+        def _cleanup(t: asyncio.Task) -> None:
+            if _inflight_software_search.get(cache_key) is t:
+                _inflight_software_search.pop(cache_key, None)
+            if not t.cancelled():
+                try:
+                    t.exception()
+                except Exception:
+                    pass
+
+        task.add_done_callback(_cleanup)
+        return await asyncio.shield(task)
 
     @classmethod
     async def download_file(
@@ -527,8 +568,10 @@ class SoftwareService:
         else:
             filename = sanitize_filename(filename)
 
-        dest_path = os.path.join(dest_dir, filename)
-        part_path = f"{dest_path}.{uuid.uuid4().hex[:8]}.part"
+        run_dir = os.path.join(dest_dir, uuid.uuid4().hex[:8])
+        await asyncio.to_thread(os.makedirs, run_dir, exist_ok=True)
+        dest_path = os.path.join(run_dir, filename)
+        part_path = f"{dest_path}.part"
 
         total_downloaded = 0
         f = None
@@ -536,7 +579,8 @@ class SoftwareService:
         try:
             async with _SOFTWARE_DOWNLOAD_SEMAPHORE:
                 client = await get_software_httpx_client()
-                async with client.stream("GET", url, timeout=180.0) as response:
+                stream_timeout = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
+                async with client.stream("GET", url, timeout=stream_timeout) as response:
                     response.raise_for_status()
 
                     cl_header = response.headers.get("content-length")
@@ -565,17 +609,28 @@ class SoftwareService:
                 await asyncio.to_thread(os.replace, part_path, dest_path)
 
             return os.path.abspath(dest_path)
-        except Exception:
+        except BaseException:
             if f is not None:
-                await asyncio.to_thread(f.close)
+                try:
+                    f.close()
+                except OSError:
+                    pass
                 f = None
-            # Clean up only our unique partial file (never clobber another concurrent download)
+            # Clean up only our unique partial file (and empty subdir)
             if await asyncio.to_thread(os.path.isfile, part_path):
                 try:
                     await asyncio.to_thread(os.remove, part_path)
                 except OSError:
                     pass
+            try:
+                if await asyncio.to_thread(os.path.isdir, run_dir) and not await asyncio.to_thread(os.listdir, run_dir):
+                    await asyncio.to_thread(os.rmdir, run_dir)
+            except OSError:
+                pass
             raise
         finally:
             if f is not None:
-                await asyncio.to_thread(f.close)
+                try:
+                    f.close()
+                except OSError:
+                    pass

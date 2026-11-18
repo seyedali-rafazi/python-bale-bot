@@ -196,14 +196,19 @@ def reap_stale_headless_chromium(
         for pid in win_pids:
             cmd.extend(["/PID", str(pid)])
         try:
-            subprocess.run(
+            proc_res = subprocess.run(
                 cmd,
                 check=False,
                 timeout=10,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            killed += len(win_pids)
-            logger.info("Reaped %d stale headless chromium pid(s): %s", len(win_pids), win_pids)
+            if proc_res.returncode == 0:
+                killed += len(win_pids)
+                logger.info("Reaped %d stale headless chromium pid(s): %s", len(win_pids), win_pids)
+            else:
+                logger.warning("taskkill exited %s for windows pids=%s", proc_res.returncode, win_pids)
         except OSError as e:
             logger.warning("Could not reap windows pids=%s: %s", win_pids, e)
 

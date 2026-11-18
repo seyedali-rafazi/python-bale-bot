@@ -189,6 +189,7 @@ async def get_user_profile_summary(user_id) -> dict | None:
         try:
             if datetime.now() > datetime.fromisoformat(expire_str):
                 is_vip_val = 0
+                expire_str = None
                 await pool.execute(
                     "UPDATE users SET is_vip = 0, vip_expire_date = NULL WHERE user_id = $1",
                     uid,
@@ -204,7 +205,7 @@ async def get_user_profile_summary(user_id) -> dict | None:
         "username": row["username"],
         "is_vip": is_vip_val,
         "join_date": row["join_date"],
-        "vip_expire_date": row["vip_expire_date"],
+        "vip_expire_date": expire_str,
         "yt_count": _period_val("yt_count", "yt_date", today),
         "music_count": _period_val("music_count", "music_date", today),
         "pinterest_count": _period_val("pinterest_count", "pinterest_date", today),

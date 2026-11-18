@@ -112,7 +112,11 @@ async def get_weather_forecast(city_name: str) -> str:
             if not fut.done():
                 fut.set_result(res)
             return res
-        except Exception as exc:
+        except asyncio.CancelledError:
+            if not fut.done():
+                fut.cancel()
+            raise
+        except BaseException as exc:
             if not fut.done():
                 fut.set_exception(exc)
                 fut.exception()

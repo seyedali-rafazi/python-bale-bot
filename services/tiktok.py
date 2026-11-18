@@ -32,6 +32,19 @@ _AJAX_DOWNLOADER_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("TIKTOK_AJAX
 _TIKTOK_MAX_BYTES = int(os.getenv("TIKTOK_MAX_BYTES", str(512 * 1024 * 1024)))
 _tikwm_last_call = 0.0
 _tikwm_rate_lock = asyncio.Lock()
+_inflight_tt_search: dict[str, asyncio.Task] = {}
+_inflight_tt_trends: dict[int, asyncio.Task] = {}
+_cookie_exists_cache: dict[str, tuple[bool, float]] = {}
+
+
+def _cookie_file_exists_sync(path: str) -> bool:
+    now = time.monotonic()
+    cached = _cookie_exists_cache.get(path)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    exists = os.path.exists(path)
+    _cookie_exists_cache[path] = (exists, now + 60.0)
+    return exists
 
 
 async def _pace_tikwm_request(min_interval: float = 0.5) -> None:
@@ -171,8 +184,12 @@ async def _fetch_tikwm_video_info(
                                 return data.get("data")
                         elif resp.status == 403:
                             cf_blocked = True
+                            break
                 except Exception as e:
                     logger.warning("[TikTok] TikWM POST error on %s: %s", endpoint, e)
+
+                if cf_blocked:
+                    break
 
                 # روش دوم: درخواست GET
                 try:
@@ -186,8 +203,12 @@ async def _fetch_tikwm_video_info(
                                 return data.get("data")
                         elif resp.status == 403:
                             cf_blocked = True
+                            break
                 except Exception as e:
                     logger.warning("[TikTok] TikWM GET error on %s: %s", endpoint, e)
+
+                if cf_blocked:
+                    break
 
     # روش سوم: دور زدن کلادفلر با Byparr / FlareSolverr در صورت 403
     if (cf_blocked or solver_only) and allow_solver:
@@ -327,7 +348,7 @@ async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None
     ]
 
     cookie_file = os.getenv("YTDLP_COOKIE_FILE", "cookies.txt")
-    if os.path.exists(cookie_file):
+    if await asyncio.to_thread(_cookie_file_exists_sync, cookie_file):
         cmd.extend(["--cookies", cookie_file])
 
     if proxy:
@@ -516,118 +537,144 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
     if isinstance(cached, list) and cached:
         return cached
 
-    results = []
-    cf_blocked = False
-    session = await get_http_session()
-    endpoints = [
-        "https://www.tikwm.com/api/feed/search",
-        "https://tikwm.com/api/feed/search",
-    ]
-    proxy = _get_proxy()
-    kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
-    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
-        kwargs["proxy"] = proxy
+    existing = _inflight_tt_search.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
 
-    async with TIKWM_API_SEMAPHORE:
-        await _pace_tikwm_request()
+    async def _do_search():
+        results = []
+        cf_blocked = False
+        session = await get_http_session()
+        endpoints = [
+            "https://www.tikwm.com/api/feed/search",
+            "https://tikwm.com/api/feed/search",
+        ]
+        proxy = _get_proxy()
+        kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+            kwargs["proxy"] = proxy
 
-        for endpoint in endpoints:
-            # روش ۱: ارسال POST مستقیم با فرم دیتا
-            try:
-                post_data = {
-                    "keywords": clean_query,
-                    "count": str(max_results),
-                    "cursor": "0",
-                    "web": "1",
-                }
-                async with session.post(endpoint, data=post_data, **kwargs) as response:
-                    if response.status == 200:
-                        text_data = await response.text()
-                        data = _extract_json_data(text_data)
-                        if data:
-                            results = _parse_tikwm_search_response(data, max_results)
-                            if results:
-                                logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
-                                break
-                    elif response.status == 403:
-                        cf_blocked = True
-                        logger.warning("[TikTok] POST search HTTP 403 (Cloudflare) from %s", endpoint)
-                    else:
-                        logger.warning("[TikTok] POST search HTTP %s from %s", response.status, endpoint)
-            except Exception as e:
-                logger.warning("[TikTok] POST search error on %s: %s", endpoint, e)
+        async with TIKWM_API_SEMAPHORE:
+            await _pace_tikwm_request()
 
-            # روش ۲: ارسال GET مستقیم با URL Query کاملاً انکود شده
-            try:
-                encoded_query = urllib.parse.quote(clean_query)
-                get_url = f"{endpoint}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+            for endpoint in endpoints:
+                # روش ۱: ارسال POST مستقیم با فرم دیتا
+                try:
+                    post_data = {
+                        "keywords": clean_query,
+                        "count": str(max_results),
+                        "cursor": "0",
+                        "web": "1",
+                    }
+                    async with session.post(endpoint, data=post_data, **kwargs) as response:
+                        if response.status == 200:
+                            text_data = await response.text()
+                            data = _extract_json_data(text_data)
+                            if data:
+                                results = _parse_tikwm_search_response(data, max_results)
+                                if results:
+                                    logger.info("[TikTok] POST search successful on %s for query '%s'", endpoint, clean_query)
+                                    break
+                        elif response.status == 403:
+                            cf_blocked = True
+                            logger.warning("[TikTok] POST search HTTP 403 (Cloudflare) from %s", endpoint)
+                            break
+                        else:
+                            logger.warning("[TikTok] POST search HTTP %s from %s", response.status, endpoint)
+                except Exception as e:
+                    logger.warning("[TikTok] POST search error on %s: %s", endpoint, e)
 
-                async with session.get(get_url, **kwargs) as response:
-                    if response.status == 200:
-                        text_data = await response.text()
-                        data = _extract_json_data(text_data)
-                        if data:
-                            results = _parse_tikwm_search_response(data, max_results)
-                            if results:
-                                logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
-                                break
-                    elif response.status == 403:
-                        cf_blocked = True
-                        logger.warning("[TikTok] GET search HTTP 403 (Cloudflare) from %s", endpoint)
-                    else:
-                        logger.warning("[TikTok] GET search HTTP %s from %s", response.status, endpoint)
-            except Exception as e:
-                logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
+                if cf_blocked:
+                    break
 
-    if results:
-        await cache_set(cache_key, results, ttl_sec=180)
-        return results
+                # روش ۲: ارسال GET مستقیم با URL Query کاملاً انکود شده
+                try:
+                    encoded_query = urllib.parse.quote(clean_query)
+                    get_url = f"{endpoint}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
 
-    # روش ۳: استفاده از Byparr / FlareSolverr خارج از سمافور TikWM تا بقیه درخواست‌ها بلاک نشوند
-    if cf_blocked or not results:
-        logger.info("[TikTok] Attempting Byparr/FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
+                    async with session.get(get_url, **kwargs) as response:
+                        if response.status == 200:
+                            text_data = await response.text()
+                            data = _extract_json_data(text_data)
+                            if data:
+                                results = _parse_tikwm_search_response(data, max_results)
+                                if results:
+                                    logger.info("[TikTok] GET search successful on %s for query '%s'", endpoint, clean_query)
+                                    break
+                        elif response.status == 403:
+                            cf_blocked = True
+                            logger.warning("[TikTok] GET search HTTP 403 (Cloudflare) from %s", endpoint)
+                            break
+                        else:
+                            logger.warning("[TikTok] GET search HTTP %s from %s", response.status, endpoint)
+                except Exception as e:
+                    logger.warning("[TikTok] GET search error on %s: %s", endpoint, e)
 
-        target_url = "https://www.tikwm.com/api/feed/search"
-        encoded_query = urllib.parse.quote(clean_query)
-        target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+                if cf_blocked:
+                    break
 
-        # اول درخواست GET (سازگار با Byparr و بدون پارامتر منسوخ headers)
-        solution = await flaresolverr_request(
-            url=target_get_url,
-            method="GET",
-            timeout=60,
-        )
+        if results:
+            await cache_set(cache_key, results, ttl_sec=180)
+            return results
 
-        # اگر GET پاسخ نداد، POST را بدون headers امتحان می‌کنیم
-        if not solution:
-            post_payload = f"keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+        # روش ۳: استفاده از Byparr / FlareSolverr فقط در صورت بلاک کلادفلر
+        if cf_blocked:
+            logger.info("[TikTok] Attempting Byparr/FlareSolverr bypass for Cloudflare 403 challenge on query '%s'...", clean_query)
+
+            target_url = "https://www.tikwm.com/api/feed/search"
+            encoded_query = urllib.parse.quote(clean_query)
+            target_get_url = f"{target_url}?keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+
             solution = await flaresolverr_request(
-                url=target_url,
-                method="POST",
-                post_data=post_payload,
+                url=target_get_url,
+                method="GET",
                 timeout=60,
             )
 
-        if solution and solution.get("response"):
-            raw_resp = solution["response"]
-            data = _extract_json_data(raw_resp)
-            if data:
-                results = _parse_tikwm_search_response(data, max_results)
-                if results:
-                    logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
-                    await cache_set(cache_key, results, ttl_sec=180)
-                    return results
-            else:
-                logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
+            if not solution:
+                post_payload = f"keywords={encoded_query}&count={max_results}&cursor=0&web=1"
+                solution = await flaresolverr_request(
+                    url=target_url,
+                    method="POST",
+                    post_data=post_payload,
+                    timeout=60,
+                )
 
-    if not results:
-        logger.error(
-            "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and Byparr/FlareSolverr did not return results. "
-            "Ensure Byparr/FlareSolverr container is running on port 8191.",
-            clean_query,
-        )
+            if solution and solution.get("response"):
+                raw_resp = solution["response"]
+                data = _extract_json_data(raw_resp)
+                if data:
+                    results = _parse_tikwm_search_response(data, max_results)
+                    if results:
+                        logger.info("[TikTok] Byparr/FlareSolverr successfully retrieved %s search results for '%s'", len(results), clean_query)
+                        await cache_set(cache_key, results, ttl_sec=180)
+                        return results
+                else:
+                    logger.error("[TikTok] Byparr/FlareSolverr response could not be parsed as JSON: %s", raw_resp[:300])
 
-    return results
+        if not results and cf_blocked:
+            logger.error(
+                "[TikTok] Search failed for query '%s': Direct requests got Cloudflare 403 and Byparr/FlareSolverr did not return results. "
+                "Ensure Byparr/FlareSolverr container is running on port 8191.",
+                clean_query,
+            )
+
+        return results
+
+    task = asyncio.create_task(_do_search())
+    _inflight_tt_search[cache_key] = task
+
+    def _cleanup(t: asyncio.Task) -> None:
+        if _inflight_tt_search.get(cache_key) is t:
+            _inflight_tt_search.pop(cache_key, None)
+        if not t.cancelled():
+            try:
+                t.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 def _parse_tikwm_search_response(data: dict, max_results: int) -> list:
@@ -698,109 +745,130 @@ async def get_tiktok_trends(count: int = 10):
     if isinstance(cached, list) and cached:
         return cached
 
-    results = []
-    cf_blocked = False
-    session = await get_http_session()
-    endpoints = [
-        f"https://www.tikwm.com/api/feed/list?region=US&count={count}",
-        f"https://tikwm.com/api/feed/list?region=US&count={count}",
-    ]
-    proxy = _get_proxy()
-    kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
-    if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
-        kwargs["proxy"] = proxy
+    existing = _inflight_tt_trends.get(count)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
 
-    async with TIKWM_API_SEMAPHORE:
-        await _pace_tikwm_request()
+    async def _do_trends():
+        results = []
+        cf_blocked = False
+        session = await get_http_session()
+        endpoints = [
+            f"https://www.tikwm.com/api/feed/list?region=US&count={count}",
+            f"https://tikwm.com/api/feed/list?region=US&count={count}",
+        ]
+        proxy = _get_proxy()
+        kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
+        if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
+            kwargs["proxy"] = proxy
 
-        for url in endpoints:
+        async with TIKWM_API_SEMAPHORE:
+            await _pace_tikwm_request()
+
+            for url in endpoints:
+                try:
+                    async with session.get(url, **kwargs) as response:
+                        if response.status == 200:
+                            text_data = await response.text()
+                            data = _extract_json_data(text_data)
+                            if isinstance(data, dict) and data.get("code") == 0:
+                                data_block = data.get("data")
+                                videos = []
+                                if isinstance(data_block, list):
+                                    videos = data_block
+                                elif isinstance(data_block, dict):
+                                    videos = data_block.get("videos") or data_block.get("list") or []
+
+                                for item in videos:
+                                    if not isinstance(item, dict):
+                                        continue
+
+                                    title = item.get("title") or item.get("desc") or "Trending video"
+                                    video_id = item.get("video_id") or item.get("id")
+
+                                    author_data = item.get("author")
+                                    if isinstance(author_data, dict):
+                                        author = author_data.get("unique_id", "user")
+                                    else:
+                                        author = "user"
+
+                                    if not video_id:
+                                        continue
+
+                                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+                                    results.append({"title": title, "url": link})
+
+                                    if len(results) >= count:
+                                        break
+
+                                if results:
+                                    await cache_set(cache_key, results, ttl_sec=300)
+                                    return results
+                        elif response.status == 403:
+                            cf_blocked = True
+                            logger.warning("[TikTok] Trends HTTP 403 (Cloudflare) from %s", url)
+                            break
+
+                except Exception as e:
+                    logger.warning("[TikTok] Trends API Error for %s: %s", url, e)
+
+        # تلاش با Byparr / FlareSolverr فقط در صورت بلاک کلادفلر
+        if cf_blocked:
+            target_url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
+            solution = await flaresolverr_request(url=target_url, method="GET", timeout=60)
+
+            if solution and solution.get("response"):
+                raw_resp = solution["response"]
+                data = _extract_json_data(raw_resp)
+                if isinstance(data, dict) and data.get("code") == 0:
+                    data_block = data.get("data")
+                    videos = []
+                    if isinstance(data_block, list):
+                        videos = data_block
+                    elif isinstance(data_block, dict):
+                        videos = data_block.get("videos") or data_block.get("list") or []
+
+                    for item in videos:
+                        if not isinstance(item, dict):
+                            continue
+
+                        title = item.get("title") or item.get("desc") or "Trending video"
+                        video_id = item.get("video_id") or item.get("id")
+
+                        author_data = item.get("author")
+                        if isinstance(author_data, dict):
+                            author = author_data.get("unique_id", "user")
+                        else:
+                            author = "user"
+
+                        if not video_id:
+                            continue
+
+                        link = f"https://www.tiktok.com/@{author}/video/{video_id}"
+
+                        results.append({"title": title, "url": link})
+
+                        if len(results) >= count:
+                            break
+
+                    if results:
+                        await cache_set(cache_key, results, ttl_sec=300)
+                        return results
+
+        return results
+
+    task = asyncio.create_task(_do_trends())
+    _inflight_tt_trends[count] = task
+
+    def _cleanup(t: asyncio.Task) -> None:
+        if _inflight_tt_trends.get(count) is t:
+            _inflight_tt_trends.pop(count, None)
+        if not t.cancelled():
             try:
-                async with session.get(url, **kwargs) as response:
-                    if response.status == 200:
-                        text_data = await response.text()
-                        data = _extract_json_data(text_data)
-                        if isinstance(data, dict) and data.get("code") == 0:
-                            data_block = data.get("data")
-                            videos = []
-                            if isinstance(data_block, list):
-                                videos = data_block
-                            elif isinstance(data_block, dict):
-                                videos = data_block.get("videos") or data_block.get("list") or []
+                t.exception()
+            except Exception:
+                pass
 
-                            for item in videos:
-                                if not isinstance(item, dict):
-                                    continue
-
-                                title = item.get("title") or item.get("desc") or "Trending video"
-                                video_id = item.get("video_id") or item.get("id")
-
-                                author_data = item.get("author")
-                                if isinstance(author_data, dict):
-                                    author = author_data.get("unique_id", "user")
-                                else:
-                                    author = "user"
-
-                                if not video_id:
-                                    continue
-
-                                link = f"https://www.tiktok.com/@{author}/video/{video_id}"
-
-                                results.append({"title": title, "url": link})
-
-                                if len(results) >= count:
-                                    break
-
-                            if results:
-                                await cache_set(cache_key, results, ttl_sec=300)
-                                return results
-                    elif response.status == 403:
-                        cf_blocked = True
-                        logger.warning("[TikTok] Trends HTTP 403 (Cloudflare) from %s", url)
-
-            except Exception as e:
-                logger.warning("[TikTok] Trends API Error for %s: %s", url, e)
-
-    # تلاش با Byparr / FlareSolverr خارج از سمافور TikWM
-    if cf_blocked or not results:
-        target_url = f"https://www.tikwm.com/api/feed/list?region=US&count={count}"
-        solution = await flaresolverr_request(url=target_url, method="GET", timeout=60)
-
-        if solution and solution.get("response"):
-            raw_resp = solution["response"]
-            data = _extract_json_data(raw_resp)
-            if isinstance(data, dict) and data.get("code") == 0:
-                data_block = data.get("data")
-                videos = []
-                if isinstance(data_block, list):
-                    videos = data_block
-                elif isinstance(data_block, dict):
-                    videos = data_block.get("videos") or data_block.get("list") or []
-
-                for item in videos:
-                    if not isinstance(item, dict):
-                        continue
-
-                    title = item.get("title") or item.get("desc") or "Trending video"
-                    video_id = item.get("video_id") or item.get("id")
-
-                    author_data = item.get("author")
-                    if isinstance(author_data, dict):
-                        author = author_data.get("unique_id", "user")
-                    else:
-                        author = "user"
-
-                    if not video_id:
-                        continue
-
-                    link = f"https://www.tiktok.com/@{author}/video/{video_id}"
-
-                    results.append({"title": title, "url": link})
-
-                    if len(results) >= count:
-                        break
-
-                if results:
-                    await cache_set(cache_key, results, ttl_sec=300)
-                    return results
-
-    return results
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)

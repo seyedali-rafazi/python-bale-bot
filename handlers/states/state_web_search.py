@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.state_manager import async_get_state, set_state, clear_state
 from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, track_task
+from handlers.utils import escape_markdown, safe_answer_query
 from services.rate_limiter import user_action_lock
 from services.web_scraper import async_search_web, create_single_file
 import asyncio
@@ -98,16 +99,19 @@ async def _download_and_send_webpage(
 
 async def web_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
 
     chat_id = str(update.effective_chat.id)
-    data = query.data
+    data = query.data or ""
 
-    index = int(data.split("_")[1])
+    try:
+        index = int(data.split("_")[1])
+    except (IndexError, ValueError):
+        return
     state = await async_get_state(chat_id)
 
     urls = state.get("urls", [])
-    if not urls or index >= len(urls):
+    if not urls or index < 0 or index >= len(urls):
         await query.message.reply_text(
             "❌ نشست شما منقضی شده است. لطفاً مجدداً جستجو کنید."
         )
@@ -170,7 +174,7 @@ async def handle_web_search_state(
         keyboard = []
 
         for i, res in enumerate(results):
-            msg_text += f"{i + 1}. [{res['title']}]({res['url']})\n"
+            msg_text += f"{i + 1}. [{escape_markdown(res['title'])}]({res['url']})\n"
             # دکمه‌ها را دو تا دو تا می‌چینیم
             if i % 2 == 0:
                 keyboard.append(

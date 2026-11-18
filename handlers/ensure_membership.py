@@ -39,7 +39,7 @@ async def is_user_channel_member(bot, user_id: str | int) -> bool:
 
 
 async def ensure_membership(update, context) -> bool:
-    user = update.effective_user
+    user = getattr(update, "effective_user", None)
     if not user:
         return True
 

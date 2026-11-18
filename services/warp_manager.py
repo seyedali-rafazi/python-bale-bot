@@ -46,6 +46,13 @@ async def async_run_cmd(args, timeout_sec: int = 25):
         except Exception:
             pass
         return -1, "", f"warp-cli command timed out after {timeout_sec}s"
+    except asyncio.CancelledError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise
 
 
 def wait_for_warp(timeout=20):

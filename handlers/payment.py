@@ -3,6 +3,7 @@
 from telegram import Update, LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from core.database import add_vip_time, add_transaction, add_cloud_storage, log_upload_success
+from handlers.utils import safe_answer_query
 from dotenv import load_dotenv
 import os
 
@@ -55,7 +56,7 @@ async def btn_buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # این تابع زمانی فراخوانی می‌شود که کاربر دکمه پذیرش را می‌زند
 async def handle_tos_acceptance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # پایان حالت لودینگ دکمه
+    await safe_answer_query(query)  # پایان حالت لودینگ دکمه
 
     chat_id = update.effective_chat.id
 
@@ -64,6 +65,13 @@ async def handle_tos_acceptance(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.delete()
     except Exception:
         pass
+
+    if not PROVIDER_TOKEN:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ درگاه پرداخت در تنظیمات سرور پیکربندی نشده است.",
+        )
+        return
 
     try:
         payment_amount = int(PAYMENT_VALUE)
@@ -106,12 +114,15 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 ok=False,
                 error_message="❌ خطا در اطلاعات پرداخت. لطفاً دوباره تلاش کنید.",
             )
-    except Exception as e:
+    except Exception:
         # نمایش خطای پاپ‌آپ در صورت مشکل در اتصال به درگاه
-        await query.answer(
-            ok=False,
-            error_message="❌ مشکلی در ارتباط با درگاه پیش آمد. تراکنش انجام نشد.",
-        )
+        try:
+            await query.answer(
+                ok=False,
+                error_message="❌ مشکلی در ارتباط با درگاه پیش آمد. تراکنش انجام نشد.",
+            )
+        except Exception:
+            pass
 
 
 async def successful_payment_callback(
@@ -215,6 +226,13 @@ async def accept_cloud_purchase_tos(
     payload = f"cloud_charge_{chat_id}_{size_gb}"
     currency = "IRR"
     prices = [LabeledPrice(f"{size_gb} GB حجم ابری", price_rial)]
+
+    if not PROVIDER_TOKEN:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ درگاه پرداخت در تنظیمات سرور پیکربندی نشده است.",
+        )
+        return
 
     # Send invoice for cloud storage purchase
     await context.bot.send_invoice(

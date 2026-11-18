@@ -4,10 +4,13 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from core.keyboards import get_image_processing_menu_keyboard
 from core.state_manager import set_state
+from handlers.ensure_membership import ensure_membership
 
 
 async def btn_image_processing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show image processing menu"""
+    if not await ensure_membership(update, context):
+        return
     await update.message.reply_text(
         "🖼 **منوی پردازش تصویر**\n\nلطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
         reply_markup=get_image_processing_menu_keyboard(),
@@ -16,6 +19,8 @@ async def btn_image_processing_menu(update: Update, context: ContextTypes.DEFAUL
 
 async def btn_img_create_pdf_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Request images for PDF creation"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_create_pdf")
 
@@ -31,6 +36,8 @@ async def btn_img_convert_format_req(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
     """Request image for format conversion"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_convert_format")
 
@@ -48,6 +55,8 @@ async def btn_img_convert_format_req(
 
 async def btn_img_resize_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Request image for resizing"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_resize")
 
@@ -61,6 +70,8 @@ async def btn_img_resize_req(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def btn_img_remove_bg_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Request image for background removal"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_remove_bg")
 
@@ -74,6 +85,8 @@ async def btn_img_remove_bg_req(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def btn_img_video_to_gif_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Request video for converting to GIF"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_video_to_gif")
 
@@ -86,6 +99,8 @@ async def btn_img_video_to_gif_req(update: Update, context: ContextTypes.DEFAULT
 
 async def btn_img_extract_audio_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Request video for audio extraction"""
+    if not await ensure_membership(update, context):
+        return
     chat_id = str(update.effective_chat.id)
     set_state(chat_id, "img_extract_audio")
 

@@ -14,6 +14,8 @@ from core.constants import (
 )
 from core.database import get_cloud_usage_stats, get_user_cloud_files
 from core.state_manager import set_state
+from handlers.ensure_membership import ensure_membership
+from handlers.utils import escape_markdown, safe_answer_query, safe_edit_or_reply
 from services.parspack_s3 import generate_presigned_url_for_key
 import asyncio
 import os
@@ -25,6 +27,8 @@ PROVIDER_TOKEN = os.getenv("PROVIDER_TOKEN")
 
 async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Display cloud storage main menu with usage info"""
+    if not await ensure_membership(update, context):
+        return
     user_id = str(update.effective_chat.id)
 
     try:
@@ -63,7 +67,7 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
 
         if update.callback_query:
             query = update.callback_query
-            await query.answer()
+            await safe_answer_query(query)
             await query.edit_message_text(
                 cloud_text,
                 reply_markup=reply_markup,
@@ -89,8 +93,10 @@ async def btn_cloud_storage_menu(update: Update, context: ContextTypes.DEFAULT_T
 
 async def btn_buy_cloud_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show cloud storage packages available for purchase"""
+    if not await ensure_membership(update, context):
+        return
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
 
     buy_cloud_text = """
 🛒 **خریدگاه حجم ابری**
@@ -122,8 +128,10 @@ async def btn_buy_cloud_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user's uploaded cloud files"""
+    if not await ensure_membership(update, context):
+        return
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
     user_id = str(update.effective_chat.id)
 
     try:
@@ -155,7 +163,8 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for idx, (file_info, fresh_link) in enumerate(zip(top_files, fresh_links), 1):
                 _, file_name, file_size_mb, download_link, upload_date = file_info[:5]
                 link = fresh_link or download_link
-                files_text += f"{idx}. **{file_name}** ({file_size_mb} MB)\n"
+                safe_fname = escape_markdown(file_name)
+                files_text += f"{idx}. **{safe_fname}** ({file_size_mb} MB)\n"
                 files_text += f"   📅 {upload_date}\n"
                 files_text += f"   🔗 [دانلود]({link})\n\n"
 
@@ -168,7 +177,7 @@ async def btn_cloud_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Error showing cloud files: {e}")
-        await query.edit_message_text("❌ خطایی در بارگذاری فایل‌ها رخ داد.")
+        await safe_edit_or_reply(query.message if query else None, "❌ خطایی در بارگذاری فایل‌ها رخ داد.")
 
 
 async def btn_buy_cloud_size(

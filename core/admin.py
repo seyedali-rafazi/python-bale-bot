@@ -177,7 +177,7 @@ async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 expire_text = f"{expire_dt.strftime('%Y-%m-%d %H:%M:%S')}\n({remaining} روز باقی مانده)"
             else:
                 expire_text = f"{expire_dt.strftime('%Y-%m-%d %H:%M:%S')}\n(منقضی شده)"
-        except:
+        except ValueError:
             expire_text = vip_expire_date
     else:
         expire_text = "بدون تاریخ انقضا"
@@ -240,14 +240,23 @@ async def stop_broadcast():
 
 
 async def _send_broadcast_one(bot, user_id: str, message_text: str, sem: asyncio.Semaphore) -> bool:
+    retry_wait: float | None = None
     async with sem:
         try:
             await bot.send_message(chat_id=user_id, text=message_text)
             return True
         except RetryAfter as exc:
-            wait = max(1.0, float(exc.retry_after)) + 0.5
-            logger.warning("Broadcast RetryAfter %ss for user %s", wait, user_id)
-            await asyncio.sleep(wait)
+            retry_wait = max(1.0, float(exc.retry_after)) + 0.5
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug("Broadcast send error for user %s: %s", user_id, e)
+            return False
+
+    if retry_wait is not None:
+        logger.warning("Broadcast RetryAfter %ss for user %s", retry_wait, user_id)
+        await asyncio.sleep(retry_wait)
+        async with sem:
             try:
                 await bot.send_message(chat_id=user_id, text=message_text)
                 return True
@@ -256,11 +265,7 @@ async def _send_broadcast_one(bot, user_id: str, message_text: str, sem: asyncio
             except Exception as e:
                 logger.debug("Broadcast retry failed for user %s: %s", user_id, e)
                 return False
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug("Broadcast send error for user %s: %s", user_id, e)
-            return False
+    return False
 
 
 async def _run_broadcast_job(bot, admin_chat_id: str, message_text: str, total_users: int):
@@ -436,6 +441,9 @@ async def cmd_addvip_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         days = int(context.args[0])
+        if days < 1:
+            await update.message.reply_text("❌ تعداد روز باید بیشتر از صفر باشد.")
+            return
     except ValueError:
         await update.message.reply_text("❌ لطفاً یک عدد صحیح وارد کنید.")
         return
@@ -465,12 +473,11 @@ async def cmd_clean_yt_cache(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await drop_legacy_user_youtube_archive_table()
-    pending = await count_incomplete_cache_rows()
-    removed = await purge_incomplete_youtube_cache() if pending > 0 else 0
-    left = max(0, pending - removed) if removed == pending else await count_incomplete_cache_rows()
+    removed = await purge_incomplete_youtube_cache()
+    left = await count_incomplete_cache_rows() if removed > 0 else 0
     await update.message.reply_text(
         f"✅ پاکسازی ردیف‌های ناشناس / ناقص:\n"
-        f"• حذف شده: **{removed}** (از **{pending}** مورد ناقص)\n"
+        f"• حذف شده: **{removed}**\n"
         f"• باقی‌مانده ناقص: **{left}**\n\n"
         f"برای پاک کردن **همه** کش: `/cleanytcache all`"
     )
@@ -619,7 +626,7 @@ async def cmd_channel_blacklist(update: Update, context: ContextTypes.DEFAULT_TY
 
     action = args[0].lower()
     if action == "list":
-        rows = await list_channel_blacklist()
+        rows = await list_channel_blacklist(limit=81)
         if not rows:
             await update.message.reply_text("📭 بلک‌لیست کانال خالی است.")
             return
@@ -627,7 +634,7 @@ async def cmd_channel_blacklist(update: Update, context: ContextTypes.DEFAULT_TY
         for r in rows[:80]:
             lines.append(f"• `{r['display_name']}` (`{r['channel_key']}`)")
         if len(rows) > 80:
-            lines.append(f"\n... و {len(rows) - 80} مورد دیگر")
+            lines.append("\n... و موارد بیشتر")
         await update.message.reply_text("\n".join(lines))
         return
 
@@ -665,12 +672,12 @@ async def cmd_blockword(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     action = args[0].lower()
     if action == "list":
-        rows = await list_blocked_words()
+        rows = await list_blocked_words(limit=81)
         if not rows:
             await update.message.reply_text("📭 لیست خالی است.")
             return
         words = [f"• `{r['word']}`" for r in rows[:80]]
-        extra = f"\n\n... و {len(rows) - 80} مورد دیگر" if len(rows) > 80 else ""
+        extra = "\n\n... و موارد بیشتر" if len(rows) > 80 else ""
         await update.message.reply_text(
             "🚫 **کلمات ممنوع:**\n" + "\n".join(words) + extra
         )

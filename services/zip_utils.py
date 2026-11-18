@@ -105,11 +105,21 @@ def _try_spanned_zip(
             )
         if proc.returncode != 0:
             logger.warning("zip -s failed: %s", proc.stderr or proc.stdout)
+            for leftover in _collect_spanned_parts(out_dir, zip_basename):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
             return None
         parts = _collect_spanned_parts(out_dir, zip_basename)
         return parts if parts else None
     except Exception as e:
         logger.warning("zip -s error: %s", e)
+        for leftover in _collect_spanned_parts(out_dir, zip_basename):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
         return None
 
 

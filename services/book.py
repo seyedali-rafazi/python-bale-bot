@@ -46,6 +46,7 @@ _HEADERS = {
     ),
     "Accept": "application/json, text/html, */*",
 }
+_inflight_book_searches: dict[str, asyncio.Task] = {}
 
 # Source identifiers
 SRC_IA        = "archive_org"
@@ -360,48 +361,71 @@ async def search_books(query: str, max_results: int = 8) -> List[dict]:
         if isinstance(cached, list) and cached:
             return cached
 
-    per_source = max(4, max_results // 2 + 1)
+        existing = _inflight_book_searches.get(cache_key)
+        if existing is not None and not existing.done():
+            return await asyncio.shield(existing)
 
-    tasks = [
-        asyncio.create_task(_search_internet_archive(query, per_source)),
-        asyncio.create_task(_search_gutenberg(query, per_source)),
-        asyncio.create_task(_search_openlibrary(query, per_source)),
-    ]
+    async def _do_search() -> List[dict]:
+        per_source = max(4, max_results // 2 + 1)
 
-    done, pending = await asyncio.wait(tasks, timeout=_SEARCH_DEADLINE)
-    for t in pending:
-        t.cancel()
-        logger.warning("A book source timed out during search")
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+        tasks = [
+            asyncio.create_task(_search_internet_archive(query, per_source)),
+            asyncio.create_task(_search_gutenberg(query, per_source)),
+            asyncio.create_task(_search_openlibrary(query, per_source)),
+        ]
 
-    combined: List[dict] = []
-    for t in done:
-        try:
-            combined.extend(t.result())
-        except Exception as e:
-            logger.warning("Source error during search: %s", e)
+        done, pending = await asyncio.wait(tasks, timeout=_SEARCH_DEADLINE)
+        for t in pending:
+            t.cancel()
+            logger.warning("A book source timed out during search")
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
-    # De-duplicate by normalised title
-    seen: set[str] = set()
-    unique: List[dict] = []
-    for book in combined:
-        key = re.sub(r"\W+", "", book["title"].lower())[:30]
-        if key not in seen:
-            seen.add(key)
-            unique.append(book)
+        combined: List[dict] = []
+        for t in done:
+            try:
+                combined.extend(t.result())
+            except Exception as e:
+                logger.warning("Source error during search: %s", e)
 
-    # Sort: downloadable first, then by source priority (IA > Gutenberg > OL)
-    source_order = {SRC_IA: 0, SRC_GUTENBERG: 1, SRC_OL: 2}
-    unique.sort(key=lambda b: (
-        0 if b["has_file"] else 1,
-        source_order.get(b["source"], 9),
-    ))
+        # De-duplicate by normalised title
+        seen: set[str] = set()
+        unique: List[dict] = []
+        for book in combined:
+            key = re.sub(r"\W+", "", book["title"].lower())[:30]
+            if key not in seen:
+                seen.add(key)
+                unique.append(book)
 
-    results = unique[:max_results]
-    if cache_key and results:
-        await cache_set(cache_key, results, ttl_sec=1800)
-    return results
+        # Sort: downloadable first, then by source priority (IA > Gutenberg > OL)
+        source_order = {SRC_IA: 0, SRC_GUTENBERG: 1, SRC_OL: 2}
+        unique.sort(key=lambda b: (
+            0 if b["has_file"] else 1,
+            source_order.get(b["source"], 9),
+        ))
+
+        results = unique[:max_results]
+        if cache_key and results:
+            await cache_set(cache_key, results, ttl_sec=1800)
+        return results
+
+    if not cache_key:
+        return await _do_search()
+
+    task = asyncio.create_task(_do_search())
+    _inflight_book_searches[cache_key] = task
+
+    def _cleanup(t: asyncio.Task) -> None:
+        if _inflight_book_searches.get(cache_key) is t:
+            _inflight_book_searches.pop(cache_key, None)
+        if not t.cancelled():
+            try:
+                t.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -504,7 +528,13 @@ async def _download_url_async(
                         await asyncio.to_thread(fh.write, payload)
                 finally:
                     if fh is not None:
-                        await asyncio.to_thread(fh.close)
+                        try:
+                            await asyncio.to_thread(fh.close)
+                        except BaseException:
+                            try:
+                                fh.close()
+                            except OSError:
+                                pass
 
             if await asyncio.to_thread(_is_valid_file, dest_path):
                 return True

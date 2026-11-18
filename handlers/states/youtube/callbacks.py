@@ -148,7 +148,13 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             pass
         return
 
-    quality = data.split("_")[1]
+    quality = data.split("_", 1)[1]
+    if quality not in {"360", "480", "720", "1080", "best", "bestaudio"}:
+        try:
+            await query.answer("کیفیت نامعتبر است.")
+        except Exception:
+            pass
+        return
     user_id = str(query.from_user.id) if query.from_user else chat_id
 
     async with user_action_lock(user_id, "yt_qual", timeout_sec=30) as acquired:

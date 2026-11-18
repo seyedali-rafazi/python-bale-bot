@@ -7,7 +7,7 @@ from telegram.error import RetryAfter
 
 from core.state_manager import set_state
 from core.keyboards import get_youtube_menu_keyboard, get_back_only_keyboard
-from core.database import get_setting, get_top_cached_videos, get_user_info
+from core.database import get_setting, get_top_cached_videos
 from core.task_utils import track_task
 from handlers.ensure_membership import ensure_membership
 from services.rate_limiter import user_action_lock
@@ -96,6 +96,21 @@ async def _send_top_videos_task(context: ContextTypes.DEFAULT_TYPE, chat_id, top
                 file_ids = json.loads(video["file_ids"])
                 views = video["view_count"]
                 video_id = video["video_id"]
+                fmt = (video.get("format_type") or "").lower()
+
+                async def _send_part(fid: str, cap: str):
+                    if "zip" in fmt or fmt == "document":
+                        await context.bot.send_document(
+                            chat_id=chat_id, document=fid, caption=cap
+                        )
+                    elif fmt == "audio":
+                        await context.bot.send_audio(
+                            chat_id=chat_id, audio=fid, caption=cap
+                        )
+                    else:
+                        await context.bot.send_video(
+                            chat_id=chat_id, video=fid, caption=cap
+                        )
 
                 if file_ids:
                     total_parts = len(file_ids)
@@ -116,15 +131,11 @@ async def _send_top_videos_task(context: ContextTypes.DEFAULT_TYPE, chat_id, top
 
                         is_last = (index == total_videos - 1) and (part_index == total_parts - 1)
                         try:
-                            await context.bot.send_video(
-                                chat_id=chat_id, video=file_id, caption=caption
-                            )
+                            await _send_part(file_id, caption)
                         except RetryAfter as e:
                             logger.warning("Rate limited! Sleeping for %ss", e.retry_after)
                             await asyncio.sleep(e.retry_after)
-                            await context.bot.send_video(
-                                chat_id=chat_id, video=file_id, caption=caption
-                            )
+                            await _send_part(file_id, caption)
                         if not is_last:
                             await asyncio.sleep(1.5)
 

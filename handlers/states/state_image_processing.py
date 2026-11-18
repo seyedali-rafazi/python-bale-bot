@@ -108,7 +108,7 @@ async def _download_image_to_disk(bot, file_id: str, prefix: str) -> str:
     await asyncio.to_thread(os.makedirs, _IMG_TMP_DIR, exist_ok=True)
     dest_path = os.path.join(_IMG_TMP_DIR, f"{prefix}_{uuid.uuid4().hex[:10]}.img")
     tg_file = await bot.get_file(file_id)
-    await tg_file.download_to_drive(dest_path)
+    await asyncio.wait_for(tg_file.download_to_drive(dest_path), timeout=45.0)
     return dest_path
 
 
@@ -286,8 +286,8 @@ async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TY
                 "✅ عملیات با موفقیت انجام شد!", reply_markup=get_main_menu_keyboard()
             )
 
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در ساخت PDF: {str(e)}")
+        except Exception:
+            await update.message.reply_text("❌ خطا در ساخت PDF. لطفاً دوباره تلاش کنید.")
             clear_state(chat_id)
         finally:
             _pdf_images_cache.pop(chat_id, None)
@@ -380,8 +380,8 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                     reply_markup=get_main_menu_keyboard(),
                 )
 
-            except Exception as e:
-                await update.message.reply_text(f"❌ خطا در تبدیل فرمت: {str(e)}")
+            except Exception:
+                await update.message.reply_text("❌ خطا در تبدیل فرمت عکس. لطفاً دوباره تلاش کنید.")
                 clear_state(chat_id)
             finally:
                 _convert_images_cache.pop(chat_id, None)
@@ -414,8 +414,8 @@ async def handle_img_convert_format(update: Update, context: ContextTypes.DEFAUL
                 "PNG | JPG | JPEG | WEBP | BMP | GIF"
             )
 
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در دریافت عکس: {str(e)}")
+        except Exception:
+            await update.message.reply_text("❌ خطا در دریافت عکس. لطفاً دوباره تلاش کنید.")
     else:
         await update.message.reply_text("❌ لطفاً یک عکس ارسال کنید!")
 
@@ -461,9 +461,13 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ عملیات با موفقیت انجام شد!", reply_markup=get_main_menu_keyboard()
             )
 
-        except Exception as e:
+        except ValueError as ve:
             await update.message.reply_text(
-                f"❌ خطا در تغییر اندازه: {str(e)}\n\nفرمت صحیح: 800x600 یا 50%"
+                f"❌ {ve}\n\nفرمت صحیح: 800x600 یا 50%"
+            )
+        except Exception:
+            await update.message.reply_text(
+                "❌ خطا در تغییر اندازه.\n\nفرمت صحیح: 800x600 یا 50%"
             )
         finally:
             await remove_file_async(resized_path)
@@ -494,8 +498,8 @@ async def handle_img_resize(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "مثال: 800x600 یا 50%"
             )
 
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در دریافت عکس: {str(e)}")
+        except Exception:
+            await update.message.reply_text("❌ خطا در دریافت عکس. لطفاً دوباره تلاش کنید.")
     else:
         await update.message.reply_text("❌ لطفاً یک عکس ارسال کنید!")
 
@@ -563,8 +567,8 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
                 "✅ عملیات با موفقیت انجام شد!", reply_markup=get_main_menu_keyboard()
             )
 
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در حذف پس‌زمینه: {str(e)}")
+        except Exception:
+            await update.message.reply_text("❌ خطا در حذف پس‌زمینه. لطفاً دوباره تلاش کنید.")
             clear_state(chat_id)
         finally:
             await remove_file_async(input_path)
@@ -688,7 +692,7 @@ async def background_video_to_gif(
                 await status_msg.edit_text("⏳ در حال دریافت ویدیو...")
                 
             file = await context.bot.get_file(video_file.file_id)
-            await file.download_to_drive(temp_video_path)
+            await asyncio.wait_for(file.download_to_drive(temp_video_path), timeout=60.0)
 
             await status_msg.edit_text("⏳ در حال تبدیل ویدیو به GIF (حداکثر ۷ ثانیه اول)...")
 
@@ -728,9 +732,9 @@ async def background_video_to_gif(
     except Exception as e:
         print(f"Error converting video to GIF in background: {e}")
         try:
-            await status_msg.edit_text(f"❌ خطا در پردازش ویدیو: {str(e)}")
+            await status_msg.edit_text("❌ خطا در پردازش ویدیو.")
         except Exception:
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا در پردازش ویدیو: {str(e)}")
+            await context.bot.send_message(chat_id=chat_id, text="❌ خطا در پردازش ویدیو.")
         await context.bot.send_message(
             chat_id=chat_id,
             text="بازگشت به منوی اصلی:",
@@ -750,12 +754,14 @@ async def _run_ffmpeg(cmd: list[str], timeout_sec: float = 180.0) -> bool:
     try:
         await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
         return process.returncode == 0
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
         try:
             process.kill()
             await process.wait()
         except Exception:
             pass
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         return False
 
 
@@ -884,7 +890,7 @@ async def background_extract_audio(
                 await status_msg.edit_text("⏳ در حال دریافت رسانه...")
                 
             file = await context.bot.get_file(video_file.file_id)
-            await file.download_to_drive(temp_media_path)
+            await asyncio.wait_for(file.download_to_drive(temp_media_path), timeout=60.0)
 
             await status_msg.edit_text("⏳ در حال استخراج صدا...")
 
@@ -924,9 +930,9 @@ async def background_extract_audio(
     except Exception as e:
         print(f"Error extracting audio in background: {e}")
         try:
-            await status_msg.edit_text(f"❌ خطا در پردازش رسانه: {str(e)}")
+            await status_msg.edit_text("❌ خطا در پردازش رسانه.")
         except Exception:
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ خطا در پردازش رسانه: {str(e)}")
+            await context.bot.send_message(chat_id=chat_id, text="❌ خطا در پردازش رسانه.")
         await context.bot.send_message(
             chat_id=chat_id,
             text="بازگشت به منوی اصلی:",

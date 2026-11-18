@@ -21,6 +21,7 @@ from telegram.ext import ContextTypes
 from core.database.monitoring import log_upload_failed, log_upload_success
 from core.state_manager import StateCache, async_clear_state, async_get_state, async_set_state, clear_state, set_state
 from core.task_utils import async_temp_dir, bounded_large_upload, get_file_size_async, load_input_file, track_task
+from handlers.utils import escape_markdown, safe_answer_query
 from services.rate_limiter import user_action_lock
 from services.software_service import (
     MAX_ALLOWED_DOWNLOAD_BYTES,
@@ -115,7 +116,7 @@ async def handle_software_state(
     )
 
     result_prompt = (
-        f"🔍 نتایج جستجو برای: *{query}* ({platform_label})\n\n"
+        f"🔍 نتایج جستجو برای: *{escape_markdown(query)}* ({platform_label})\n\n"
         "👇 لطفاً نرم‌افزار مورد نظر خود را جهت دانلود انتخاب کنید:"
     )
 
@@ -137,7 +138,7 @@ async def handle_software_state(
 async def software_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Callback query handler for software download buttons (pattern: ^dl_soft_)."""
     query = update.callback_query
-    await query.answer()
+    await safe_answer_query(query)
 
     data = query.data or ""
     chat_id = str(query.message.chat_id)
@@ -213,17 +214,17 @@ async def software_callback_handler(update: Update, context: ContextTypes.DEFAUL
         except Exception:
             pass
 
-    clear_state(chat_id)
-    track_task(
-        _process_software_download(
-            context=context,
-            chat_id=chat_id,
-            platform_key=platform_key,
-            item_index=item_index,
-            app=app,
-        ),
-        name=f"software_dl_{chat_id}",
-    )
+        clear_state(chat_id)
+        track_task(
+            _process_software_download(
+                context=context,
+                chat_id=chat_id,
+                platform_key=platform_key,
+                item_index=item_index,
+                app=app,
+            ),
+            name=f"software_dl_{chat_id}",
+        )
 
 
 async def _process_software_download(
@@ -318,10 +319,10 @@ async def _process_software_download(
             zip_file = part_paths[0]
             zip_size_mb = (await get_file_size_async(zip_file)) / (1024 * 1024)
             caption = (
-                f"📦 **{app_name}**\n\n"
-                f"🔖 **نسخه:** `{version}`\n"
+                f"📦 **{escape_markdown(app_name)}**\n\n"
+                f"🔖 **نسخه:** `{escape_markdown(version)}`\n"
                 f"💾 **حجم فایل (ZIP):** `{zip_size_mb:.1f} MB`\n"
-                f"📅 **تاریخ بروزرسانی:** `{updated}`\n"
+                f"📅 **تاریخ بروزرسانی:** `{escape_markdown(updated)}`\n"
                 f"💻 **سیستم‌عامل:** {platform_fa}\n\n"
                 "📁 **راهنما:** نرم‌افزار به صورت فایل زیپ (ZIP) ارسال شد تا محدودیت امنیتی بله رفع شود. پس از دانلود، فایل را استخراج (Extract) فرمایید."
             )

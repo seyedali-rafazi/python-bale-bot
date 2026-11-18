@@ -2,6 +2,7 @@
 
 import re
 import time
+import unicodedata
 from .connection import get_db
 from .utils import get_tehran_now_full
 
@@ -10,6 +11,7 @@ _BLOCKED_WORDS_CACHE_KEY = "yt_blacklist:words"
 _L1_TTL_SEC = 60.0
 _l1_lists: dict[str, tuple[list[str], float]] = {}
 _compiled_bl_ref: list[str] | None = None
+_compiled_bl_key: tuple[str, ...] | None = None
 _compiled_bl_exact: frozenset[str] = frozenset()
 _compiled_bl_sub_re: re.Pattern | None = None
 
@@ -110,14 +112,20 @@ async def get_all_channel_blacklist_keys() -> list[str]:
 
 
 def _get_compiled_channel_blacklist(keys: list[str]) -> tuple[frozenset[str], re.Pattern | None]:
-    global _compiled_bl_ref, _compiled_bl_exact, _compiled_bl_sub_re
-    if keys is _compiled_bl_ref:
+    global _compiled_bl_ref, _compiled_bl_key, _compiled_bl_exact, _compiled_bl_sub_re
+    if keys is _compiled_bl_ref and _compiled_bl_key is not None:
         return _compiled_bl_exact, _compiled_bl_sub_re
 
-    exact = frozenset(keys)
-    subs = [k for k in keys if len(k) >= 4]
+    cleaned_key = tuple(keys)
+    if cleaned_key == _compiled_bl_key:
+        _compiled_bl_ref = keys
+        return _compiled_bl_exact, _compiled_bl_sub_re
+
+    exact = frozenset(cleaned_key)
+    subs = [k for k in cleaned_key if len(k) >= 4]
     sub_re = re.compile("|".join(re.escape(k) for k in subs)) if subs else None
     _compiled_bl_ref = keys
+    _compiled_bl_key = cleaned_key
     _compiled_bl_exact = exact
     _compiled_bl_sub_re = sub_re
     return exact, sub_re
@@ -141,8 +149,16 @@ async def is_channel_blacklisted(*names: str) -> bool:
     return False
 
 
+def _normalize_blocked_word(word: str) -> str:
+    if not word:
+        return ""
+    w = unicodedata.normalize("NFKC", word).lower()
+    w = re.sub(r"[^\w\s\u0600-\u06ff]", " ", w, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", w).strip()
+
+
 async def add_blocked_word(word: str) -> bool:
-    w = word.strip().lower()
+    w = _normalize_blocked_word(word)
     if len(w) < 2:
         return False
     pool = await get_db()
@@ -163,11 +179,14 @@ async def add_blocked_word(word: str) -> bool:
 
 
 async def remove_blocked_word(word: str) -> bool:
-    w = word.strip().lower()
+    w = _normalize_blocked_word(word)
+    if not w:
+        return False
     pool = await get_db()
     deleted = await pool.fetchval(
-        "DELETE FROM yt_blocked_words WHERE word = $1 RETURNING word",
+        "DELETE FROM yt_blocked_words WHERE word = $1 OR word = $2 RETURNING word",
         w,
+        word.strip().lower(),
     )
     if deleted is not None:
         from services.cache_service import cache_delete

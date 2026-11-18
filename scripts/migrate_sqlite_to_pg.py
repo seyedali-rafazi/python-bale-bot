@@ -17,6 +17,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import quote_plus
 
 try:
     import asyncpg
@@ -79,7 +80,7 @@ TABLES_CONFIG = [
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
             )
-            ON CONFLICT (video_id) DO NOTHING
+            ON CONFLICT DO NOTHING
         """
     },
     {
@@ -119,10 +120,10 @@ TABLES_CONFIG = [
         "name": "cloud_files",
         "pk": "id",
         "has_serial": True,
-        "sqlite_query": "SELECT id, user_id, file_name, file_size_mb, download_link, upload_date FROM cloud_files",
+        "sqlite_query": "SELECT id, user_id, file_name, file_size_mb, download_link, s3_key, upload_date FROM cloud_files",
         "pg_insert": """
-            INSERT INTO cloud_files (id, user_id, file_name, file_size_mb, download_link, upload_date)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO cloud_files (id, user_id, file_name, file_size_mb, download_link, s3_key, upload_date)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO NOTHING
         """
     },
@@ -374,7 +375,7 @@ def main():
         "--pg-dsn",
         default=os.getenv(
             "DATABASE_URL",
-            f"postgresql://{os.getenv('PG_USER', 'postgres')}:{os.getenv('PG_PASSWORD', 'postgres')}@{os.getenv('PG_HOST', 'localhost')}:{os.getenv('PG_PORT', '5432')}/{os.getenv('PG_DATABASE', 'bale_bot')}"
+            f"postgresql://{quote_plus(os.getenv('PG_USER', 'postgres'))}:{quote_plus(os.getenv('PG_PASSWORD', 'postgres'))}@{os.getenv('PG_HOST', 'localhost')}:{os.getenv('PG_PORT', '5432')}/{os.getenv('PG_DATABASE', 'bale_bot')}"
         ),
         help="کانکشن استرینگ PostgreSQL"
     )

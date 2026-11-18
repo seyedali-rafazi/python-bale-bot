@@ -1,6 +1,7 @@
 # handlers/menus/youtube_archive.py
 
 import asyncio
+import hashlib
 import json
 from urllib.parse import quote
 
@@ -35,7 +36,9 @@ from core.database import (
     get_archive_variants,
     dedupe_archive_rows,
     can_user_fetch_from_archive,
+    get_archive_fetches_used,
     increment_archive_fetch,
+    decrement_archive_fetch,
     increment_yt_video_view,
     log_upload_success,
     CHANNELS_PAGE_SIZE,
@@ -55,6 +58,10 @@ from core.yt_moderation import (
 from core.database.yt_blacklist import is_channel_blacklisted
 from handlers.ensure_membership import ensure_membership
 from handlers.states.youtube.helpers import parse_quality_from_cache_key
+from handlers.utils import escape_markdown, safe_answer_query
+
+
+_ytarc_channel_tokens = StateCache(max_capacity=5000, default_ttl=86400.0)
 
 
 def _channel_callback_data(page: int, index: int) -> str:
@@ -62,10 +69,15 @@ def _channel_callback_data(page: int, index: int) -> str:
 
 
 def _encode_channel(channel_name: str) -> str:
-    return quote(channel_name, safe="")
+    token = hashlib.md5(channel_name.encode("utf-8")).hexdigest()[:12]
+    _ytarc_channel_tokens[token] = channel_name
+    return token
 
 
 def _decode_channel(encoded: str) -> str:
+    cached = _ytarc_channel_tokens.get(encoded)
+    if cached:
+        return cached
     from urllib.parse import unquote
 
     return unquote(encoded)
@@ -92,13 +104,15 @@ def _row_str(row, key: str, default: str = "") -> str:
 
 async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    vip, total_global, channels, total_ch = await asyncio.gather(
+    vip, total_global, channels, total_ch, used_pre = await asyncio.gather(
         is_vip(user_id),
         count_user_archive(),
         get_user_channels_page(offset=0, limit=CHANNELS_PAGE_SIZE),
         count_user_channels(),
+        get_archive_fetches_used(user_id),
     )
-    _, used, limit = await can_user_fetch_from_archive(user_id, is_vip_status=vip)
+    limit = ARCHIVE_LIMIT_VIP if vip == 1 else ARCHIVE_LIMIT_FREE
+    used = used_pre if vip == 0 else await get_archive_fetches_used(user_id, is_vip_status=vip)
 
     plan = "Pro" if vip == 1 else "رایگان"
     period_label = archive_limit_period_label(vip)
@@ -135,7 +149,7 @@ async def _send_archive_overview(update: Update, context: ContextTypes.DEFAULT_T
         keyboard = _build_channels_keyboard(channels, page=0, total_channels=total_ch)
 
     if update.callback_query:
-        await update.callback_query.answer()
+        await safe_answer_query(update.callback_query)
         await update.callback_query.edit_message_text(
             feature_text,
             reply_markup=keyboard,
@@ -242,12 +256,12 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = str(query.from_user.id)
 
     if data == "ytarc_refresh":
-        await query.answer()
+        await safe_answer_query(query)
         await _send_archive_overview(update, context)
         return
 
     if data == "ytarc_back_yt":
-        await query.answer()
+        await safe_answer_query(query)
         await query.message.reply_text(
             "📺 منوی یوتیوب:",
             reply_markup=get_youtube_menu_keyboard(),
@@ -258,7 +272,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             page = int(data.split("_")[-1])
         except ValueError:
-            await query.answer("صفحه نامعتبر است.")
+            await safe_answer_query(query, "صفحه نامعتبر است.")
             return
         offset = page * CHANNELS_PAGE_SIZE
         channels, total_ch = await asyncio.gather(
@@ -268,7 +282,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         total_pages = max(1, (total_ch + CHANNELS_PAGE_SIZE - 1) // CHANNELS_PAGE_SIZE)
 
         if not channels and page > 0:
-            await query.answer("صفحه‌ای وجود ندارد.")
+            await safe_answer_query(query, "صفحه‌ای وجود ندارد.")
             return
 
         text = (
@@ -278,7 +292,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard = _build_channels_keyboard(
             channels, page=page, total_channels=total_ch
         )
-        await query.answer()
+        await safe_answer_query(query)
         await query.edit_message_text(text, reply_markup=keyboard)
         return
 
@@ -288,16 +302,16 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             page = int(parts[2])
             index = int(parts[3])
         except (IndexError, ValueError):
-            await query.answer("درخواست نامعتبر است.")
+            await safe_answer_query(query, "درخواست نامعتبر است.")
             return
         offset = page * CHANNELS_PAGE_SIZE
         channels = await get_user_channels_page(offset=offset, limit=CHANNELS_PAGE_SIZE)
         if index >= len(channels):
-            await query.answer("کانال یافت نشد.")
+            await safe_answer_query(query, "کانال یافت نشد.")
             return
         channel_name = channels[index]["channel_name"]
         if not await check_channel_allowed(channel_name):
-            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+            await safe_answer_query(query, MSG_BLOCKED_CHANNEL, show_alert=True)
             return
         _set_ytarc_ui(user_id, channel=channel_name)
         await _show_channel_videos(update, context, channel_name, page=0)
@@ -306,12 +320,14 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     if data.startswith("ytarc_vidpg_"):
         encoded = data.replace("ytarc_vidpg_", "", 1)
         try:
-            channel_name, vid_page_str = encoded.rsplit("_", 1)
+            channel_token, vid_page_str = encoded.rsplit("_", 1)
             vid_page = int(vid_page_str)
         except ValueError:
-            await query.answer("درخواست نامعتبر است.")
+            await safe_answer_query(query, "درخواست نامعتبر است.")
             return
-        channel_name = _decode_channel(channel_name)
+        channel_name = _decode_channel(channel_token)
+        if channel_name == channel_token:
+            channel_name = _get_ytarc_ui(user_id).get("channel") or channel_name
         await _show_channel_videos(update, context, channel_name, page=vid_page)
         return
 
@@ -319,22 +335,22 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             rep_id = int(data.replace("ytarc_pick_", ""))
         except ValueError:
-            await query.answer("شناسه نامعتبر است.")
+            await safe_answer_query(query, "شناسه نامعتبر است.")
             return
         entry = await get_archive_entry(rep_id)
         if not entry:
-            await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
+            await safe_answer_query(query, "ویدیو در کش یافت نشد.", show_alert=True)
             return
 
         channel_name = _row_str(entry, "channel_name")
         yt_id = archive_row_yt_id(entry)
         if not yt_id:
-            await query.answer("شناسه ویدیو نامعتبر است.", show_alert=True)
+            await safe_answer_query(query, "شناسه ویدیو نامعتبر است.", show_alert=True)
             return
 
         variants = await get_archive_variants(channel_name, yt_id)
         if not variants:
-            await query.answer("فایلی در کش نیست.", show_alert=True)
+            await safe_answer_query(query, "فایلی در کش نیست.", show_alert=True)
             return
 
         if len(variants) == 1:
@@ -348,7 +364,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if len(title) > 50:
             title = title[:47] + "…"
         lines = [
-            f"📺 **{title}**",
+            f"📺 **{escape_markdown(title)}**",
             "",
             "چند کیفیت در کش موجود است. یکی را انتخاب کنید:",
         ]
@@ -371,7 +387,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             ]
         )
-        await query.answer()
+        await safe_answer_query(query)
         await query.edit_message_text(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -383,7 +399,7 @@ async def yt_archive_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             archive_id = int(data.replace("ytarc_vid_", ""))
         except ValueError:
-            await query.answer("شناسه نامعتبر است.")
+            await safe_answer_query(query, "شناسه نامعتبر است.")
             return
         await _send_archive_video(update, context, user_id, archive_id)
         return
@@ -407,12 +423,15 @@ async def _deliver_archive_video_bg(
         await send_cached_files(context, user_id, file_ids, fmt)
     except Exception as e:
         print(f"yt archive send error: {e}")
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
-        )
+        await decrement_archive_fetch(user_id, is_vip_status=vip)
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ ارسال از کش ناموفق بود. لطفاً دوباره تلاش کنید.",
+            )
+        except Exception:
+            pass
         return
-    await increment_archive_fetch(user_id, is_vip_status=vip)
     await increment_yt_video_view(video_id)
 
 
@@ -429,14 +448,12 @@ async def _send_archive_video(
     query = update.callback_query
     async with user_action_lock(user_id, "yt_archive", timeout_sec=15) as acquired:
         if not acquired:
-            if query:
-                await query.answer("⏳ درخواست قبلی شما در حال ارسال است.", show_alert=True)
+            await safe_answer_query(query, "⏳ درخواست قبلی شما در حال ارسال است.", show_alert=True)
             return
 
         entry = preloaded_entry if preloaded_entry is not None else await get_archive_entry(archive_id)
         if not entry:
-            if query:
-                await query.answer("ویدیو در کش یافت نشد.", show_alert=True)
+            await safe_answer_query(query, "ویدیو در کش یافت نشد.", show_alert=True)
             return
 
         ch_blocked, word_blocked, vip = await asyncio.gather(
@@ -445,10 +462,10 @@ async def _send_archive_video(
             is_vip(user_id),
         )
         if ch_blocked:
-            await query.answer(MSG_BLOCKED_CHANNEL, show_alert=True)
+            await safe_answer_query(query, MSG_BLOCKED_CHANNEL, show_alert=True)
             return
         if word_blocked:
-            await query.answer(MSG_BLOCKED_SEARCH, show_alert=True)
+            await safe_answer_query(query, MSG_BLOCKED_SEARCH, show_alert=True)
             return
 
         allowed, used, limit = await can_user_fetch_from_archive(
@@ -456,7 +473,8 @@ async def _send_archive_video(
         )
         if not allowed:
             period = archive_limit_period_label(vip)
-            await query.answer(
+            await safe_answer_query(
+                query,
                 f"محدودیت {period}: {used}/{limit} دریافت از آرشیو.",
                 show_alert=True,
             )
@@ -465,13 +483,14 @@ async def _send_archive_video(
         try:
             file_ids = json.loads(entry["file_ids"] or "[]")
         except (json.JSONDecodeError, TypeError):
-            await query.answer("فایل کش خراب است.", show_alert=True)
+            await safe_answer_query(query, "فایل کش خراب است.", show_alert=True)
             return
         if not file_ids:
-            await query.answer("فایل کش خالی است.", show_alert=True)
+            await safe_answer_query(query, "فایل کش خالی است.", show_alert=True)
             return
 
-        await query.answer("در حال ارسال...")
+        await increment_archive_fetch(user_id, is_vip_status=vip)
+        await safe_answer_query(query, "در حال ارسال...")
         fmt = entry["format_type"] or "video_zip"
         track_task(
             _deliver_archive_video_bg(
@@ -532,11 +551,11 @@ async def _show_channel_videos(
     total_pages = max(1, (total + VIDEOS_PAGE_SIZE - 1) // VIDEOS_PAGE_SIZE)
 
     if not videos:
-        await query.answer("ویدیویی برای این کانال نیست.")
+        await safe_answer_query(query, "ویدیویی برای این کانال نیست.")
         return
 
     lines = [
-        f"📺 **{channel_name}**\n",
+        f"📺 **{escape_markdown(channel_name)}**\n",
         f"صفحه {page + 1} از {total_pages} — جدیدترین انتشار در کانال:\n",
     ]
     keyboard = []
@@ -547,11 +566,12 @@ async def _show_channel_videos(
         else:
             short = title
         pub = _row_str(row, "uploaded_at")
+        safe_short = escape_markdown(short)
         if len(pub) >= 8:
             pub_label = f"{pub[:4]}/{pub[4:6]}/{pub[6:8]}"
-            lines.append(f"• {short} — 📅 {pub_label}")
+            lines.append(f"• {safe_short} — 📅 {pub_label}")
         else:
-            lines.append(f"• {short}")
+            lines.append(f"• {safe_short}")
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -587,7 +607,7 @@ async def _show_channel_videos(
         [InlineKeyboardButton("📚 بازگشت به آرشیو", callback_data="ytarc_main")]
     )
 
-    await query.answer()
+    await safe_answer_query(query)
     await query.edit_message_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(keyboard),

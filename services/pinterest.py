@@ -123,15 +123,18 @@ class PinterestService:
                 page = await context.new_page()
 
                 async def _block_heavy_resources(route):
-                    if route.request.resource_type in (
-                        "image",
-                        "media",
-                        "font",
-                        "stylesheet",
-                    ):
-                        await route.abort()
-                    else:
-                        await route.continue_()
+                    try:
+                        if route.request.resource_type in (
+                            "image",
+                            "media",
+                            "font",
+                            "stylesheet",
+                        ):
+                            await route.abort()
+                        else:
+                            await route.continue_()
+                    except Exception:
+                        pass
 
                 await page.route("**/*", _block_heavy_resources)
 

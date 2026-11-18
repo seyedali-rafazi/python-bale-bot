@@ -23,6 +23,7 @@ REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").strip().lower() in ("true", "
 REDIS_RETRY_COOLDOWN_SEC = max(5.0, float(os.getenv("REDIS_RETRY_COOLDOWN_SEC", "20")))
 
 _async_redis_client = None
+_async_redis_lock = asyncio.Lock()
 _sync_redis_client = None
 _sync_redis_lock = threading.Lock()
 _redis_available = False
@@ -72,34 +73,41 @@ async def init_redis() -> bool:
         _redis_available = False
         return False
 
-    try:
-        import redis.asyncio as aioredis
+    async with _async_redis_lock:
+        try:
+            import redis.asyncio as aioredis
 
-        if _async_redis_client is None:
-            _async_redis_client = aioredis.from_url(
-                REDIS_URL,
-                decode_responses=True,
-                socket_timeout=5.0,
-                socket_connect_timeout=5.0,
-                retry_on_timeout=True,
-                health_check_interval=30,
-                max_connections=50,
-            )
+            if _async_redis_client is None:
+                _async_redis_client = aioredis.from_url(
+                    REDIS_URL,
+                    decode_responses=True,
+                    socket_timeout=5.0,
+                    socket_connect_timeout=5.0,
+                    retry_on_timeout=True,
+                    health_check_interval=30,
+                    max_connections=50,
+                )
 
-        # Test connectivity
-        await _async_redis_client.ping()
-        _redis_available = True
-        _async_retry_after = 0.0
-        logger.info("⚡ Redis async client connected successfully: %s", REDIS_URL)
-        return True
+            # Test connectivity
+            await _async_redis_client.ping()
+            _redis_available = True
+            _async_retry_after = 0.0
+            logger.info("⚡ Redis async client connected successfully: %s", REDIS_URL)
+            return True
 
-    except Exception as e:
-        _redis_available = False
-        _async_retry_after = time.monotonic() + REDIS_RETRY_COOLDOWN_SEC
-        if not _warned_once:
-            logger.warning("⚠️ Redis connection failed (%s). Falling back gracefully to in-memory mode.", e)
-            _warned_once = True
-        return False
+        except Exception as e:
+            _redis_available = False
+            _async_retry_after = time.monotonic() + REDIS_RETRY_COOLDOWN_SEC
+            if _async_redis_client is not None:
+                try:
+                    await _async_redis_client.aclose()
+                except Exception:
+                    pass
+                _async_redis_client = None
+            if not _warned_once:
+                logger.warning("⚠️ Redis connection failed (%s). Falling back gracefully to in-memory mode.", e)
+                _warned_once = True
+            return False
 
 
 def get_sync_redis():
@@ -143,10 +151,15 @@ def get_sync_redis():
             return _sync_redis_client
         except Exception as e:
             _sync_retry_after = time.monotonic() + REDIS_RETRY_COOLDOWN_SEC
+            if _sync_redis_client is not None:
+                try:
+                    _sync_redis_client.close()
+                except Exception:
+                    pass
+            _sync_redis_client = None
             if not _warned_once:
                 logger.warning("⚠️ Sync Redis connection failed (%s). Falling back to in-memory.", e)
                 _warned_once = True
-            _sync_redis_client = None
             return None
 
 

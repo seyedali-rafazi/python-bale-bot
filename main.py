@@ -140,13 +140,16 @@ def _cleanup_old_downloads_sync(
         is_kaggle_temp = os.path.basename(base_real) == "kaggle_temp"
         dir_mtimes: dict[str, float] = {}
         if is_kaggle_temp:
-            for r, _d, _f in os.walk(directory):
-                try:
-                    dir_mtimes[os.path.realpath(r)] = os.stat(r, follow_symlinks=False).st_mtime
-                except OSError:
-                    pass
+            for r, _dirs, _files in os.walk(directory):
+                if os.path.realpath(r) != base_real:
+                    try:
+                        dir_mtimes[r] = os.stat(r, follow_symlinks=False).st_mtime
+                    except OSError:
+                        pass
 
         for root, dirs, files in os.walk(directory, topdown=False):
+            orig_root_mtime = dir_mtimes.get(root, now)
+
             for f in files:
                 file_path = os.path.join(root, f)
                 total_scanned += 1
@@ -177,8 +180,7 @@ def _cleanup_old_downloads_sync(
                 root_real = os.path.realpath(root)
                 if root_real != base_real:
                     try:
-                        orig_mtime = dir_mtimes.get(root_real, now)
-                        if not os.listdir(root) and orig_mtime < now - max_age_sec:
+                        if not os.listdir(root) and orig_root_mtime < now - max_age_sec:
                             os.rmdir(root)
                     except OSError:
                         pass
@@ -208,7 +210,10 @@ async def cleanup_old_downloads(
 # =========================================================
 
 async def on_startup(app):
-    global _chromium_maintenance_task
+    global _chromium_maintenance_task, BOT_START_TIME_UTC, PROCESS_START_TIME
+
+    BOT_START_TIME_UTC = datetime.now(timezone.utc)
+    PROCESS_START_TIME = time.time()
 
     await init_redis()
 
@@ -259,9 +264,12 @@ async def on_shutdown(app):
         from handlers.states.state_github import stop_github_workers
         from handlers.states.state_kaggle import stop_kaggle_workers
 
-        await stop_pinterest_workers()
-        await stop_github_workers()
-        await stop_kaggle_workers()
+        await asyncio.gather(
+            stop_pinterest_workers(),
+            stop_github_workers(),
+            stop_kaggle_workers(),
+            return_exceptions=True,
+        )
         await cancel_tracked_tasks(timeout=10.0)
         logger.info("✅ Queue workers and background tasks stopped on shutdown")
     except Exception:
@@ -276,12 +284,15 @@ async def on_shutdown(app):
 
     # 5. Close HTTP client sessions
     try:
-        await close_http_session()
         from services.software_service import close_software_httpx_client
         from services.book import close_book_clients
 
-        await close_software_httpx_client()
-        await close_book_clients()
+        await asyncio.gather(
+            close_http_session(),
+            close_software_httpx_client(),
+            close_book_clients(),
+            return_exceptions=True,
+        )
         logger.info("✅ HTTP session closed on shutdown")
     except Exception:
         logger.exception("HTTP session cleanup on shutdown failed")
@@ -408,7 +419,7 @@ def main():
 
         try:
             logger.info("🌐 Attempting to start in WEBHOOK mode...")
-            logger.info(f"   Webhook URL: {WEBHOOK_URL}")
+            logger.info("   Webhook URL: %s/<TOKEN>", BALE_URL)
             logger.info(f"   Listening on port: {PORT}")
 
             application.run_webhook(

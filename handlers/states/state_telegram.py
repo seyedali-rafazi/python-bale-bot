@@ -14,7 +14,7 @@ from services.telegram_public import (
 from services import telegram_telethon
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import set_state
+from core.state_manager import clear_state, set_state
 from core.task_utils import track_task
 from core.database import is_vip, get_tg_downloads, increment_tg_downloads
 from core.limits import get_limit
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_CONCURRENT = 10
 LATEST_MESSAGE_COUNT = 20
 processing_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+_pending_tg_downloads: dict[str, int] = {}
 
 
 async def check_tg_limit(update: Update, user_id: str) -> bool:
@@ -33,7 +34,8 @@ async def check_tg_limit(update: Update, user_id: str) -> bool:
         get_tg_downloads(user_id),
     )
     max_dl = get_limit("telegram_download", vip)
-    if current >= max_dl:
+    pending = _pending_tg_downloads.get(str(user_id), 0)
+    if current + pending >= max_dl:
         await update.message.reply_text(
             f"❌ محدودیت روزانه تلگرام شما تمام شده است.\n"
             f"📊 امروز: {current} از {max_dl}\n"
@@ -234,10 +236,20 @@ async def _process_telegram_request(
 
     except Exception as general_err:
         print(f"Queue/Processing Error: {general_err}")
-        await bot.send_message(
-            chat_id=chat_id,
-            text="❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.",
-        )
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="❌ خطای سیستمی رخ داد. لطفاً مجدداً تلاش کنید.",
+            )
+        except Exception:
+            pass
+    finally:
+        uid = str(user_id)
+        cur = _pending_tg_downloads.get(uid, 0)
+        if cur <= 1:
+            _pending_tg_downloads.pop(uid, None)
+        else:
+            _pending_tg_downloads[uid] = cur - 1
 
 
 async def handle_telegram_state(
@@ -250,13 +262,20 @@ async def handle_telegram_state(
 ):
     user_id = str(update.effective_user.id)
 
+    if step == "waiting_tg_single" and not telegram_telethon.parse_message_link(text):
+        await update.message.reply_text(
+            "❌ لینک پیام تلگرام نامعتبر است. مثال:\n`https://t.me/channel_name/123`",
+            parse_mode="Markdown",
+        )
+        return
+
     async with user_action_lock(user_id, "tg_dl", timeout_sec=15) as acquired:
         if not acquired:
             await update.message.reply_text("⏳ درخواست قبلی شما هنوز در حال ثبت است. لطفاً صبر کنید.")
             return
 
         if not await check_tg_limit(update, user_id):
-            set_state(chat_id, "")
+            clear_state(chat_id)
             return
 
         waiters = (
@@ -272,15 +291,16 @@ async def handle_telegram_state(
         else:
             await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
 
-        set_state(chat_id, "")
+        clear_state(chat_id)
+        _pending_tg_downloads[user_id] = _pending_tg_downloads.get(user_id, 0) + 1
 
-    track_task(
-        _process_telegram_request(
-            context.bot,
-            step,
-            text,
-            chat_id,
-            user_id,
-        ),
-        name=f"tg_dl_{chat_id}",
-    )
+        track_task(
+            _process_telegram_request(
+                context.bot,
+                step,
+                text,
+                chat_id,
+                user_id,
+            ),
+            name=f"tg_dl_{chat_id}",
+        )

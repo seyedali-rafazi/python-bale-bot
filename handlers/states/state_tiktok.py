@@ -28,6 +28,7 @@ from core.limits import get_limit
 
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
 MAX_BALE_MEDIA_BYTES = 50 * 1024 * 1024
+_pending_tt_downloads: dict[str, int] = {}
 
 
 def _strip_hashtags(text: str) -> str:
@@ -45,8 +46,9 @@ async def check_tt_dl_limit(update: Update, user_id: str) -> bool:
         get_tt_downloads(user_id),
     )
     max_dl = get_limit("tiktok_download", vip)
+    pending = _pending_tt_downloads.get(str(user_id), 0)
 
-    if current_dl >= max_dl:
+    if current_dl + pending >= max_dl:
         await update.message.reply_text(
             "❌ محدودیت دانلود روزانه تیک‌تاک شما به پایان رسیده است."
         )
@@ -124,11 +126,20 @@ async def background_tt_download(
 
     except Exception as e:
         print(f"❌ TikTok Error: {e}")
-        await context.bot.send_message(
-            chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text="❌ خطایی در پردازش رخ داد."
+            )
+        except Exception:
+            pass
         await log_upload_failed("tiktok", user_id)
     finally:
+        uid = str(user_id)
+        cur = _pending_tt_downloads.get(uid, 0)
+        if cur <= 1:
+            _pending_tt_downloads.pop(uid, None)
+        else:
+            _pending_tt_downloads[uid] = cur - 1
         if file_path:
             await remove_file_async(file_path)
 
@@ -141,7 +152,12 @@ async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("⏳ درخواست قبلی شما در حال پردازش است. لطفاً صبر کنید.")
             return
         await update.message.reply_text("⏳ در حال دریافت ویدیوهای ترند...")
-        results = await get_tiktok_trends()
+        try:
+            results = await get_tiktok_trends()
+        except Exception:
+            logger.exception("TikTok trends fetch failed")
+            await update.message.reply_text("❌ خطا در دریافت ویدیوهای ترند تیک‌تاک.")
+            return
     if not results:
         await update.message.reply_text("❌ ویدیویی یافت نشد.")
         return
@@ -182,6 +198,7 @@ async def handle_tiktok_state(
                 return
 
             clear_state(chat_id)
+            _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
             track_task(
                 background_tt_download(
                     context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
@@ -196,7 +213,12 @@ async def handle_tiktok_state(
                 await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است. لطفاً صبر کنید.")
                 return
             await update.message.reply_text("⏳ در حال جستجو...")
-            results = await search_tiktok_videos(text, max_results=10)
+            try:
+                results = await search_tiktok_videos(text, max_results=10)
+            except Exception:
+                logger.exception("TikTok search failed")
+                await update.message.reply_text("❌ خطا در جستجوی تیک‌تاک.")
+                return
 
         if not results:
             logger.warning("[TikTok] Search returned 0 results for query '%s' from user %s", text, user_id_str)
@@ -240,6 +262,8 @@ async def handle_tiktok_state(
                         return
 
                     selected_video = videos[index]
+                    clear_state(chat_id)
+                    _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
                     track_task(
                         background_tt_download(
                             context,

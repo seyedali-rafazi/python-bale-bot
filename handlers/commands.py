@@ -13,7 +13,8 @@ from core.database import (
     log_user_active,
     log_upload_success,
 )
-from handlers.ensure_membership import CHANNEL_URL, is_user_channel_member
+from handlers.ensure_membership import CHANNEL_URL, ensure_membership, is_user_channel_member
+from handlers.utils import escape_markdown
 from services.cache_service import cache_get, cache_set
 
 
@@ -67,6 +68,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_tr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     if len(context.args) < 2:
         await update.message.reply_text("❌ فرمت اشتباه است. مثال: `/tr fa:en سلام`")
         return
@@ -79,13 +82,20 @@ async def cmd_tr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     source_lang, target_lang = lang_config.split(":", 1)
-    await update.message.reply_text(f"⏳ در حال ترجمه...")
-    result = await async_translate_text(source_lang, target_lang, text_to_translate)
-    await update.message.reply_text(f"✅ **ترجمه:**\n\n{result}")
-    await log_upload_success("translation", str(update.effective_chat.id))
+    await update.message.reply_text("⏳ در حال ترجمه...")
+    try:
+        result = await async_translate_text(source_lang, target_lang, text_to_translate)
+    except Exception:
+        await update.message.reply_text("❌ خطا در ترجمه! لطفاً کمی بعد دوباره تلاش کنید.")
+        return
+    await update.message.reply_text(f"✅ **ترجمه:**\n\n{escape_markdown(result)}")
+    if not result.startswith("❌"):
+        await log_upload_success("translation", str(update.effective_chat.id))
 
 
 async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_membership(update, context):
+        return
     if not context.args:
         await update.message.reply_text(
             "❌ نام شهر وارد نشده است. مثال: `/weather Tehran`"
@@ -94,6 +104,11 @@ async def cmd_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     city_name = " ".join(context.args)
     await update.message.reply_text(f"⏳ در حال دریافت آب و هوای {city_name}...")
-    result = await get_weather_forecast(city_name)
+    try:
+        result = await get_weather_forecast(city_name)
+    except Exception:
+        await update.message.reply_text("❌ خطایی در دریافت اطلاعات آب و هوا رخ داد.")
+        return
     await update.message.reply_text(result, parse_mode="Markdown")
-    await log_upload_success("weather", str(update.effective_chat.id))
+    if not result.startswith("❌"):
+        await log_upload_success("weather", str(update.effective_chat.id))

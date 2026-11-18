@@ -157,6 +157,15 @@ def upload_to_s3(
     return presigned_url
 
 
+async def async_generate_presigned_url_for_key(
+    object_name: str, expires_in: int = 10800
+) -> str | None:
+    """Offload presigned URL generation (and lazy boto3 client construction) off the event loop."""
+    if not object_name:
+        return None
+    return await asyncio.to_thread(generate_presigned_url_for_key, object_name, expires_in)
+
+
 async def async_upload_to_s3_with_key(
     file_path: str,
     object_name: str = None,
@@ -167,6 +176,9 @@ async def async_upload_to_s3_with_key(
     """Bounded async wrapper for S3 uploads to cap s3transfer thread contention."""
     target_fn = upload_fn or upload_to_s3_with_key
     async with _S3_UPLOAD_SEMAPHORE:
-        return await asyncio.to_thread(
-            target_fn, file_path, object_name, progress_dict
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                target_fn, file_path, object_name, progress_dict
+            ),
+            timeout=300.0,
         )

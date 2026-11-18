@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.database import init_db, close_db
+from services.redis_client import init_redis, close_redis
 from core.database.youtube import (
     drop_legacy_user_youtube_archive_table,
     count_incomplete_cache_rows,
@@ -18,6 +19,7 @@ from core.database.youtube import (
 
 async def main():
     wipe_all = "--all" in sys.argv
+    await init_redis()
     await init_db()
     try:
         await drop_legacy_user_youtube_archive_table()
@@ -35,6 +37,7 @@ async def main():
         print(f"Deleted: {removed}, remaining incomplete: {after}")
     finally:
         await close_db()
+        await close_redis()
 
 
 if __name__ == "__main__":
