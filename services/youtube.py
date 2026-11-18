@@ -135,7 +135,7 @@ def _base_ytdlp_cmd():
     if USE_IPV6 and ENABLE_IPV6_ROTATION and IPV6_PREFIX:
         random_ip = get_random_ipv6()
         if random_ip:
-            print(f"🌐 Using Random IPv6: {random_ip}")
+            logger.debug("Using Random IPv6: %s", random_ip)
             cmd.extend(["--source-address", random_ip])
 
     cmd.extend(
@@ -313,7 +313,7 @@ def _parse_filesize_stdout(stdout_text: str) -> int | None:
     if not match:
         return None
     size = int(float(match.group(1)))
-    print(f"📦 Estimated size: {size / (1024 * 1024):.2f} MB")
+    logger.debug("Estimated size: %.2f MB", size / (1024 * 1024))
     return size
 
 
@@ -420,7 +420,7 @@ async def async_get_video_filesize(
 
 async def get_video_info_cached(url: str) -> dict | None:
     """Fetch YouTube video info with 6-hour Redis/memory caching and shielded singleflight dedup."""
-    from services.cache_service import cache_get, cache_set
+    from services.cache_service import cache_get, cache_set, cache_set_many
 
     vid = extract_yt_id_fast(url)
     cache_key = f"yt_info:{vid}" if vid else None
@@ -439,14 +439,15 @@ async def get_video_info_cached(url: str) -> dict | None:
             info, format_sizes = await _async_get_video_info_with_sizes(url)
 
         if info and cache_key:
-            tasks = [cache_set(cache_key, info, ttl_sec=21600)]
+            await cache_set(cache_key, info, ttl_sec=21600)
             if vid and format_sizes:
-                for sel, sz in format_sizes.items():
-                    if sz > 0:
-                        tasks.append(
-                            cache_set(_filesize_cache_key(vid, sel), int(sz), ttl_sec=3600)
-                        )
-            await asyncio.gather(*tasks)
+                size_items = {
+                    _filesize_cache_key(vid, sel): int(sz)
+                    for sel, sz in format_sizes.items()
+                    if sz > 0
+                }
+                if size_items:
+                    await cache_set_many(size_items, ttl_sec=3600)
         return info
 
     if not cache_key:
@@ -668,8 +669,7 @@ async def _run_async_subprocess_and_capture(
     timeout_sec: int = YTDLP_DOWNLOAD_TIMEOUT_SEC,
 ) -> tuple[bool, str]:
     """Run yt-dlp asynchronously with live progress parsing and zero ThreadPool usage."""
-    print("Running command:")
-    print(" ".join(cmd))
+    logger.debug("Running yt-dlp command: %s", " ".join(cmd))
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -698,9 +698,9 @@ async def _run_async_subprocess_and_capture(
                             )
                     elif "Destination:" in line:
                         progress_dict["text"] = "📥 شروع دانلود..."
-                        print(line)
+                        logger.debug("%s", line)
                 elif not line.startswith("[download]"):
-                    print(line)
+                    logger.debug("%s", line)
         return await proc.wait()
 
     timed_out = False
@@ -724,11 +724,10 @@ async def _run_async_subprocess_and_capture(
 
     full_output = "\n".join(output_lines)
     if timed_out:
-        print(f"❌ yt-dlp timed out after {timeout_sec}s")
+        logger.warning("yt-dlp timed out after %ss", timeout_sec)
         return False, f"{full_output}\nTimed out after {timeout_sec}s".strip()
     if rc != 0:
-        print("❌ yt-dlp failed")
-        print(full_output)
+        logger.warning("yt-dlp failed (rc=%s): %s", rc, full_output[-400:])
         return False, full_output
     return True, full_output
 

@@ -5,6 +5,7 @@ Provides high-performance async and sync Redis connections with connection pooli
 automatic reconnection, health checks, and transparent fallback if Redis is unavailable.
 """
 
+import asyncio
 import os
 import json
 import logging
@@ -28,6 +29,7 @@ _redis_available = False
 _warned_once = False
 _async_retry_after = 0.0
 _sync_retry_after = 0.0
+_async_reconnect_task: Optional[asyncio.Task] = None
 
 
 def _is_connection_error(exc: Exception | None) -> bool:
@@ -63,7 +65,7 @@ def mark_redis_failure(exc: Exception | None = None, *, is_sync: bool = False) -
 
 async def init_redis() -> bool:
     """Initialize the asynchronous Redis connection pool and verify connectivity."""
-    global _async_redis_client, _redis_available, _warned_once
+    global _async_redis_client, _redis_available, _warned_once, _async_retry_after
 
     if not REDIS_ENABLED:
         logger.info("ℹ️ Redis is disabled via REDIS_ENABLED=false")
@@ -148,6 +150,24 @@ def get_sync_redis():
             return None
 
 
+def _schedule_async_reconnect() -> None:
+    global _async_reconnect_task
+    if _async_reconnect_task is not None and not _async_reconnect_task.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _reconnect() -> None:
+        try:
+            await init_redis()
+        except Exception:
+            pass
+
+    _async_reconnect_task = loop.create_task(_reconnect())
+
+
 def get_async_redis():
     """Get the async Redis client instance if available and circuit breaker is closed."""
     global _async_redis_client, _redis_available
@@ -155,6 +175,8 @@ def get_async_redis():
         if time.monotonic() < _async_retry_after:
             return None
         return _async_redis_client
+    if REDIS_ENABLED and _async_retry_after > 0 and time.monotonic() >= _async_retry_after:
+        _schedule_async_reconnect()
     return None
 
 
@@ -165,7 +187,15 @@ def is_redis_available() -> bool:
 
 async def close_redis() -> None:
     """Close all Redis connections cleanly on application shutdown."""
-    global _async_redis_client, _sync_redis_client, _redis_available
+    global _async_redis_client, _sync_redis_client, _redis_available, _async_reconnect_task
+
+    if _async_reconnect_task is not None and not _async_reconnect_task.done():
+        _async_reconnect_task.cancel()
+        try:
+            await _async_reconnect_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _async_reconnect_task = None
 
     if _async_redis_client is not None:
         try:

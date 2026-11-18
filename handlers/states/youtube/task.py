@@ -32,8 +32,9 @@ from services.youtube import (
 from services.zip_utils import build_zip_and_split
 
 try:
-    from services.parspack_s3 import upload_to_s3, upload_to_s3_with_key
+    from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3, upload_to_s3_with_key
 except ImportError:
+    async_upload_to_s3_with_key = None
     upload_to_s3 = None
     upload_to_s3_with_key = None
 
@@ -450,12 +451,20 @@ async def background_yt_download(
                                 try:
                                     for file_path in result:
                                         if upload_to_s3_with_key is not None:
-                                            s3_url, s3_key = await asyncio.to_thread(
-                                                upload_to_s3_with_key,
-                                                file_path,
-                                                None,
-                                                progress_dict,
-                                            )
+                                            if async_upload_to_s3_with_key is not None:
+                                                s3_url, s3_key = await async_upload_to_s3_with_key(
+                                                    file_path,
+                                                    None,
+                                                    progress_dict,
+                                                    upload_fn=upload_to_s3_with_key,
+                                                )
+                                            else:
+                                                s3_url, s3_key = await asyncio.to_thread(
+                                                    upload_to_s3_with_key,
+                                                    file_path,
+                                                    None,
+                                                    progress_dict,
+                                                )
                                         else:
                                             s3_url = await asyncio.to_thread(
                                                 upload_fn,
@@ -657,12 +666,20 @@ async def background_yt_download(
 
                                 try:
                                     if upload_to_s3_with_key is not None:
-                                        s3_url, s3_key = await asyncio.to_thread(
-                                            upload_to_s3_with_key,
-                                            file_path,
-                                            None,
-                                            progress_dict,
-                                        )
+                                        if async_upload_to_s3_with_key is not None:
+                                            s3_url, s3_key = await async_upload_to_s3_with_key(
+                                                file_path,
+                                                None,
+                                                progress_dict,
+                                                upload_fn=upload_to_s3_with_key,
+                                            )
+                                        else:
+                                            s3_url, s3_key = await asyncio.to_thread(
+                                                upload_to_s3_with_key,
+                                                file_path,
+                                                None,
+                                                progress_dict,
+                                            )
                                     else:
                                         s3_url = await asyncio.to_thread(
                                             upload_to_s3,

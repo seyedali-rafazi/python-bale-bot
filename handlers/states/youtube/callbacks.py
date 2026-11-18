@@ -12,6 +12,7 @@ from core.keyboards import (
 )
 from core.database import is_vip, increment_yt_downloads
 from services.youtube import get_video_filesize_cached
+from .helpers import check_user_limit
 from .task import background_yt_download
 
 
@@ -175,6 +176,13 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
         if user_state.get("step") == "processing_yt_quality":
             await query.message.reply_text("⏳ در حال پردازش... لطفا صبر کنید.")
+            return
+
+        if not await check_user_limit(chat_id):
+            clear_state(chat_id)
+            await query.edit_message_text(
+                "❌ محدودیت دانلود روزانه شما به پایان رسیده است."
+            )
             return
 
         url = user_state.get("yt_url")

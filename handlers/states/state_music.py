@@ -50,8 +50,9 @@ from services.music_identify import (
 from services.youtube import async_download_youtube_audio
 
 try:
-    from services.parspack_s3 import upload_to_s3, upload_to_s3_with_key
+    from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3, upload_to_s3_with_key
 except ImportError:
+    async_upload_to_s3_with_key = None
     upload_to_s3 = None
     upload_to_s3_with_key = None
 
@@ -135,12 +136,20 @@ async def background_download_task(
 
                     try:
                         if upload_to_s3_with_key is not None:
-                            s3_url, s3_key = await asyncio.to_thread(
-                                upload_to_s3_with_key,
-                                file_path,
-                                None,
-                                progress_dict,
-                            )
+                            if async_upload_to_s3_with_key is not None:
+                                s3_url, s3_key = await async_upload_to_s3_with_key(
+                                    file_path,
+                                    None,
+                                    progress_dict,
+                                    upload_fn=upload_to_s3_with_key,
+                                )
+                            else:
+                                s3_url, s3_key = await asyncio.to_thread(
+                                    upload_to_s3_with_key,
+                                    file_path,
+                                    None,
+                                    progress_dict,
+                                )
                         else:
                             s3_url = await asyncio.to_thread(
                                 upload_to_s3,
@@ -431,7 +440,11 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_album":
-        results = await async_search_album(text)
+        async with user_action_lock(chat_id, "music_search", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است.")
+                return
+            results = await async_search_album(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -471,7 +484,11 @@ async def handle_music_state(
         )
 
     elif step == "waiting_music_playlist":
-        results = await async_search_playlist(text)
+        async with user_action_lock(chat_id, "music_search", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است.")
+                return
+            results = await async_search_playlist(text)
         if not results:
             await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
             return
@@ -503,7 +520,11 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data.startswith("album_"):
         album_id = data.split("_", 1)[1]
-        tracks = await async_get_album_tracks(album_id)
+        async with user_action_lock(chat_id, "music_browse", timeout_sec=10) as acquired:
+            if not acquired:
+                await query.message.reply_text("⏳ درخواست قبلی شما در حال انجام است.")
+                return
+            tracks = await async_get_album_tracks(album_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این آلبوم یافت نشد.")
             return
@@ -518,7 +539,11 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("playlist_"):
         playlist_id = data.split("_", 1)[1]
-        tracks = await async_get_playlist_tracks(playlist_id)
+        async with user_action_lock(chat_id, "music_browse", timeout_sec=10) as acquired:
+            if not acquired:
+                await query.message.reply_text("⏳ درخواست قبلی شما در حال انجام است.")
+                return
+            tracks = await async_get_playlist_tracks(playlist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی در این پلی‌لیست یافت نشد.")
             return
@@ -548,7 +573,11 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("toptracks_"):
         artist_id = data.split("_", 1)[1]
-        tracks = await async_get_artist_top_tracks(artist_id)
+        async with user_action_lock(chat_id, "music_browse", timeout_sec=10) as acquired:
+            if not acquired:
+                await query.message.reply_text("⏳ درخواست قبلی شما در حال انجام است.")
+                return
+            tracks = await async_get_artist_top_tracks(artist_id)
         if not tracks:
             await query.message.reply_text("❌ آهنگی برای این خواننده یافت نشد.")
             return

@@ -23,9 +23,12 @@ from core.database import (
 )
 
 try:
-    from services.parspack_s3 import upload_to_s3_with_key
+    from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3_with_key
 except ImportError:
+    async_upload_to_s3_with_key = None
     upload_to_s3_with_key = None
+
+MAX_BALE_MEDIA_BYTES = 50 * 1024 * 1024
 
 INSTA_SEMAPHORE = asyncio.Semaphore(5)
 
@@ -105,12 +108,20 @@ async def background_download_insta_link(
                 progress_dict = {"text": "شروع آپلود ابری...", "is_finished": False}
 
                 try:
-                    s3_url, s3_key = await asyncio.to_thread(
-                        upload_to_s3_with_key,
-                        file_path,
-                        None,
-                        progress_dict,
-                    )
+                    if async_upload_to_s3_with_key is not None:
+                        s3_url, s3_key = await async_upload_to_s3_with_key(
+                            file_path,
+                            None,
+                            progress_dict,
+                            upload_fn=upload_to_s3_with_key,
+                        )
+                    else:
+                        s3_url, s3_key = await asyncio.to_thread(
+                            upload_to_s3_with_key,
+                            file_path,
+                            None,
+                            progress_dict,
+                        )
                 except Exception:
                     await release_cloud_quota(chat_id, file_size_mb)
                     raise
@@ -146,6 +157,16 @@ async def background_download_insta_link(
                     await log_upload_failed("instagram", chat_id)
 
             else:
+                file_size_bytes = await get_file_size_async(file_path)
+                if file_size_bytes > MAX_BALE_MEDIA_BYTES:
+                    size_mb = round(file_size_bytes / (1024 * 1024), 1)
+                    await processing_msg.edit_text(
+                        f"❌ حجم فایل ({size_mb} مگابایت) از سقف مجاز پیام‌رسان بله (۵۰ مگابایت) بیشتر است.\n"
+                        "می‌توانید برای ارسال فایل‌های بزرگ‌تر از گزینه «☁️ فضای ابری» استفاده کنید."
+                    )
+                    await log_upload_failed("instagram", chat_id)
+                    return
+
                 async with bounded_large_upload():
                     media_input = await load_input_file(file_path)
                     try:

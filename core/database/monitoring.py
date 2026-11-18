@@ -6,13 +6,20 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from datetime import datetime, timedelta
+import logging
+import time
 
 from .connection import get_db
 from .utils import TEHRAN_TZ, get_tehran_now_full, get_tehran_today
 
+logger = logging.getLogger(__name__)
+
 _PENDING_MONITOR_FLUSH_THRESHOLD = 25
+_PENDING_MONITOR_MAX_CAP = 5000
+_MONITOR_RETRY_COOLDOWN_SEC = 15.0
 _pending_monitor_events: list[tuple[str, str, str | None, str]] = []
 _monitor_flush_lock = asyncio.Lock()
+_monitor_retry_after = 0.0
 _active_user_hour_seen: OrderedDict[str, str] = OrderedDict()
 _ACTIVE_USER_SEEN_CAP = 20000
 
@@ -42,6 +49,7 @@ ALL_SECTIONS = list(SECTION_LABELS.keys())
 
 async def flush_pending_monitoring_events() -> int:
     """Flush buffered monitoring events to PostgreSQL in a single UNNEST INSERT."""
+    global _monitor_retry_after
     if not _pending_monitor_events:
         return 0
     async with _monitor_flush_lock:
@@ -67,10 +75,15 @@ async def flush_pending_monitoring_events() -> int:
                 user_ids,
                 created_ats,
             )
+            _monitor_retry_after = 0.0
             return len(batch)
         except Exception:
-            # Restore batch on transient DB error
-            _pending_monitor_events[:0] = batch
+            _monitor_retry_after = time.monotonic() + _MONITOR_RETRY_COOLDOWN_SEC
+            # Restore batch on transient DB error without exceeding memory cap
+            combined = batch + _pending_monitor_events
+            if len(combined) > _PENDING_MONITOR_MAX_CAP:
+                combined = combined[-_PENDING_MONITOR_MAX_CAP:]
+            _pending_monitor_events[:] = combined
             raise
 
 
@@ -80,11 +93,19 @@ async def log_monitor_event(
     event_type: str = "upload_success",
 ) -> None:
     uid = str(user_id) if user_id is not None else None
+    if len(_pending_monitor_events) >= _PENDING_MONITOR_MAX_CAP:
+        del _pending_monitor_events[: len(_pending_monitor_events) - _PENDING_MONITOR_MAX_CAP + 1]
     _pending_monitor_events.append(
         (section, event_type, uid, get_tehran_now_full())
     )
-    if len(_pending_monitor_events) >= _PENDING_MONITOR_FLUSH_THRESHOLD:
-        await flush_pending_monitoring_events()
+    if (
+        len(_pending_monitor_events) >= _PENDING_MONITOR_FLUSH_THRESHOLD
+        and time.monotonic() >= _monitor_retry_after
+    ):
+        try:
+            await flush_pending_monitoring_events()
+        except Exception as exc:
+            logger.warning("Deferred monitoring flush after DB error: %s", exc)
 
 
 async def log_upload_success(section: str, user_id: str | None = None) -> None:
@@ -107,21 +128,6 @@ async def log_user_active(user_id: str) -> None:
     while len(_active_user_hour_seen) > _ACTIVE_USER_SEEN_CAP:
         _active_user_hour_seen.popitem(last=False)
     await log_monitor_event("bot", uid, "user_active")
-
-
-async def _count_active_users_between(start: str, end: str) -> int:
-    pool = await get_db()
-    val = await pool.fetchval(
-        """
-        SELECT COUNT(DISTINCT user_id) FROM monitoring_events
-        WHERE user_id IS NOT NULL
-          AND created_at >= $1
-          AND created_at < $2
-        """,
-        start,
-        end,
-    )
-    return int(val or 0)
 
 
 async def count_active_users_today() -> int:

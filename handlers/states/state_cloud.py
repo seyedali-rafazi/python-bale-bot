@@ -16,7 +16,7 @@ from core.database import (
     get_cloud_usage_stats,
     log_upload_success,
 )
-from services.parspack_s3 import upload_to_s3_with_key
+from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3_with_key
 from services.rate_limiter import user_action_lock
 
 
@@ -149,9 +149,11 @@ async def handle_cloud_file_upload(update: Update, context: ContextTypes.DEFAULT
                     return WAIT_FOR_FILE
 
                 try:
-                    # Upload to S3 in worker thread so event loop never freezes
-                    download_link, s3_key = await asyncio.to_thread(
-                        upload_to_s3_with_key, temp_file_path, f"{user_id}/{safe_name}"
+                    # Upload to S3 under bounded concurrency so multipart threads never saturate executor
+                    download_link, s3_key = await async_upload_to_s3_with_key(
+                        temp_file_path,
+                        f"{user_id}/{safe_name}",
+                        upload_fn=upload_to_s3_with_key,
                     )
                 except Exception:
                     await release_cloud_quota(user_id, actual_size_mb)

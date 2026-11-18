@@ -176,6 +176,21 @@ async def upload_document_to_storage_once(
     )
 
 
+async def _update_part_status(context, chat_id: str, status_msg, text: str):
+    """Create or edit a single status message across multi-part transfers to avoid Bale API spam."""
+    if status_msg is None:
+        return await context.bot.send_message(chat_id=chat_id, text=text)
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=status_msg.message_id,
+            text=text,
+        )
+    except Exception:
+        pass
+    return status_msg
+
+
 async def _deliver_stored_parts(
     context,
     chat_id: str,
@@ -183,14 +198,15 @@ async def _deliver_stored_parts(
     media_kind: str,
     *,
     total_parts: int | None = None,
+    status_msg=None,
 ) -> list[int]:
     """Forward file_ids to user once each; return indexes with uncertain delivery."""
     total = total_parts or len(file_ids)
     uncertain: list[int] = []
     for idx, file_id in enumerate(file_ids, 1):
         if total > 1:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 ارسال پارت {idx} از {total}..."
+            status_msg = await _update_part_status(
+                context, chat_id, status_msg, f"📤 ارسال پارت {idx} از {total}..."
             )
         status = await forward_file_id_to_user(context, chat_id, file_id, media_kind)
         if status == ForwardStatus.UNCERTAIN:
@@ -222,14 +238,14 @@ async def process_and_send_document_parts(
     uncertain_parts: list[int] = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
-    await context.bot.send_message(
+    status_msg = await context.bot.send_message(
         chat_id=chat_id, text=f"📤 در حال آپلود فایل ZIP{part_msg}..."
     )
 
     for idx, file_path in enumerate(result_files, 1):
         if total_parts > 1:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 آپلود پارت {idx} از {total_parts}..."
+            status_msg = await _update_part_status(
+                context, chat_id, status_msg, f"📤 آپلود پارت {idx} از {total_parts}..."
             )
 
         display_name = part_display_filename(
@@ -406,14 +422,14 @@ async def process_and_send_video_parts(
     uncertain_parts: list[int] = []
     total_parts = len(result_files)
     part_msg = f" (شامل {total_parts} پارت)" if total_parts > 1 else ""
-    await context.bot.send_message(
+    status_msg = await context.bot.send_message(
         chat_id=chat_id, text=f"📤 در حال آپلود ویدیو{part_msg}..."
     )
 
     for idx, file_path in enumerate(result_files, 1):
         if total_parts > 1:
-            await context.bot.send_message(
-                chat_id=chat_id, text=f"📤 آپلود پارت {idx} از {total_parts}..."
+            status_msg = await _update_part_status(
+                context, chat_id, status_msg, f"📤 آپلود پارت {idx} از {total_parts}..."
             )
         caption = f"Video ID: {video_id} | Part {idx}/{total_parts}"
         try:
@@ -465,7 +481,7 @@ async def process_and_send_video_parts(
 async def send_cached_files(
     context, chat_id: str, cached_files: list, format_type: str
 ):
-    await context.bot.send_message(
+    status_msg = await context.bot.send_message(
         chat_id=chat_id, text="✅ این فایل در سرور موجود است. در حال ارسال فوری..."
     )
     total_parts = len(cached_files)
@@ -482,6 +498,7 @@ async def send_cached_files(
         cached_files,
         media_kind,
         total_parts=total_parts,
+        status_msg=status_msg,
     )
     if uncertain:
         await context.bot.send_message(

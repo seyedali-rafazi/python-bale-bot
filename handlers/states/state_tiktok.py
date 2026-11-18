@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 from core.state_manager import clear_state, set_state
-from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, track_task
+from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
 from core.constants import BTN_BACK
 from services.rate_limiter import user_action_lock
 from services.tiktok import (
@@ -27,6 +27,7 @@ from core.limits import get_limit
 
 
 DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
+MAX_BALE_MEDIA_BYTES = 50 * 1024 * 1024
 
 
 def _strip_hashtags(text: str) -> str:
@@ -81,6 +82,16 @@ async def background_tt_download(
 
         if not file_path or not await asyncio.to_thread(os.path.exists, file_path):
             await _safe_edit_text(status_msg, "❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.")
+            await log_upload_failed("tiktok", user_id)
+            return
+
+        file_size_bytes = await get_file_size_async(file_path)
+        if file_size_bytes > MAX_BALE_MEDIA_BYTES:
+            size_mb = round(file_size_bytes / (1024 * 1024), 1)
+            await _safe_edit_text(
+                status_msg,
+                f"❌ حجم ویدیو ({size_mb} مگابایت) از سقف مجاز پیام‌رسان بله (۵۰ مگابایت) بیشتر است.",
+            )
             await log_upload_failed("tiktok", user_id)
             return
 

@@ -295,6 +295,8 @@ def clear_state(chat_id):
 
     loop = _get_running_loop_or_none()
     if loop is not None:
+        if get_async_redis() is None:
+            return
         _schedule_async_task(loop, _delete_state_async(key, version))
         return
 
@@ -359,3 +361,19 @@ async def async_clear_state(chat_id):
                 await redis.delete(_make_key(key))
         except Exception as e:
             logger.debug("Async Redis clear_state failed for %s: %s", key, e)
+
+
+async def flush_pending_state_tasks(timeout: float = 3.0) -> None:
+    """Await any fire-and-forget Redis state persistence tasks before closing Redis."""
+    pending = [t for t in list(_pending_redis_tasks) if not t.done()]
+    if not pending:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*pending, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        for t in pending:
+            if not t.done():
+                t.cancel()

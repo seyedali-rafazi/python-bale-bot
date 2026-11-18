@@ -153,7 +153,7 @@ async def send_image_batch(
     context: ContextTypes.DEFAULT_TYPE,
     urls: List[str],
 ) -> int:
-    """Download and send up to 10 images incrementally, closing each BytesIO buffer right after upload."""
+    """Download and send up to 10 images with a bounded 3-slot queue so RAM stays minimal."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 "
@@ -166,24 +166,52 @@ async def send_image_batch(
         "Referer": "https://www.pinterest.com/",
     }
 
+    target_urls = list(urls[:10])
+    if not target_urls:
+        return 0
+
     session = await get_http_session()
-    dl_sem = asyncio.Semaphore(3)
+    buffer_queue: asyncio.Queue[Optional[BytesIO]] = asyncio.Queue(maxsize=3)
+    url_iter = iter(target_urls)
+    worker_count = min(3, len(target_urls))
 
-    async def _bounded_fetch(url: str):
-        async with dl_sem:
-            return await get_image_bytes(session, url, headers=headers)
+    async def _worker() -> None:
+        while True:
+            try:
+                url = next(url_iter)
+            except StopIteration:
+                break
+            img = None
+            try:
+                img = await get_image_bytes(session, url, headers=headers)
+            except Exception as e:
+                print(f"download image error: {e}")
+                img = None
+            try:
+                await buffer_queue.put(img)
+            except asyncio.CancelledError:
+                if isinstance(img, BytesIO):
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
+                raise
 
-    tasks = [
-        asyncio.create_task(_bounded_fetch(url))
-        for url in urls[:10]
-    ]
+    workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+
+    async def _signal_done() -> None:
+        await asyncio.gather(*workers, return_exceptions=True)
+        await buffer_queue.put(None)
+
+    coordinator = asyncio.create_task(_signal_done())
 
     sent = 0
     try:
-        for done_task in asyncio.as_completed(tasks):
-            img: Optional[BytesIO] = None
+        while True:
+            img = await buffer_queue.get()
+            if img is None:
+                break
             try:
-                img = await done_task
                 if isinstance(img, BytesIO):
                     try:
                         await context.bot.send_photo(chat_id=chat_id, photo=img)
@@ -208,11 +236,19 @@ async def send_image_batch(
         print(f"send_image_batch error: {e}")
         return sent
     finally:
-        pending = [t for t in tasks if not t.done()]
-        for t in pending:
-            t.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        for t in workers:
+            if not t.done():
+                t.cancel()
+        if not coordinator.done():
+            coordinator.cancel()
+        await asyncio.gather(*workers, coordinator, return_exceptions=True)
+        while not buffer_queue.empty():
+            leftover = buffer_queue.get_nowait()
+            if isinstance(leftover, BytesIO):
+                try:
+                    leftover.close()
+                except Exception:
+                    pass
 
 
 async def process_pinterest_search(

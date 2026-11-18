@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from typing import Optional, Dict, Any
+import aiohttp
 from dotenv import load_dotenv
 
 from services.http_client import get_http_session
@@ -65,7 +66,8 @@ async def flaresolverr_request(
             if time.monotonic() < _flaresolverr_down_until:
                 return None
             session = await get_http_session()
-            async with session.post(fs_url, json=payload, timeout=timeout + 5) as resp:
+            req_timeout = aiohttp.ClientTimeout(total=timeout + 5)
+            async with session.post(fs_url, json=payload, timeout=req_timeout) as resp:
                 if resp.status != 200:
                     logger.warning(
                         "[FlareSolverr] HTTP status %s from FlareSolverr at %s",

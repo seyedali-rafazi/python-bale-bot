@@ -186,14 +186,13 @@ async def get_cache_row_metadata(video_id: str) -> dict | None:
 
 async def get_cached_video_with_meta(video_id: str) -> tuple[list, dict | None]:
     """Fetch both file_ids list and row metadata in one DB round-trip on cache miss."""
-    from services.cache_service import cache_get, cache_set
+    from services.cache_service import cache_get_many, cache_set, cache_set_many
 
     video_key = f"yt_video:{video_id}"
     meta_key = f"yt_meta:{video_id}"
-    cached_files, cached_meta = await asyncio.gather(
-        cache_get(video_key),
-        cache_get(meta_key),
-    )
+    cache_hits = await cache_get_many([video_key, meta_key])
+    cached_files = cache_hits.get(video_key)
+    cached_meta = cache_hits.get(meta_key)
 
     if isinstance(cached_files, list):
         if not cached_files:
@@ -214,9 +213,9 @@ async def get_cached_video_with_meta(video_id: str) -> tuple[list, dict | None]:
         video_id,
     )
     if not row or not row["file_ids"]:
-        await asyncio.gather(
-            cache_set(video_key, [], ttl_sec=60),
-            cache_set(meta_key, {"_missing": True}, ttl_sec=60),
+        await cache_set_many(
+            {video_key: [], meta_key: {"_missing": True}},
+            ttl_sec=60,
         )
         return [], None
 
@@ -237,9 +236,9 @@ async def get_cached_video_with_meta(video_id: str) -> tuple[list, dict | None]:
         "uploaded_at": row["uploaded_at"],
         "format_type": row["format_type"],
     }
-    await asyncio.gather(
-        cache_set(video_key, parsed, ttl_sec=86400 * 7),
-        cache_set(meta_key, meta, ttl_sec=86400 * 7),
+    await cache_set_many(
+        {video_key: parsed, meta_key: meta},
+        ttl_sec=86400 * 7,
     )
     return parsed, meta
 
@@ -761,33 +760,60 @@ async def count_global_cache() -> int:
     return count
 
 
+_inflight_channels_load: asyncio.Task | None = None
+
+
 async def _load_all_global_channels() -> list[dict]:
-    from services.cache_service import cache_get, cache_set
+    global _inflight_channels_load
+    from services.cache_service import cache_get, cache_set_many
 
     cached = await cache_get("yt_archive:channels_all")
     if isinstance(cached, list):
         return cached
 
-    pool = await get_db()
-    rows = await pool.fetch(
-        f"""
-        SELECT channel_name, COUNT(DISTINCT {_YT_GROUP_KEY_SQL}) AS video_count
-        FROM youtube_cache
-        WHERE {_CHANNEL_KNOWN_SQL}
-          AND {_CACHE_HAS_FILES_SQL}
-        GROUP BY channel_name
-        ORDER BY video_count DESC, channel_name ASC
-        """
-    )
-    serialized = [
-        {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
-        for r in rows
-    ]
-    await asyncio.gather(
-        cache_set("yt_archive:channels_all", serialized, ttl_sec=120),
-        cache_set("yt_archive:count_channels", len(serialized), ttl_sec=120),
-    )
-    return serialized
+    if _inflight_channels_load is not None and not _inflight_channels_load.done():
+        return await asyncio.shield(_inflight_channels_load)
+
+    async def _query() -> list[dict]:
+        pool = await get_db()
+        rows = await pool.fetch(
+            f"""
+            SELECT channel_name, COUNT(DISTINCT {_YT_GROUP_KEY_SQL}) AS video_count
+            FROM youtube_cache
+            WHERE {_CHANNEL_KNOWN_SQL}
+              AND {_CACHE_HAS_FILES_SQL}
+            GROUP BY channel_name
+            ORDER BY video_count DESC, channel_name ASC
+            """
+        )
+        serialized = [
+            {"channel_name": r["channel_name"], "video_count": int(r["video_count"])}
+            for r in rows
+        ]
+        await cache_set_many(
+            {
+                "yt_archive:channels_all": serialized,
+                "yt_archive:count_channels": len(serialized),
+            },
+            ttl_sec=120,
+        )
+        return serialized
+
+    task = asyncio.create_task(_query())
+    _inflight_channels_load = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        global _inflight_channels_load
+        if _inflight_channels_load is done_task:
+            _inflight_channels_load = None
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 async def get_global_channels_page(offset: int = 0, limit: int = CHANNELS_PAGE_SIZE):

@@ -10,6 +10,7 @@ import html
 import re
 import threading
 import time
+import aiohttp
 from dotenv import load_dotenv
 
 from core.task_utils import remove_file_async, stream_aiohttp_to_file
@@ -27,6 +28,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 TIKWM_API_SEMAPHORE = asyncio.Semaphore(2)
 _TIKTOK_YTDLP_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("TIKTOK_YTDLP_CONCURRENT", "3"))))
+_AJAX_DOWNLOADER_SEMAPHORE = asyncio.Semaphore(max(1, int(os.getenv("TIKTOK_AJAX_CONCURRENT", "3"))))
 _TIKTOK_MAX_BYTES = int(os.getenv("TIKTOK_MAX_BYTES", str(512 * 1024 * 1024)))
 _tikwm_last_call = 0.0
 _tikwm_rate_lock = asyncio.Lock()
@@ -109,7 +111,7 @@ async def _download_stream_to_file(
         "Accept": "*/*",
     }
 
-    kwargs = {"headers": headers, "timeout": 60}
+    kwargs = {"headers": headers, "timeout": aiohttp.ClientTimeout(total=60)}
     if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
         kwargs["proxy"] = proxy
 
@@ -148,7 +150,7 @@ async def _fetch_tikwm_video_info(
         "https://tikwm.com/api/",
     ]
 
-    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 20}
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=20)}
     if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
         kwargs["proxy"] = proxy
 
@@ -241,7 +243,7 @@ def _parse_ajax_downloader_links(html_fragment: str) -> list[str]:
     return list(dict.fromkeys(hd_links + sd_links))
 
 
-_primp_clients: dict[str | None, object] = {}
+_primp_clients: dict[str | None, tuple[object, threading.Lock]] = {}
 _primp_lock = threading.Lock()
 
 
@@ -252,16 +254,17 @@ def _get_primp_client(primp_mod, proxy: str | None = None):
         else None
     )
     with _primp_lock:
-        client = _primp_clients.get(valid_proxy)
-        if client is None:
+        entry = _primp_clients.get(valid_proxy)
+        if entry is None:
             if len(_primp_clients) >= 16:
                 _primp_clients.clear()
             client_kwargs = {"impersonate": "chrome_145"}
             if valid_proxy:
                 client_kwargs["proxy"] = valid_proxy
             client = primp_mod.Client(**client_kwargs)
-            _primp_clients[valid_proxy] = client
-        return client
+            entry = (client, threading.Lock())
+            _primp_clients[valid_proxy] = entry
+        return entry
 
 
 async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> list[tuple[str, str]]:
@@ -278,28 +281,30 @@ async def _fetch_ajax_downloader_urls(url: str, proxy: str | None = None) -> lis
     ]
 
     def _query_sync() -> list[tuple[str, str]]:
-        client = _get_primp_client(primp, proxy)
+        client, client_lock = _get_primp_client(primp, proxy)
 
         collected: list[tuple[str, str]] = []
-        for endpoint, referer in providers:
-            try:
-                resp = client.post(endpoint, data={"q": url, "lang": "en"}, timeout=15)
-                if resp.status_code != 200:
-                    logger.warning("[TikTok] %s returned HTTP %s", endpoint, resp.status_code)
-                    continue
-                payload = resp.json()
-                html_fragment = payload.get("data") if isinstance(payload, dict) else None
-                if not html_fragment:
-                    continue
-                for dl_url in _parse_ajax_downloader_links(html_fragment):
-                    collected.append((dl_url, referer))
-                if collected:
-                    return collected
-            except Exception as exc:
-                logger.warning("[TikTok] %s error: %s", endpoint, exc)
+        with client_lock:
+            for endpoint, referer in providers:
+                try:
+                    resp = client.post(endpoint, data={"q": url, "lang": "en"}, timeout=15)
+                    if resp.status_code != 200:
+                        logger.warning("[TikTok] %s returned HTTP %s", endpoint, resp.status_code)
+                        continue
+                    payload = resp.json()
+                    html_fragment = payload.get("data") if isinstance(payload, dict) else None
+                    if not html_fragment:
+                        continue
+                    for dl_url in _parse_ajax_downloader_links(html_fragment):
+                        collected.append((dl_url, referer))
+                    if collected:
+                        return collected
+                except Exception as exc:
+                    logger.warning("[TikTok] %s error: %s", endpoint, exc)
         return collected
 
-    return await asyncio.to_thread(_query_sync)
+    async with _AJAX_DOWNLOADER_SEMAPHORE:
+        return await asyncio.to_thread(_query_sync)
 
 
 async def _exec_ytdlp_download(url: str, proxy: str | None = None) -> str | None:
@@ -519,7 +524,7 @@ async def search_tiktok_videos(query: str, max_results: int = 10):
         "https://tikwm.com/api/feed/search",
     ]
     proxy = _get_proxy()
-    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
     if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
         kwargs["proxy"] = proxy
 
@@ -701,7 +706,7 @@ async def get_tiktok_trends(count: int = 10):
         f"https://tikwm.com/api/feed/list?region=US&count={count}",
     ]
     proxy = _get_proxy()
-    kwargs = {"headers": DEFAULT_HEADERS, "timeout": 15}
+    kwargs = {"headers": DEFAULT_HEADERS, "timeout": aiohttp.ClientTimeout(total=15)}
     if proxy and (proxy.startswith("http://") or proxy.startswith("https://")):
         kwargs["proxy"] = proxy
 

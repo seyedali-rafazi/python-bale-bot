@@ -1,8 +1,12 @@
 import asyncio
+import hashlib
 import re
 from urllib.parse import quote
+import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from services.cache_service import cache_get, cache_set
 from services.http_client import get_http_session
+from services.rate_limiter import user_action_lock
 from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip
 from core.limits import get_limit
@@ -24,6 +28,42 @@ GITHUB_TEMP_DIR = os.path.join("downloads", "github")
 download_queue: asyncio.Queue = asyncio.Queue(maxsize=GITHUB_QUEUE_MAXSIZE)
 _worker_tasks: list[asyncio.Task] = []
 _gh_repo_cache = StateCache(max_capacity=2000, default_ttl=3600.0)
+_inflight_gh_queries: dict[str, asyncio.Task] = {}
+_GH_API_CACHE_TTL_SEC = 300
+
+
+async def _fetch_github_json_cached(cache_key: str, url: str) -> tuple[int, object]:
+    cached = await cache_get(cache_key)
+    if isinstance(cached, dict) and "status" in cached and "data" in cached:
+        return int(cached["status"]), cached["data"]
+
+    existing = _inflight_gh_queries.get(cache_key)
+    if existing is not None and not existing.done():
+        return await asyncio.shield(existing)
+
+    async def _fetch() -> tuple[int, object]:
+        session = await get_http_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            status = resp.status
+            data = await resp.json() if status == 200 else None
+        if status == 200 and data is not None:
+            await cache_set(cache_key, {"status": status, "data": data}, ttl_sec=_GH_API_CACHE_TTL_SEC)
+        return status, data
+
+    task = asyncio.create_task(_fetch())
+    _inflight_gh_queries[cache_key] = task
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        if _inflight_gh_queries.get(cache_key) is done_task:
+            _inflight_gh_queries.pop(cache_key, None)
+        if not done_task.cancelled():
+            try:
+                done_task.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 def _gh_callback_data(full_name: str) -> str:
@@ -144,16 +184,20 @@ async def handle_github_state(
         await enqueue_download(update, context, chat_id, repo_path, user_id)
 
     elif step == "waiting_gh_user":
-        await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
-        session = await get_http_session()
-        encoded_user = quote(text.strip().lstrip("@"), safe="")
-        try:
-            async with session.get(
-                f"https://api.github.com/users/{encoded_user}/repos?sort=updated&per_page=10",
-                timeout=30,
-            ) as resp:
-                if resp.status == 200:
-                    repos = await resp.json()
+        async with user_action_lock(user_id, "gh_search", timeout_sec=15) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ درخواست قبلی شما در حال انجام است. لطفاً صبر کنید.")
+                return
+            await update.message.reply_text("⏳ در حال دریافت اطلاعات کاربر...")
+            clean_user = text.strip().lstrip("@")
+            encoded_user = quote(clean_user, safe="")
+            u_hash = hashlib.md5(clean_user.lower().encode("utf-8")).hexdigest()[:16]
+            try:
+                status, repos = await _fetch_github_json_cached(
+                    f"gh:user:{u_hash}",
+                    f"https://api.github.com/users/{encoded_user}/repos?sort=updated&per_page=10",
+                )
+                if status == 200 and isinstance(repos, list):
                     msg = f"📂 ۱۰ ریپازیتوری آخر {text}:\n\n"
                     keyboard = []
                     for i, repo in enumerate(repos):
@@ -172,19 +216,23 @@ async def handle_github_state(
                     )
                 else:
                     await update.message.reply_text("❌ کاربر یافت نشد.")
-        except Exception:
-            await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
+            except Exception:
+                await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
 
     elif step == "waiting_gh_search":
-        await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
-        session = await get_http_session()
-        try:
-            async with session.get(
-                f"https://api.github.com/search/repositories?q={quote(text.strip(), safe='')}&per_page=10",
-                timeout=30,
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
+        async with user_action_lock(user_id, "gh_search", timeout_sec=15) as acquired:
+            if not acquired:
+                await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است. لطفاً صبر کنید.")
+                return
+            await update.message.reply_text("⏳ در حال جستجو در گیت‌هاب...")
+            clean_query = text.strip()
+            q_hash = hashlib.md5(clean_query.lower().encode("utf-8")).hexdigest()[:16]
+            try:
+                status, data = await _fetch_github_json_cached(
+                    f"gh:search:{q_hash}",
+                    f"https://api.github.com/search/repositories?q={quote(clean_query, safe='')}&per_page=10",
+                )
+                if status == 200 and isinstance(data, dict):
                     repos = data.get("items", [])
                     if not repos:
                         await update.message.reply_text("❌ نتیجه‌ای یافت نشد.")
@@ -208,8 +256,8 @@ async def handle_github_state(
                     )
                 else:
                     await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب.")
-        except Exception:
-            await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
+            except Exception:
+                await update.message.reply_text("❌ خطا در ارتباط با گیت‌هاب. لطفاً دوباره تلاش کنید.")
 
 
 async def process_github_download(
@@ -261,7 +309,7 @@ async def process_github_download(
         preview_task = track_task(_send_preview_safe(), name=f"gh_preview_{chat_id}")
 
         async with session.get(
-            zip_url, headers=headers, allow_redirects=True, timeout=120
+            zip_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=120)
         ) as resp:
             if resp.status == 200:
                 max_bytes = 50 * 1024 * 1024  # محدودیت 50 مگابایت

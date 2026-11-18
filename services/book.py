@@ -65,6 +65,7 @@ SOURCE_LABELS = {
 _async_clients: dict[bool, httpx.AsyncClient] = {}
 _async_clients_lock = asyncio.Lock()
 _BOOK_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(4)
+_IA_META_SEMAPHORE = asyncio.Semaphore(6)
 
 
 async def _get_shared_async_client(verify: bool = True) -> httpx.AsyncClient:
@@ -166,8 +167,6 @@ async def _search_internet_archive(query: str, max_results: int) -> List[dict]:
     if not docs:
         return []
 
-    meta_sem = asyncio.Semaphore(6)
-
     async def _resolve_pdf(doc: dict) -> Optional[dict]:
         ident = doc.get("identifier")
         if not ident:
@@ -180,7 +179,7 @@ async def _search_internet_archive(query: str, max_results: int) -> List[dict]:
                     return None
                 best_pdf = cached_best.get("best_pdf")
             else:
-                async with meta_sem:
+                async with _IA_META_SEMAPHORE:
                     meta_resp = await client.get(_IA_META_URL.format(ident=ident), timeout=6.0)
                 if meta_resp.status_code != 200:
                     return None

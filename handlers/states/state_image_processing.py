@@ -17,6 +17,7 @@ from core.state_manager import StateCache, get_state, clear_state
 from core.keyboards import get_main_menu_keyboard
 from core.database import log_upload_success
 from core.task_utils import bounded_large_upload, load_input_file, remove_file_async, remove_files_async, track_task
+from services.rate_limiter import user_action_lock
 import time
 
 # Try to import rembg, but make it optional
@@ -31,7 +32,16 @@ except ImportError:
 # Semaphore to limit concurrent heavy media operations (video-to-gif, audio extraction)
 MEDIA_MAX_CONCURRENT = 2
 media_processing_semaphore = asyncio.Semaphore(MEDIA_MAX_CONCURRENT)
+_IMAGE_OP_SEMAPHORE = asyncio.Semaphore(max(2, int(os.getenv("IMAGE_OP_CONCURRENT", "3"))))
 _rembg_semaphore = asyncio.Semaphore(1)
+_MAX_IMAGE_PIXELS = 50_000_000
+_MAX_INPUT_FILE_BYTES = 50 * 1024 * 1024
+
+if PIL_AVAILABLE and Image is not None:
+    try:
+        Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+    except Exception:
+        pass
 
 _IMG_TMP_DIR = os.path.join("downloads", "img_tmp")
 
@@ -104,8 +114,134 @@ async def _download_image_to_disk(bot, file_id: str, prefix: str) -> str:
 
 def _open_pil_image(source):
     if isinstance(source, (bytes, bytearray)):
-        return Image.open(io.BytesIO(source))
-    return Image.open(source)
+        img = Image.open(io.BytesIO(source))
+    else:
+        img = Image.open(source)
+    if img.width * img.height > _MAX_IMAGE_PIXELS:
+        img.close()
+        raise ValueError("ابعاد عکس بیش از حد مجاز است.")
+    return img
+
+
+async def create_pdf_from_images(images_sources, chat_id):
+    """Create PDF from list of image paths or raw image bytes without keeping 20 bitmaps in RAM."""
+
+    def _create_pdf():
+        os.makedirs("downloads", exist_ok=True)
+        pdf_path = f"downloads/pdf_{chat_id}_{uuid.uuid4().hex[:8]}.pdf"
+        temp_jpegs: list[str] = []
+        lazy_pages: list = []
+        try:
+            for src in images_sources:
+                with _open_pil_image(src) as img:
+                    if max(img.size) > 2400:
+                        img.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+                    if img.mode in ("RGBA", "LA", "P"):
+                        rgb = Image.new("RGB", img.size, (255, 255, 255))
+                        rgba = img.convert("RGBA") if img.mode == "P" else img
+                        try:
+                            rgb.paste(rgba, mask=rgba.split()[-1] if rgba.mode in ("RGBA", "LA") else None)
+                        finally:
+                            if rgba is not img:
+                                rgba.close()
+                        out_img = rgb
+                    elif img.mode != "RGB":
+                        out_img = img.convert("RGB")
+                    else:
+                        out_img = img
+                    tmp_jpg = f"downloads/pdf_pg_{chat_id}_{uuid.uuid4().hex[:8]}.jpg"
+                    try:
+                        out_img.save(tmp_jpg, format="JPEG", quality=90)
+                        temp_jpegs.append(tmp_jpg)
+                    finally:
+                        if out_img is not img:
+                            out_img.close()
+
+            for tmp_jpg in temp_jpegs:
+                lazy_pages.append(Image.open(tmp_jpg))
+
+            lazy_pages[0].save(pdf_path, save_all=True, append_images=lazy_pages[1:])
+            return pdf_path
+        finally:
+            for im in lazy_pages:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+            _remove_files_quietly(temp_jpegs)
+
+    async with _IMAGE_OP_SEMAPHORE:
+        return await asyncio.to_thread(_create_pdf)
+
+
+async def convert_image_format(image_source, target_format, chat_id):
+    """Convert image (disk path or bytes) to target format."""
+
+    def _convert():
+        with _open_pil_image(image_source) as img:
+            # Determine the save format (PIL uses JPEG not JPG)
+            save_format = "JPEG" if target_format == "JPG" else target_format
+
+            # Handle transparency for formats that don't support it
+            if save_format in ["JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                try:
+                    if img.mode == "RGBA":
+                        background.paste(img, mask=img.split()[3])
+                    else:
+                        background.paste(img, mask=img.split()[1])
+                    out_img = background
+                except Exception:
+                    background.close()
+                    raise
+            else:
+                out_img = img
+
+            os.makedirs("downloads", exist_ok=True)
+            output_path = (
+                f"downloads/converted_{chat_id}_{uuid.uuid4().hex[:8]}.{target_format.lower()}"
+            )
+            try:
+                out_img.save(output_path, format=save_format)
+            finally:
+                if out_img is not img:
+                    out_img.close()
+            return output_path
+
+    async with _IMAGE_OP_SEMAPHORE:
+        return await asyncio.to_thread(_convert)
+
+
+async def resize_image(image_source, size_text, chat_id):
+    """Resize image (disk path or bytes) based on size text."""
+
+    def _resize():
+        with _open_pil_image(image_source) as img:
+            if "%" in size_text:
+                percent = int(size_text.replace("%", ""))
+                new_width = int(img.width * percent / 100)
+                new_height = int(img.height * percent / 100)
+            elif "x" in size_text.lower():
+                width, height = size_text.lower().split("x")
+                new_width = int(width)
+                new_height = int(height)
+            else:
+                raise ValueError("Invalid size format")
+
+            if new_width <= 0 or new_height <= 0 or new_width > 10000 or new_height > 10000:
+                raise ValueError("Invalid dimensions")
+
+            resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            os.makedirs("downloads", exist_ok=True)
+            output_path = f"downloads/resized_{chat_id}_{uuid.uuid4().hex[:8]}.png"
+            try:
+                resized_img.save(output_path)
+            finally:
+                resized_img.close()
+            return output_path
+
+    async with _IMAGE_OP_SEMAPHORE:
+        return await asyncio.to_thread(_resize)
 
 
 async def handle_img_create_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -440,103 +576,6 @@ async def handle_img_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYP
 # Helper functions
 
 
-async def create_pdf_from_images(images_sources, chat_id):
-    """Create PDF from list of image paths or raw image bytes."""
-
-    def _create_pdf():
-        images = []
-        try:
-            for src in images_sources:
-                with _open_pil_image(src) as img:
-                    if img.mode != "RGB":
-                        converted = img.convert("RGB")
-                    else:
-                        converted = img.copy()
-                    images.append(converted)
-
-            os.makedirs("downloads", exist_ok=True)
-            pdf_path = f"downloads/pdf_{chat_id}_{uuid.uuid4().hex[:8]}.pdf"
-
-            images[0].save(pdf_path, save_all=True, append_images=images[1:])
-            return pdf_path
-        finally:
-            for im in images:
-                try:
-                    im.close()
-                except Exception:
-                    pass
-
-    return await asyncio.to_thread(_create_pdf)
-
-
-async def convert_image_format(image_source, target_format, chat_id):
-    """Convert image (disk path or bytes) to target format."""
-
-    def _convert():
-        with _open_pil_image(image_source) as img:
-            # Determine the save format (PIL uses JPEG not JPG)
-            save_format = "JPEG" if target_format == "JPG" else target_format
-
-            # Handle transparency for formats that don't support it
-            if save_format in ["JPEG", "BMP"] and img.mode in ["RGBA", "LA"]:
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                try:
-                    if img.mode == "RGBA":
-                        background.paste(img, mask=img.split()[3])
-                    else:
-                        background.paste(img, mask=img.split()[1])
-                    out_img = background
-                except Exception:
-                    background.close()
-                    raise
-            else:
-                out_img = img
-
-            os.makedirs("downloads", exist_ok=True)
-            output_path = (
-                f"downloads/converted_{chat_id}_{uuid.uuid4().hex[:8]}.{target_format.lower()}"
-            )
-            try:
-                out_img.save(output_path, format=save_format)
-            finally:
-                if out_img is not img:
-                    out_img.close()
-            return output_path
-
-    return await asyncio.to_thread(_convert)
-
-
-async def resize_image(image_source, size_text, chat_id):
-    """Resize image (disk path or bytes) based on size text."""
-
-    def _resize():
-        with _open_pil_image(image_source) as img:
-            if "%" in size_text:
-                percent = int(size_text.replace("%", ""))
-                new_width = int(img.width * percent / 100)
-                new_height = int(img.height * percent / 100)
-            elif "x" in size_text.lower():
-                width, height = size_text.lower().split("x")
-                new_width = int(width)
-                new_height = int(height)
-            else:
-                raise ValueError("Invalid size format")
-
-            if new_width <= 0 or new_height <= 0 or new_width > 10000 or new_height > 10000:
-                raise ValueError("Invalid dimensions")
-
-            resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            os.makedirs("downloads", exist_ok=True)
-            output_path = f"downloads/resized_{chat_id}_{uuid.uuid4().hex[:8]}.png"
-            try:
-                resized_img.save(output_path)
-            finally:
-                resized_img.close()
-            return output_path
-
-    return await asyncio.to_thread(_resize)
-
-
 async def remove_background(image_source, chat_id):
     """Remove background from image (disk path or bytes)."""
     if not REMBG_AVAILABLE:
@@ -577,48 +616,58 @@ async def handle_img_video_to_gif(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("❌ لطفاً یک ویدیو ارسال کنید.")
         return
 
-    # Check queue status
-    waiters = (
-        len(media_processing_semaphore._waiters)
-        if hasattr(media_processing_semaphore, "_waiters") and media_processing_semaphore._waiters
-        else 0
-    )
-    
-    in_queue = media_processing_semaphore.locked()
-    if in_queue:
-        status_msg = await update.message.reply_text(
-            f"⏳ ربات در حال پردازش درخواست‌های دیگر است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
+    file_size = getattr(video_file, "file_size", None)
+    if file_size and file_size > _MAX_INPUT_FILE_BYTES:
+        await update.message.reply_text("❌ حجم فایل ویدیو بیش از حد مجاز (۵۰ مگابایت) است.")
+        return
+
+    async with user_action_lock(chat_id, "img_media_job", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما هنوز در حال ثبت است. لطفاً صبر کنید.")
+            return
+
+        # Check queue status
+        waiters = (
+            len(media_processing_semaphore._waiters)
+            if hasattr(media_processing_semaphore, "_waiters") and media_processing_semaphore._waiters
+            else 0
         )
-    else:
-        status_msg = await update.message.reply_text("⏳ درخواست شما ثبت شد. در حال اتصال به صف پردازش...")
 
-    # Clear user state immediately so they are free to use the bot
-    clear_state(chat_id)
+        in_queue = media_processing_semaphore.locked()
+        if in_queue:
+            status_msg = await update.message.reply_text(
+                f"⏳ ربات در حال پردازش درخواست‌های دیگر است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
+            )
+        else:
+            status_msg = await update.message.reply_text("⏳ درخواست شما ثبت شد. در حال اتصال به صف پردازش...")
 
-    req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
-    await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
-    temp_video_path = f"downloads/temp_video_{chat_id}_{req_uid}"
-    
-    ext = ".mp4"
-    if hasattr(video_file, "file_name") and video_file.file_name:
-        _, file_ext = os.path.splitext(video_file.file_name)
-        if file_ext:
-            ext = file_ext
-    temp_video_path += ext
+        # Clear user state immediately so they are free to use the bot
+        clear_state(chat_id)
 
-    # Launch background task tracked for clean shutdown
-    track_task(
-        background_video_to_gif(
-            context,
-            chat_id,
-            video_file,
-            status_msg,
-            req_uid,
-            temp_video_path,
-            in_queue
-        ),
-        name=f"img_gif_{chat_id}",
-    )
+        req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
+        temp_video_path = f"downloads/temp_video_{chat_id}_{req_uid}"
+
+        ext = ".mp4"
+        if hasattr(video_file, "file_name") and video_file.file_name:
+            _, file_ext = os.path.splitext(video_file.file_name)
+            if file_ext:
+                ext = file_ext
+        temp_video_path += ext
+
+        # Launch background task tracked for clean shutdown
+        track_task(
+            background_video_to_gif(
+                context,
+                chat_id,
+                video_file,
+                status_msg,
+                req_uid,
+                temp_video_path,
+                in_queue
+            ),
+            name=f"img_gif_{chat_id}",
+        )
 
 
 async def background_video_to_gif(
@@ -763,48 +812,58 @@ async def handle_img_extract_audio(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text("❌ لطفاً یک ویدیو یا فایل رسانه‌ای ارسال کنید.")
         return
 
-    # Check queue status
-    waiters = (
-        len(media_processing_semaphore._waiters)
-        if hasattr(media_processing_semaphore, "_waiters") and media_processing_semaphore._waiters
-        else 0
-    )
-    
-    in_queue = media_processing_semaphore.locked()
-    if in_queue:
-        status_msg = await update.message.reply_text(
-            f"⏳ ربات در حال پردازش درخواست‌های دیگر است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
+    file_size = getattr(video_file, "file_size", None)
+    if file_size and file_size > _MAX_INPUT_FILE_BYTES:
+        await update.message.reply_text("❌ حجم فایل بیش از حد مجاز (۵۰ مگابایت) است.")
+        return
+
+    async with user_action_lock(chat_id, "img_media_job", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما هنوز در حال ثبت است. لطفاً صبر کنید.")
+            return
+
+        # Check queue status
+        waiters = (
+            len(media_processing_semaphore._waiters)
+            if hasattr(media_processing_semaphore, "_waiters") and media_processing_semaphore._waiters
+            else 0
         )
-    else:
-        status_msg = await update.message.reply_text("⏳ درخواست شما ثبت شد. در حال اتصال به صف پردازش...")
 
-    # Clear user state immediately so they are free to use the bot
-    clear_state(chat_id)
+        in_queue = media_processing_semaphore.locked()
+        if in_queue:
+            status_msg = await update.message.reply_text(
+                f"⏳ ربات در حال پردازش درخواست‌های دیگر است. شما در صف قرار گرفتید (نفر {waiters + 1} در صف). لطفاً صبور باشید..."
+            )
+        else:
+            status_msg = await update.message.reply_text("⏳ درخواست شما ثبت شد. در حال اتصال به صف پردازش...")
 
-    req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
-    await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
-    temp_media_path = f"downloads/temp_media_{chat_id}_{req_uid}"
-    
-    ext = ".mp4"
-    if hasattr(video_file, "file_name") and video_file.file_name:
-        _, file_ext = os.path.splitext(video_file.file_name)
-        if file_ext:
-            ext = file_ext
-    temp_media_path += ext
+        # Clear user state immediately so they are free to use the bot
+        clear_state(chat_id)
 
-    # Launch background task tracked for clean shutdown
-    track_task(
-        background_extract_audio(
-            context,
-            chat_id,
-            video_file,
-            status_msg,
-            req_uid,
-            temp_media_path,
-            in_queue
-        ),
-        name=f"img_audio_{chat_id}",
-    )
+        req_uid = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        await asyncio.to_thread(os.makedirs, "downloads", exist_ok=True)
+        temp_media_path = f"downloads/temp_media_{chat_id}_{req_uid}"
+
+        ext = ".mp4"
+        if hasattr(video_file, "file_name") and video_file.file_name:
+            _, file_ext = os.path.splitext(video_file.file_name)
+            if file_ext:
+                ext = file_ext
+        temp_media_path += ext
+
+        # Launch background task tracked for clean shutdown
+        track_task(
+            background_extract_audio(
+                context,
+                chat_id,
+                video_file,
+                status_msg,
+                req_uid,
+                temp_media_path,
+                in_queue
+            ),
+            name=f"img_audio_{chat_id}",
+        )
 
 
 async def background_extract_audio(

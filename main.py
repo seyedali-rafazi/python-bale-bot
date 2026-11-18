@@ -137,7 +137,16 @@ def _cleanup_old_downloads_sync(
             logger.warning("Could not resolve base path %s: %s", directory, e)
             continue
 
-        for root, _dirs, files in os.walk(directory):
+        is_kaggle_temp = os.path.basename(base_real) == "kaggle_temp"
+        dir_mtimes: dict[str, float] = {}
+        if is_kaggle_temp:
+            for r, _d, _f in os.walk(directory):
+                try:
+                    dir_mtimes[os.path.realpath(r)] = os.stat(r, follow_symlinks=False).st_mtime
+                except OSError:
+                    pass
+
+        for root, dirs, files in os.walk(directory, topdown=False):
             for f in files:
                 file_path = os.path.join(root, f)
                 total_scanned += 1
@@ -163,6 +172,16 @@ def _cleanup_old_downloads_sync(
                 except Exception as e:
                     total_errors += 1
                     logger.debug("Failed to remove file %s: %s", file_path, e)
+
+            if is_kaggle_temp:
+                root_real = os.path.realpath(root)
+                if root_real != base_real:
+                    try:
+                        orig_mtime = dir_mtimes.get(root_real, now)
+                        if not os.listdir(root) and orig_mtime < now - max_age_sec:
+                            os.rmdir(root)
+                    except OSError:
+                        pass
 
     return total_scanned, total_deleted, total_errors
 
@@ -295,8 +314,11 @@ async def on_shutdown(app):
     except Exception:
         logger.exception("PostgreSQL close_db on shutdown failed")
 
-    # 8. Close Redis client
+    # 8. Flush fire-and-forget Redis state tasks & close Redis client
     try:
+        from core.state_manager import flush_pending_state_tasks
+
+        await flush_pending_state_tasks(timeout=3.0)
         await close_redis()
     except Exception:
         logger.exception("Redis cleanup on shutdown failed")

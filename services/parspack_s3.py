@@ -158,10 +158,15 @@ def upload_to_s3(
 
 
 async def async_upload_to_s3_with_key(
-    file_path: str, object_name: str = None, progress_dict: dict = None
+    file_path: str,
+    object_name: str = None,
+    progress_dict: dict = None,
+    *,
+    upload_fn=None,
 ) -> tuple[str | None, str | None]:
     """Bounded async wrapper for S3 uploads to cap s3transfer thread contention."""
+    target_fn = upload_fn or upload_to_s3_with_key
     async with _S3_UPLOAD_SEMAPHORE:
         return await asyncio.to_thread(
-            upload_to_s3_with_key, file_path, object_name, progress_dict
+            target_fn, file_path, object_name, progress_dict
         )

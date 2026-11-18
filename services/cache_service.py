@@ -5,6 +5,7 @@ Provides sub-millisecond caching using Redis with automatic JSON serialization
 and a local in-memory fallback cache when Redis is unavailable.
 """
 
+import asyncio
 from collections import OrderedDict
 import json
 import logging
@@ -114,4 +115,77 @@ async def cache_delete_many(keys: list[str]) -> bool:
         except Exception as e:
             mark_redis_failure(e)
             logger.debug("Redis cache_delete_many error: %s", e)
+    return True
+
+
+_ORIG_CACHE_GET = cache_get
+_ORIG_CACHE_SET = cache_set
+
+
+async def cache_get_many(keys: list[str]) -> dict[str, Any]:
+    """Batch-retrieve multiple keys from Redis (MGET) or local fallback."""
+    if not keys:
+        return {}
+    if cache_get is not _ORIG_CACHE_GET:
+        vals = await asyncio.gather(*(cache_get(k) for k in keys))
+        return {k: v for k, v in zip(keys, vals) if v is not None}
+
+    out: dict[str, Any] = {}
+    redis = get_async_redis()
+    if redis is not None:
+        try:
+            prefixed = [f"bale:cache:{k}" for k in keys]
+            raw_vals = await redis.mget(prefixed)
+            for k, val in zip(keys, raw_vals):
+                if val is not None:
+                    try:
+                        out[k] = json.loads(val)
+                    except Exception:
+                        out[k] = val
+            return out
+        except Exception as e:
+            mark_redis_failure(e)
+            logger.debug("Redis cache_get_many error: %s", e)
+
+    now = time.monotonic()
+    for k in keys:
+        entry = _local_cache.get(k)
+        if entry is not None:
+            val, exp = entry
+            if exp > now:
+                _local_cache.move_to_end(k)
+                out[k] = val
+            else:
+                _local_cache.pop(k, None)
+    return out
+
+
+async def cache_set_many(items: dict[str, Any], ttl_sec: int = 3600) -> bool:
+    """Batch-store multiple items in Redis (pipeline) or local fallback."""
+    if not items:
+        return True
+    if cache_set is not _ORIG_CACHE_SET:
+        await asyncio.gather(*(cache_set(k, v, ttl_sec=ttl_sec) for k, v in items.items()))
+        return True
+
+    ttl = max(1, ttl_sec)
+    redis = get_async_redis()
+    if redis is not None:
+        try:
+            pipe = redis.pipeline()
+            for k, v in items.items():
+                serialized = json.dumps(v, ensure_ascii=False)
+                pipe.set(f"bale:cache:{k}", serialized, ex=ttl)
+            await pipe.execute()
+            return True
+        except Exception as e:
+            mark_redis_failure(e)
+            logger.debug("Redis cache_set_many error: %s", e)
+
+    exp = time.monotonic() + ttl
+    for k, v in items.items():
+        if k not in _local_cache and len(_local_cache) >= MAX_LOCAL_CACHE_SIZE:
+            _cleanup_local_cache()
+        _local_cache[k] = (v, exp)
+        _local_cache.move_to_end(k)
     return True
