@@ -1,9 +1,12 @@
 import logging
 import os
 import shutil
+import struct
 import subprocess
 import threading
+import time
 import zipfile
+import zlib
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -31,16 +34,211 @@ def _is_incompressible(path: str) -> bool:
     return ext in _INCOMPRESSIBLE_EXTS
 
 
+def _make_crc32_table() -> tuple[int, ...]:
+    table = []
+    for i in range(256):
+        c = i
+        for _ in range(8):
+            c = (0xEDB88320 ^ (c >> 1)) if (c & 1) else (c >> 1)
+        table.append(c)
+    return tuple(table)
+
+
+_CRC32_TABLE = _make_crc32_table()
+
+
+class _ZipCrypto:
+    """Minimal PKWARE ZipCrypto stream cipher for password-protected ZIP fallback."""
+
+    def __init__(self, password: bytes):
+        self.k0 = 0x12345678
+        self.k1 = 0x23456789
+        self.k2 = 0x34567890
+        for b in password:
+            self._update_keys(b)
+
+    def _update_keys(self, b: int) -> None:
+        self.k0 = ((self.k0 >> 8) ^ _CRC32_TABLE[(self.k0 ^ b) & 0xFF]) & 0xFFFFFFFF
+        self.k1 = ((self.k1 + (self.k0 & 0xFF)) * 134775813 + 1) & 0xFFFFFFFF
+        self.k2 = ((self.k2 >> 8) ^ _CRC32_TABLE[(self.k2 ^ (self.k1 >> 24)) & 0xFF]) & 0xFFFFFFFF
+
+    def _decrypt_byte(self) -> int:
+        temp = (self.k2 | 2) & 0xFFFF
+        return ((temp * (temp ^ 1)) >> 8) & 0xFF
+
+    def encrypt_bytes(self, data: bytes) -> bytes:
+        out = bytearray(len(data))
+        for i, b in enumerate(data):
+            k = self._decrypt_byte()
+            self._update_keys(b)
+            out[i] = b ^ k
+        return bytes(out)
+
+
+def _dos_time_date(mtime: float) -> tuple[int, int]:
+    t = time.localtime(mtime)
+    dos_time = (t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec // 2)
+    dos_date = ((max(1980, t.tm_year) - 1980) << 9) | (t.tm_mon << 5) | t.tm_mday
+    return dos_time, dos_date
+
+
+def _write_encrypted_zip_single(
+    input_path: str,
+    zip_path: str,
+    arcname: str,
+    password: str,
+    compression_level: int = 6,
+) -> str:
+    """Create a standard ZipCrypto-encrypted single-file ZIP in streaming chunks."""
+    incompressible = _is_incompressible(input_path)
+    method = zipfile.ZIP_STORED if incompressible else zipfile.ZIP_DEFLATED
+
+    crc = 0
+    uncomp_size = 0
+    with open(input_path, "rb") as f:
+        while True:
+            chunk = f.read(_STREAM_CHUNK_BYTES)
+            if not chunk:
+                break
+            uncomp_size += len(chunk)
+            crc = zlib.crc32(chunk, crc) & 0xFFFFFFFF
+
+    dos_time, dos_date = _dos_time_date(os.path.getmtime(input_path))
+    name_bytes = arcname.encode("utf-8")
+    flag_bits = 0x0801  # bit 0: encrypted, bit 11: UTF-8 filename
+
+    crypto = _ZipCrypto(password.encode("utf-8"))
+    header_rand = os.urandom(11) + bytes([(crc >> 24) & 0xFF])
+    enc_header = crypto.encrypt_bytes(header_rand)
+
+    with open(zip_path, "wb") as dst:
+        # Write placeholder local file header (sizes updated after streaming)
+        local_hdr_offset = dst.tell()
+        dst.write(
+            struct.pack(
+                "<IHHHHHIIIHH",
+                0x04034B50,
+                20,
+                flag_bits,
+                method,
+                dos_time,
+                dos_date,
+                crc,
+                0,
+                uncomp_size,
+                len(name_bytes),
+                0,
+            )
+        )
+        dst.write(name_bytes)
+        dst.write(enc_header)
+
+        comp_size = len(enc_header)
+        compressor = None if method == zipfile.ZIP_STORED else zlib.compressobj(
+            compression_level, zlib.DEFLATED, -zlib.MAX_WBITS
+        )
+        with open(input_path, "rb") as src:
+            while True:
+                chunk = src.read(_STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                payload = chunk if compressor is None else compressor.compress(chunk)
+                if payload:
+                    enc = crypto.encrypt_bytes(payload)
+                    dst.write(enc)
+                    comp_size += len(enc)
+        if compressor is not None:
+            tail = compressor.flush()
+            if tail:
+                enc = crypto.encrypt_bytes(tail)
+                dst.write(enc)
+                comp_size += len(enc)
+
+        cd_offset = dst.tell()
+        # Patch compressed size in local file header
+        dst.seek(local_hdr_offset + 18)
+        dst.write(struct.pack("<I", comp_size))
+        dst.seek(cd_offset)
+
+        # Central directory file header
+        dst.write(
+            struct.pack(
+                "<IHHHHHHIIIHHHHHII",
+                0x02014B50,
+                20,
+                20,
+                flag_bits,
+                method,
+                dos_time,
+                dos_date,
+                crc,
+                comp_size,
+                uncomp_size,
+                len(name_bytes),
+                0,
+                0,
+                0,
+                0,
+                0,
+                local_hdr_offset,
+            )
+        )
+        dst.write(name_bytes)
+        cd_size = dst.tell() - cd_offset
+
+        # End of central directory
+        dst.write(
+            struct.pack(
+                "<IHHHHIIH",
+                0x06054B50,
+                0,
+                0,
+                1,
+                1,
+                cd_size,
+                cd_offset,
+                0,
+            )
+        )
+    return zip_path
+
+
 def make_zip_single(
     input_path: str,
     zip_path: str,
     arcname: str | None = None,
     compression_level: int = 6,
+    password: str | None = None,
 ) -> str:
     if not arcname:
         arcname = os.path.basename(input_path)
 
     os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
+    if password:
+        zip_cmd = shutil.which("zip")
+        if zip_cmd:
+            try:
+                if os.path.isfile(zip_path):
+                    os.remove(zip_path)
+                cmd = [zip_cmd, "-j", "-P", password]
+                if _is_incompressible(input_path):
+                    cmd.append("-0")
+                cmd.extend([zip_path, input_path])
+                with _ZIP_SUBPROC_SEM:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if proc.returncode == 0 and os.path.isfile(zip_path):
+                    return zip_path
+                logger.warning("zip -P failed, falling back to Python ZipCrypto: %s", proc.stderr or proc.stdout)
+            except Exception as e:
+                logger.warning("zip -P error, falling back to Python ZipCrypto: %s", e)
+        return _write_encrypted_zip_single(
+            input_path=input_path,
+            zip_path=zip_path,
+            arcname=arcname,
+            password=password,
+            compression_level=compression_level,
+        )
+
     incompressible = _is_incompressible(input_path)
     compression = zipfile.ZIP_STORED if incompressible else zipfile.ZIP_DEFLATED
     zf_kwargs = {"mode": "w", "compression": compression}
@@ -73,6 +271,7 @@ def _try_spanned_zip(
     out_dir: str,
     zip_basename: str,
     max_part_bytes: int,
+    password: str | None = None,
 ) -> List[str] | None:
     """
     ساخت ZIP تقسیم‌شده استاندارد با zip -s (قابل باز شدن در 7-Zip / WinRAR).
@@ -93,6 +292,8 @@ def _try_spanned_zip(
 
     try:
         cmd = [zip_cmd, "-j"]
+        if password:
+            cmd.extend(["-P", password])
         if _is_incompressible(input_path):
             cmd.append("-0")
         cmd.extend([f"-s{mb}m", archive_zip, input_path])
@@ -195,13 +396,17 @@ def format_merge_instructions(
     archive_basename: str,
     total_parts: int,
     split_method: str,
+    password: str | None = None,
 ) -> str:
     if total_parts <= 1:
         return ""
 
+    pwd_line = f"\n🔑 **رمز فایل (Password):** `{password}`\n" if password else ""
+
     if split_method == "spanned":
         return (
-            f"📦 فایل در {total_parts} پارت ارسال شد ({archive_basename}.zip و .z01 …)\n\n"
+            f"📦 فایل در {total_parts} پارت ارسال شد ({archive_basename}.zip و .z01 …)\n"
+            f"{pwd_line}\n"
             "✅ روش باز کردن:\n"
             "۱) همه پارت‌ها را در یک پوشه (Folder) مشترک دانلود و ذخیره کنید.\n"
             "۲) فقط روی فایل "
@@ -212,7 +417,8 @@ def format_merge_instructions(
 
     # concat (راهنمای جامع و کاربرپسند)
     return (
-        f"📥 **راهنمای باز کردن فایل در {total_parts} پارت**\n\n"
+        f"📥 **راهنمای باز کردن فایل در {total_parts} پارت**\n"
+        f"{pwd_line}\n"
         "⚠️ **توجه مهم:** این پارت‌ها تکی کار نمی‌کنند! حتماً همه پارت‌ها را در **یک پوشه مشترک** دانلود کنید.\n\n"
         "📱 **اندروید (Android):**\n"
         "برنامه **ZArchiver** یا RAR را نصب کنید. فقط روی پارت اول "
@@ -235,6 +441,7 @@ def build_zip_and_split(
     out_dir: str,
     zip_basename: str,
     max_part_bytes: int,
+    password: str | None = None,
 ) -> ZipSplitResult:
     """
     Returns (part_paths_ordered, archive_basename, split_method).
@@ -243,8 +450,8 @@ def build_zip_and_split(
     os.makedirs(out_dir, exist_ok=True)
     archive_basename = zip_basename
 
-    # 1. If input is already a zip file, avoid double-zipping
-    if input_path.lower().endswith(".zip"):
+    # 1. If input is already a zip file, avoid double-zipping unless password encryption is requested
+    if input_path.lower().endswith(".zip") and not password:
         file_size = os.path.getsize(input_path)
         if file_size <= max_part_bytes:
             return [input_path], archive_basename, "single"
@@ -259,14 +466,16 @@ def build_zip_and_split(
     spanned_already_tried = False
     if input_size > max_part_bytes and (_is_incompressible(input_path) or input_size > max_part_bytes * 2):
         spanned_already_tried = True
-        spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
+        spanned = _try_spanned_zip(
+            input_path, out_dir, archive_basename, max_part_bytes, password=password
+        )
         if spanned:
             method = "single" if len(spanned) == 1 else "spanned"
             return spanned, archive_basename, method
 
     # 3. Build a standard, valid single ZIP
     zip_path = os.path.join(out_dir, f"{archive_basename}.zip")
-    make_zip_single(input_path=input_path, zip_path=zip_path)
+    make_zip_single(input_path=input_path, zip_path=zip_path, password=password)
 
     # If the clean ZIP fits in a single part, return it directly!
     if os.path.getsize(zip_path) <= max_part_bytes:
@@ -282,7 +491,9 @@ def build_zip_and_split(
         except OSError:
             backup_zip = None
 
-        spanned = _try_spanned_zip(input_path, out_dir, archive_basename, max_part_bytes)
+        spanned = _try_spanned_zip(
+            input_path, out_dir, archive_basename, max_part_bytes, password=password
+        )
         if spanned and len(spanned) > 1:
             if backup_zip and os.path.isfile(backup_zip):
                 try:

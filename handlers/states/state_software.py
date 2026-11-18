@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 MAX_BALE_BYTES = 45 * 1024 * 1024   # 45 MB — حد split (ورودی به zip_utils)
 MAX_BALE_SEND_BYTES = 40 * 1024 * 1024  # 40 MB — حد واقعی ارسال مستقیم (margin بیشتر)
 MAX_ALLOWED_MB = MAX_ALLOWED_DOWNLOAD_BYTES // (1024 * 1024)  # 250 MB
+SOFTWARE_ZIP_PASSWORD = os.getenv("SOFTWARE_ZIP_PASSWORD", "123")
 
 # Concurrency semaphore: max 3 parallel downloads to prevent saturating bandwidth/CPU
 _DOWNLOAD_SEMAPHORE = asyncio.Semaphore(3)
@@ -310,13 +311,15 @@ async def _process_software_download(
                 )
 
             zips_dir = os.path.join(tmp_dir, "zips")
-            # Split directly at MAX_BALE_SEND_BYTES (40 MB) in a single pass
+            # Split directly at MAX_BALE_SEND_BYTES (40 MB) in a single pass.
+            # Password-protect software ZIPs so Bale's content filter does not block APK/EXE payloads.
             part_paths, archive_base, split_method = await asyncio.to_thread(
                 build_zip_and_split,
                 input_path=downloaded_path,
                 out_dir=zips_dir,
                 zip_basename=safe_base,
                 max_part_bytes=MAX_BALE_SEND_BYTES,
+                password=SOFTWARE_ZIP_PASSWORD,
             )
             total_parts = len(part_paths)
 
@@ -328,8 +331,9 @@ async def _process_software_download(
                 f"🔖 **نسخه:** `{escape_markdown(version)}`\n"
                 f"💾 **حجم فایل (ZIP):** `{zip_size_mb:.1f} MB`\n"
                 f"📅 **تاریخ بروزرسانی:** `{escape_markdown(updated)}`\n"
-                f"💻 **سیستم‌عامل:** {platform_fa}\n\n"
-                "📁 **راهنما:** نرم‌افزار به صورت فایل زیپ (ZIP) ارسال شد تا محدودیت امنیتی بله رفع شود. پس از دانلود، فایل را استخراج (Extract) فرمایید."
+                f"💻 **سیستم‌عامل:** {platform_fa}\n"
+                f"🔑 **رمز فایل (Password):** `{SOFTWARE_ZIP_PASSWORD}`\n\n"
+                "📁 **راهنما:** نرم‌افزار به صورت فایل زیپ رمزدار ارسال شد تا محدودیت امنیتی بله رفع شود. پس از دانلود، فایل را با رمز بالا استخراج (Extract) فرمایید."
             )
             try:
                 zip_name = os.path.basename(zip_file)
@@ -431,7 +435,12 @@ async def _process_software_download(
                     return
 
             # Send merge instructions
-            instructions = format_merge_instructions(archive_base, total_parts, split_method)
+            instructions = format_merge_instructions(
+                archive_base,
+                total_parts,
+                split_method,
+                password=SOFTWARE_ZIP_PASSWORD,
+            )
             if instructions:
                 await context.bot.send_message(
                     chat_id=chat_id,

@@ -9,6 +9,7 @@ from core.limits import get_limit
 from services.zip_utils import format_merge_instructions, part_display_filename
 from .bale_send import (
     ForwardStatus,
+    adaptive_part_delay,
     chat_send_lock,
     forward_file_id_to_user,
     run_storage_upload,
@@ -186,6 +187,10 @@ async def _update_part_status(context, chat_id: str, status_msg, text: str):
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=text,
+            read_timeout=10,
+            write_timeout=10,
+            connect_timeout=10,
+            pool_timeout=10,
         )
     except Exception:
         pass
@@ -206,7 +211,7 @@ async def _deliver_stored_parts(
     uncertain: list[int] = []
     async with chat_send_lock(chat_id):
         for idx, file_id in enumerate(file_ids, 1):
-            if total > 1:
+            if total > 1 and (idx == 1 or idx % 5 == 0 or idx == total):
                 status_msg = await _update_part_status(
                     context, chat_id, status_msg, f"📤 ارسال پارت {idx} از {total}..."
                 )
@@ -217,9 +222,8 @@ async def _deliver_stored_parts(
                 uncertain.append(idx)
                 logger.error("Forward failed for part %s/%s to %s", idx, total, chat_id)
             if idx < total:
-                await pause_between_parts(
-                    extra_sec=1.5 if status != ForwardStatus.OK else 0.0
-                )
+                delay = adaptive_part_delay(idx, total, status=status)
+                await asyncio.sleep(delay)
     return uncertain
 
 
@@ -506,4 +510,11 @@ async def send_cached_files(
         await context.bot.send_message(
             chat_id=chat_id,
             text=format_uncertain_parts_message(uncertain, total_parts),
+        )
+    elif total_parts > 1:
+        await _update_part_status(
+            context,
+            chat_id,
+            status_msg,
+            f"✅ ارسال تمام {total_parts} پارت با موفقیت انجام شد.",
         )

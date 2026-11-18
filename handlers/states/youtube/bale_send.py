@@ -10,7 +10,7 @@ import os
 from enum import Enum
 from typing import Awaitable, Callable, Literal
 
-from telegram.error import NetworkError, RetryAfter, TimedOut
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,8 @@ MediaKind = Literal["document", "video", "audio"]
 
 PART_SEND_DELAY_SEC = max(1.5, float(os.getenv("BALE_PART_SEND_DELAY_SEC", "2.5")))
 STORAGE_UPLOAD_RETRIES = max(1, int(os.getenv("BALE_STORAGE_UPLOAD_RETRIES", "3")))
+MAX_FORWARD_RATE_LIMIT_RETRIES = max(1, int(os.getenv("BALE_FORWARD_RATE_LIMIT_RETRIES", "4")))
+MAX_RETRY_AFTER_SEC = max(10, int(os.getenv("BALE_MAX_RETRY_AFTER_SEC", "180")))
 _BALE_SEND_TIMEOUTS = {
     "read_timeout": 45,
     "write_timeout": 30,
@@ -87,31 +89,33 @@ async def forward_file_id_to_user(
                 **_BALE_SEND_TIMEOUTS,
             )
 
-    try:
-        await _send()
-        return ForwardStatus.OK
-    except RetryAfter as exc:
-        # Rate limit — message was not sent yet; safe to wait and try once more.
-        wait = max(1, int(exc.retry_after)) + 1
-        logger.warning("RetryAfter %ss before forward to %s", wait, chat_id)
-        await asyncio.sleep(wait)
+    for attempt in range(1, MAX_FORWARD_RATE_LIMIT_RETRIES + 1):
         try:
             await _send()
             return ForwardStatus.OK
-        except RetryAfter:
+        except RetryAfter as exc:
+            # Rate limit — message was not sent yet; safe to wait and retry.
+            wait = min(MAX_RETRY_AFTER_SEC, max(2, int(exc.retry_after) + 2))
+            logger.warning(
+                "RetryAfter %ss before forward to %s (attempt %s/%s)",
+                wait,
+                chat_id,
+                attempt,
+                MAX_FORWARD_RATE_LIMIT_RETRIES,
+            )
+            if attempt >= MAX_FORWARD_RATE_LIMIT_RETRIES:
+                return ForwardStatus.FAILED
+            await asyncio.sleep(wait)
+        except BadRequest as exc:
+            logger.warning("Forward BadRequest to %s (not retrying): %s", chat_id, exc)
             return ForwardStatus.FAILED
-        except (TimedOut, NetworkError) as err:
-            logger.warning("Forward uncertain after RetryAfter retry: %s", err)
+        except (TimedOut, NetworkError) as exc:
+            logger.warning("Forward timeout/network to %s (not retrying): %s", chat_id, exc)
             return ForwardStatus.UNCERTAIN
-        except Exception as err:
-            logger.warning("Forward uncertain after RetryAfter retry: %s", err)
+        except Exception as exc:
+            logger.warning("Forward API error to %s (not retrying): %s", chat_id, exc)
             return ForwardStatus.UNCERTAIN
-    except (TimedOut, NetworkError) as exc:
-        logger.warning("Forward timeout/network to %s (not retrying): %s", chat_id, exc)
-        return ForwardStatus.UNCERTAIN
-    except Exception as exc:
-        logger.warning("Forward API error to %s (not retrying): %s", chat_id, exc)
-        return ForwardStatus.UNCERTAIN
+    return ForwardStatus.FAILED
 
 
 async def run_storage_upload(
@@ -148,6 +152,23 @@ async def run_storage_upload(
 
 async def pause_between_parts(extra_sec: float = 0.0) -> None:
     await asyncio.sleep(PART_SEND_DELAY_SEC + extra_sec)
+
+
+def adaptive_part_delay(
+    part_index: int,
+    total_parts: int,
+    *,
+    status: ForwardStatus = ForwardStatus.OK,
+) -> float:
+    """Compute Bale-safe delay between forwarded parts to avoid flood/504 stalls."""
+    base = PART_SEND_DELAY_SEC if total_parts <= 5 else max(PART_SEND_DELAY_SEC, 3.5)
+    extra = 0.0
+    if total_parts > 10 and part_index % 10 == 0:
+        # Periodic breather so Bale's per-minute rate-limit window resets cleanly.
+        extra += 10.0
+    if status != ForwardStatus.OK:
+        extra += 2.5
+    return base + extra
 
 
 def format_uncertain_parts_message(part_indexes: list[int], total_parts: int) -> str:
