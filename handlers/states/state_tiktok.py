@@ -71,6 +71,7 @@ async def background_tt_download(
     chat_id: str,
     user_id: str,
     title: str = "ویدیوی تیک‌تاک",
+    direct_url: str | None = None,
 ):
     status_msg = await context.bot.send_message(
         chat_id=chat_id, text="⏳ در صف انتظار برای دانلود..."
@@ -80,7 +81,10 @@ async def background_tt_download(
     try:
         async with DOWNLOAD_SEMAPHORE:
             await _safe_edit_text(status_msg, "⬇️ در حال دریافت ویدیو...")
-            file_path = await download_tiktok_video(url)
+            if direct_url:
+                file_path = await download_tiktok_video(url, direct_url=direct_url)
+            else:
+                file_path = await download_tiktok_video(url)
 
         if not file_path or not await asyncio.to_thread(os.path.exists, file_path):
             await _safe_edit_text(status_msg, "❌ متاسفانه دانلود این ویدیو با خطا مواجه شد.")
@@ -147,7 +151,7 @@ async def background_tt_download(
 async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     user_id_str = str(update.effective_user.id)
-    async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=15) as acquired:
+    async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=30) as acquired:
         if not acquired:
             await update.message.reply_text("⏳ درخواست قبلی شما در حال پردازش است. لطفاً صبر کنید.")
             return
@@ -208,7 +212,7 @@ async def handle_tiktok_state(
         return
 
     elif step == "waiting_tt_search":
-        async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=15) as acquired:
+        async with user_action_lock(user_id_str, "tiktok_search", timeout_sec=30) as acquired:
             if not acquired:
                 await update.message.reply_text("⏳ جستجوی قبلی شما در حال انجام است. لطفاً صبر کنید.")
                 return
@@ -270,6 +274,7 @@ async def handle_tiktok_state(
                             chat_id,
                             user_id_str,
                             selected_video["title"],
+                            direct_url=selected_video.get("direct_url"),
                         ),
                         name=f"tiktok_sel_{chat_id}",
                     )
