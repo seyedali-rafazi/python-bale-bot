@@ -207,7 +207,7 @@ async def handle_web_search_state(
             )
             return
 
-        clear_state(chat_id)
+        set_state(chat_id, "waiting_google_search_link")
         track_task(
             _download_and_send_webpage(
                 update.message,

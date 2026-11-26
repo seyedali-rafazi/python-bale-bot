@@ -10,7 +10,7 @@ from services.rate_limiter import user_action_lock
 from telegram.ext import ContextTypes
 from core.database import get_gh_downloads, increment_gh_downloads, is_vip
 from core.limits import get_limit
-from core.state_manager import StateCache, clear_state
+from core.state_manager import StateCache, clear_state, set_state
 from handlers.utils import safe_answer_query
 from core.task_utils import (
     FileTooLargeError,
@@ -185,11 +185,10 @@ async def handle_github_state(
                 await update.message.reply_text(
                     "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
                 )
-                clear_state(chat_id)
                 return
 
             _pending_gh_downloads[user_id] = pending + 1
-            clear_state(chat_id)
+            set_state(chat_id, "waiting_gh_dl")
             try:
                 await enqueue_download(update, context, chat_id, repo_path, user_id)
             except BaseException:
@@ -367,7 +366,6 @@ async def process_github_download(
         print(f"GitHub Error: {e}")
     finally:
         await remove_file_async(temp_path)
-        clear_state(str(chat_id))
         uid = str(user_id)
         cur = _pending_gh_downloads.get(uid, 0)
         if cur <= 1:

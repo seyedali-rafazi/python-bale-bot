@@ -19,6 +19,7 @@ from core.yt_moderation import (
     check_channel_allowed,
     check_video_info_allowed,
 )
+from .callbacks import create_yt_link_session
 from .helpers import check_user_limit
 
 
@@ -236,19 +237,20 @@ async def handle_youtube_state(
             )
             return
 
-        set_state(chat_id, "waiting_yt_destination", yt_url=text, format=dl_format)
+        set_state(chat_id, "waiting_yt_link", format=dl_format)
+        token = create_yt_link_session(chat_id, yt_url=text, format_type=dl_format)
         keyboard = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
                         "📤 آپلود مستقیم (بله)",
-                        callback_data="ytdest_telegram",
+                        callback_data=f"ytdest_telegram_{token}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "☁️ آپلود در سرور ابری (ویژه Pro ⭐️)",
-                        callback_data="ytdest_server",
+                        callback_data=f"ytdest_server_{token}",
                     )
                 ],
             ]

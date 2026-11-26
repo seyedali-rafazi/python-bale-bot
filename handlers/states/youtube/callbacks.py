@@ -1,7 +1,8 @@
 import asyncio
+import uuid
 from telegram import Update
 from telegram.ext import ContextTypes
-from core.state_manager import set_state, async_get_state, clear_state
+from core.state_manager import StateCache, set_state, async_get_state, clear_state
 from core.task_utils import track_task
 from services.rate_limiter import user_action_lock
 from core.keyboards import (
@@ -14,6 +15,44 @@ from core.database import is_vip, increment_yt_downloads
 from services.youtube import get_video_filesize_cached
 from .helpers import check_user_limit
 from .task import background_yt_download
+
+_yt_link_sessions = StateCache(max_capacity=2000, default_ttl=3600.0)
+
+
+def create_yt_link_session(chat_id: str, yt_url: str, format_type: str) -> str:
+    token = uuid.uuid4().hex[:12]
+    _yt_link_sessions[token] = {
+        "chat_id": str(chat_id),
+        "step": "waiting_yt_destination",
+        "yt_url": yt_url,
+        "format": format_type,
+    }
+    return token
+
+
+async def _load_yt_session(chat_id: str, token: str | None) -> dict | None:
+    if token:
+        session = _yt_link_sessions.get(token)
+        if not session or str(session.get("chat_id")) != str(chat_id):
+            return None
+        return dict(session)
+    return await async_get_state(chat_id)
+
+
+def _save_yt_session(chat_id: str, token: str | None, step: str, **kwargs) -> None:
+    if token:
+        data = {"chat_id": str(chat_id), "step": step}
+        data.update(kwargs)
+        _yt_link_sessions[token] = data
+    else:
+        set_state(chat_id, step, **kwargs)
+
+
+def _finish_yt_session(chat_id: str, token: str | None) -> None:
+    if token:
+        _yt_link_sessions.pop(token, None)
+    else:
+        clear_state(chat_id)
 
 
 def _quality_prompt(format_type: str) -> str:
@@ -32,13 +71,16 @@ async def youtube_destination_callback(
     except Exception as e:
         print(f"⚠️ Error answering callback query: {e}")
 
-    data = query.data
+    data = query.data or ""
     chat_id = str(query.message.chat_id)
 
-    if data not in ["ytdest_telegram", "ytdest_server"]:
+    parts = data.split("_", 2)
+    if len(parts) < 2 or parts[0] != "ytdest" or parts[1] not in ("telegram", "server"):
         return
+    dest_choice = parts[1]
+    token = parts[2] if len(parts) == 3 and parts[2] else None
 
-    user_state = await async_get_state(chat_id)
+    user_state = await _load_yt_session(chat_id, token)
     if not user_state or user_state.get("step") != "waiting_yt_destination":
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
@@ -48,8 +90,10 @@ async def youtube_destination_callback(
     url = user_state.get("yt_url")
     format_type = user_state.get("format")
 
-    if data == "ytdest_server":
+    if dest_choice == "server":
         if not await is_vip(chat_id):
+            if token:
+                _yt_link_sessions.pop(token, None)
             await query.edit_message_text(
                 "❌ این قابلیت فقط مخصوص کاربران ویژه (Pro ⭐️) می‌باشد."
             )
@@ -61,8 +105,9 @@ async def youtube_destination_callback(
         delivery_mode = "zip"
 
     if destination == "telegram" and format_type == "video":
-        set_state(
+        _save_yt_session(
             chat_id,
+            token,
             "waiting_yt_delivery",
             yt_url=url,
             format=format_type,
@@ -72,13 +117,14 @@ async def youtube_destination_callback(
             "📦 نحوه ارسال ویدیو در بله را انتخاب کنید:\n\n"
             "• **ZIP**: ذخیره در کش سرور و ارسال به صورت فایل فشرده\n"
             "• **ویدیو (MP4)**: ارسال مستقیم بدون ذخیره در کش",
-            reply_markup=get_yt_delivery_keyboard(),
+            reply_markup=get_yt_delivery_keyboard(token=token),
             parse_mode="Markdown",
         )
         return
 
-    set_state(
+    _save_yt_session(
         chat_id,
+        token,
         "waiting_yt_quality",
         yt_url=url,
         format=format_type,
@@ -86,7 +132,7 @@ async def youtube_destination_callback(
         delivery_mode=delivery_mode,
     )
 
-    keyboard = get_yt_quality_telegram_keyboard()
+    keyboard = get_yt_quality_telegram_keyboard(token=token)
 
     await query.edit_message_text(
         _quality_prompt(format_type), reply_markup=keyboard
@@ -103,26 +149,30 @@ async def youtube_delivery_callback(
     except Exception as e:
         print(f"⚠️ Error answering callback query: {e}")
 
-    data = query.data
+    data = query.data or ""
     chat_id = str(query.message.chat_id)
 
-    if data not in ["ytdel_zip", "ytdel_video"]:
+    parts = data.split("_", 2)
+    if len(parts) < 2 or parts[0] != "ytdel" or parts[1] not in ("zip", "video"):
         return
+    del_choice = parts[1]
+    token = parts[2] if len(parts) == 3 and parts[2] else None
 
-    user_state = await async_get_state(chat_id)
+    user_state = await _load_yt_session(chat_id, token)
     if not user_state or user_state.get("step") != "waiting_yt_delivery":
         await query.edit_message_text(
             "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
         )
         return
 
-    delivery_mode = "zip" if data == "ytdel_zip" else "video"
+    delivery_mode = "zip" if del_choice == "zip" else "video"
     url = user_state.get("yt_url")
     format_type = user_state.get("format")
     destination = user_state.get("destination", "telegram")
 
-    set_state(
+    _save_yt_session(
         chat_id,
+        token,
         "waiting_yt_quality",
         yt_url=url,
         format=format_type,
@@ -132,13 +182,13 @@ async def youtube_delivery_callback(
 
     await query.edit_message_text(
         _quality_prompt(format_type),
-        reply_markup=get_yt_quality_telegram_keyboard(),
+        reply_markup=get_yt_quality_telegram_keyboard(token=token),
     )
 
 
 async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    data = query.data
+    data = query.data or ""
     chat_id = str(query.message.chat_id)
 
     if not data.startswith("ytqual_"):
@@ -148,7 +198,9 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             pass
         return
 
-    quality = data.split("_", 1)[1]
+    parts = data.split("_", 2)
+    quality = parts[1] if len(parts) >= 2 else ""
+    token = parts[2] if len(parts) == 3 and parts[2] else None
     if quality not in {"360", "480", "720", "1080", "best", "bestaudio"}:
         try:
             await query.answer("کیفیت نامعتبر است.")
@@ -170,7 +222,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
         except Exception as e:
             print(f"⚠️ Error answering callback query: {e}")
 
-        user_state = await async_get_state(chat_id)
+        user_state = await _load_yt_session(chat_id, token)
         if not user_state or user_state.get("step") not in [
             "waiting_yt_quality",
             "processing_yt_quality",
@@ -185,7 +237,7 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         if not await check_user_limit(chat_id):
-            clear_state(chat_id)
+            _finish_yt_session(chat_id, token)
             await query.edit_message_text(
                 "❌ محدودیت دانلود روزانه شما به پایان رسیده است."
             )
@@ -196,8 +248,9 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
         destination = user_state.get("destination")
         delivery_mode = user_state.get("delivery_mode", "zip")
 
-        set_state(
+        _save_yt_session(
             chat_id,
+            token,
             "processing_yt_quality",
             yt_url=url,
             format=format_type,
@@ -226,10 +279,11 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                     f"❌ فایل حدود {size_mb} مگابایت است و بیشتر از 1 گیگابایت (1024 مگابایت) می‌باشد. "
                     "لطفاً کیفیت پایین‌تری انتخاب کنید."
                 )
-                keyboard = get_yt_quality_telegram_keyboard()
+                keyboard = get_yt_quality_telegram_keyboard(token=token)
 
-                set_state(
+                _save_yt_session(
                     chat_id,
+                    token,
                     "waiting_yt_quality",
                     yt_url=url,
                     format=format_type,
@@ -240,9 +294,10 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
                 return
         except Exception as e:
             print(f"⚠️ Error checking filesize: {e}")
-            keyboard = get_yt_quality_telegram_keyboard()
-            set_state(
+            keyboard = get_yt_quality_telegram_keyboard(token=token)
+            _save_yt_session(
                 chat_id,
+                token,
                 "waiting_yt_quality",
                 yt_url=url,
                 format=format_type,
@@ -257,13 +312,14 @@ async def youtube_quality_callback(update: Update, context: ContextTypes.DEFAULT
 
         await query.edit_message_text("✅ درخواست ثبت شد. در حال انتقال به صف دانلود...")
 
-        clear_state(chat_id)
+        _finish_yt_session(chat_id, token)
 
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="🔙 بازگشت به منوی اصلی",
-            reply_markup=get_main_menu_keyboard(),
-        )
+        if not token:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔙 بازگشت به منوی اصلی",
+                reply_markup=get_main_menu_keyboard(),
+            )
 
         await increment_yt_downloads(chat_id)
 

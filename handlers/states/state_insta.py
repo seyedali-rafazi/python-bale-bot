@@ -6,7 +6,7 @@ import logging
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from core.state_manager import StateCache, clear_state
+from core.state_manager import StateCache, set_state
 from core.task_utils import bounded_large_upload, get_file_size_async, load_input_file, remove_file_async, track_task
 from handlers.utils import safe_answer_query, safe_edit_or_reply
 
@@ -49,7 +49,7 @@ async def handle_insta_state(
 
         token = uuid.uuid4().hex[:12]
         _ig_link_cache[token] = text.strip()
-        clear_state(chat_id)
+        set_state(chat_id, "waiting_ig_link")
 
         keyboard = [
             [

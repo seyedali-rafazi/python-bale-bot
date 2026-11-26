@@ -11,7 +11,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 
-from core.state_manager import clear_state
+from core.state_manager import clear_state, set_state
 from core.task_utils import FileTooLargeError, bounded_large_upload, load_input_file, remove_file_async, stream_aiohttp_to_file, track_task
 from services.http_client import get_http_session
 from services.rate_limiter import user_action_lock
@@ -115,7 +115,7 @@ async def handle_programming_state(
                 if not acquired:
                     await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
                     return
-                clear_state(chat_id)
+                set_state(chat_id, "waiting_prog_chrome")
                 await update.message.reply_text("⏳ درخواست شما در صف دانلود قرار گرفت...")
                 download_url = (
                     "https://clients2.google.com/service/update2/crx"

@@ -165,8 +165,8 @@ def get_github_menu_keyboard():
 
 
 @lru_cache(maxsize=1)
-def get_yt_delivery_keyboard():
-    keyboard = InlineKeyboardMarkup(
+def _get_yt_delivery_keyboard_default():
+    return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
@@ -182,11 +182,31 @@ def get_yt_delivery_keyboard():
             ],
         ]
     )
-    return keyboard
+
+
+def get_yt_delivery_keyboard(token: str | None = None):
+    if not token:
+        return _get_yt_delivery_keyboard_default()
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📦 ارسال به صورت ZIP",
+                    callback_data=f"ytdel_zip_{token}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎬 ارسال به صورت ویدیو (MP4)",
+                    callback_data=f"ytdel_video_{token}",
+                )
+            ],
+        ]
+    )
 
 
 @lru_cache(maxsize=1)
-def get_yt_quality_telegram_keyboard():
+def _get_yt_quality_telegram_keyboard_default():
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("144p", callback_data="ytqual_144")],
@@ -198,8 +218,22 @@ def get_yt_quality_telegram_keyboard():
     )
 
 
-def get_yt_quality_server_keyboard():
-    return get_yt_quality_telegram_keyboard()
+def get_yt_quality_telegram_keyboard(token: str | None = None):
+    if not token:
+        return _get_yt_quality_telegram_keyboard_default()
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("144p", callback_data=f"ytqual_144_{token}")],
+            [InlineKeyboardButton("240p", callback_data=f"ytqual_240_{token}")],
+            [InlineKeyboardButton("360p", callback_data=f"ytqual_360_{token}")],
+            [InlineKeyboardButton("480p", callback_data=f"ytqual_480_{token}")],
+            [InlineKeyboardButton("720p", callback_data=f"ytqual_720_{token}")],
+        ]
+    )
+
+
+def get_yt_quality_server_keyboard(token: str | None = None):
+    return get_yt_quality_telegram_keyboard(token=token)
 
 
 @lru_cache(maxsize=1)

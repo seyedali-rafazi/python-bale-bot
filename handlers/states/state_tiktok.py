@@ -201,7 +201,7 @@ async def handle_tiktok_state(
             if not await check_tt_dl_limit(update, user_id_str):
                 return
 
-            clear_state(chat_id)
+            set_state(chat_id, "waiting_tt_link")
             _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
             track_task(
                 background_tt_download(

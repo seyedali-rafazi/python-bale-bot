@@ -244,7 +244,6 @@ async def process_kaggle_download(
 
     finally:
         await asyncio.to_thread(cleanup_temp, dl_dir)
-        clear_state(chat_id)
         uid = str(user_id)
         cur = _pending_kaggle_downloads.get(uid, 0)
         if cur <= 1:
@@ -332,11 +331,10 @@ async def handle_kaggle_state(
                     f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
                     f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
                 )
-                clear_state(chat_id)
                 return
 
             _pending_kaggle_downloads[user_id] = pending + 1
-            clear_state(chat_id)
+            set_state(chat_id, "waiting_kaggle_dl_link")
             try:
                 await _enqueue(update, context, chat_id, ref, user_id)
             except BaseException:
