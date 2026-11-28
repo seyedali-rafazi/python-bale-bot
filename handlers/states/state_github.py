@@ -151,6 +151,53 @@ async def enqueue_download(
 # ==================================================
 
 
+async def start_github_repo_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    chat_id: str,
+    *,
+    keep_state: bool = True,
+) -> None:
+    user_id = str(update.effective_user.id)
+    repo_path = _normalize_github_repo(text)
+    if not repo_path:
+        await update.message.reply_text(
+            "❌ فرمت ریپازیتوری نامعتبر است. مثال:\n`owner/repo` یا `https://github.com/owner/repo`"
+        )
+        return
+
+    async with user_action_lock(user_id, "gh_dl", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
+        vip_status, downloads_count = await asyncio.gather(
+            is_vip(user_id),
+            get_gh_downloads(user_id),
+        )
+        max_dl = get_limit("github_download", vip_status)
+        pending = _pending_gh_downloads.get(user_id, 0)
+
+        if downloads_count + pending >= max_dl:
+            await update.message.reply_text(
+                "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
+            )
+            return
+
+        _pending_gh_downloads[user_id] = pending + 1
+        if keep_state:
+            set_state(chat_id, "waiting_gh_dl")
+        try:
+            await enqueue_download(update, context, chat_id, repo_path, user_id)
+        except BaseException:
+            cur = _pending_gh_downloads.get(user_id, 0)
+            if cur <= 1:
+                _pending_gh_downloads.pop(user_id, None)
+            else:
+                _pending_gh_downloads[user_id] = cur - 1
+            raise
+
+
 async def handle_github_state(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -163,41 +210,7 @@ async def handle_github_state(
     user_id = str(update.effective_user.id)
 
     if step == "waiting_gh_dl":
-        repo_path = _normalize_github_repo(text)
-        if not repo_path:
-            await update.message.reply_text(
-                "❌ فرمت ریپازیتوری نامعتبر است. مثال:\n`owner/repo` یا `https://github.com/owner/repo`"
-            )
-            return
-
-        async with user_action_lock(user_id, "gh_dl", timeout_sec=10) as acquired:
-            if not acquired:
-                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
-                return
-            vip_status, downloads_count = await asyncio.gather(
-                is_vip(user_id),
-                get_gh_downloads(user_id),
-            )
-            max_dl = get_limit("github_download", vip_status)
-            pending = _pending_gh_downloads.get(user_id, 0)
-
-            if downloads_count + pending >= max_dl:
-                await update.message.reply_text(
-                    "❌ محدودیت دانلود روزانه شما به اتمام رسیده است."
-                )
-                return
-
-            _pending_gh_downloads[user_id] = pending + 1
-            set_state(chat_id, "waiting_gh_dl")
-            try:
-                await enqueue_download(update, context, chat_id, repo_path, user_id)
-            except BaseException:
-                cur = _pending_gh_downloads.get(user_id, 0)
-                if cur <= 1:
-                    _pending_gh_downloads.pop(user_id, None)
-                else:
-                    _pending_gh_downloads[user_id] = cur - 1
-                raise
+        await start_github_repo_download(update, context, text, chat_id, keep_state=True)
 
     elif step == "waiting_gh_user":
         async with user_action_lock(user_id, "gh_search", timeout_sec=15) as acquired:

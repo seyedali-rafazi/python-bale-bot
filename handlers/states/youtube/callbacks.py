@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core.state_manager import StateCache, set_state, async_get_state, clear_state
 from core.task_utils import track_task
@@ -11,6 +11,7 @@ from core.keyboards import (
     get_yt_delivery_keyboard,
     get_main_menu_keyboard,
 )
+from core.constants import is_s3_enabled
 from core.database import is_vip, increment_yt_downloads
 from services.youtube import get_video_filesize_cached
 from .helpers import check_user_limit
@@ -18,16 +19,55 @@ from .task import background_yt_download
 
 _yt_link_sessions = StateCache(max_capacity=2000, default_ttl=3600.0)
 
+DELIVERY_PROMPT_TEXT = (
+    "📦 نحوه ارسال ویدیو در بله را انتخاب کنید:\n\n"
+    "• **ZIP**: ذخیره در کش سرور و ارسال به صورت فایل فشرده\n"
+    "• **ویدیو (MP4)**: ارسال مستقیم بدون ذخیره در کش"
+)
 
-def create_yt_link_session(chat_id: str, yt_url: str, format_type: str) -> str:
+
+def create_yt_link_session(
+    chat_id: str,
+    yt_url: str,
+    format_type: str | None,
+    *,
+    step: str = "waiting_yt_destination",
+    destination: str | None = None,
+    delivery_mode: str | None = None,
+) -> str:
     token = uuid.uuid4().hex[:12]
-    _yt_link_sessions[token] = {
+    data = {
         "chat_id": str(chat_id),
-        "step": "waiting_yt_destination",
+        "step": step,
         "yt_url": yt_url,
         "format": format_type,
     }
+    if destination is not None:
+        data["destination"] = destination
+    if delivery_mode is not None:
+        data["delivery_mode"] = delivery_mode
+    _yt_link_sessions[token] = data
     return token
+
+
+def build_yt_destination_keyboard(token: str | None = None) -> InlineKeyboardMarkup:
+    suffix = f"_{token}" if token else ""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📤 آپلود مستقیم (بله)",
+                    callback_data=f"ytdest_telegram{suffix}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "☁️ آپلود در سرور ابری (ویژه Pro ⭐️)",
+                    callback_data=f"ytdest_server{suffix}",
+                )
+            ],
+        ]
+    )
 
 
 async def _load_yt_session(chat_id: str, token: str | None) -> dict | None:
@@ -61,6 +101,84 @@ def _quality_prompt(format_type: str) -> str:
     return "🎥 کیفیت ویدیو را انتخاب کنید (محدودیت: 1 گیگابایت):"
 
 
+async def youtube_format_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception as e:
+        print(f"⚠️ Error answering callback query: {e}")
+
+    data = query.data or ""
+    chat_id = str(query.message.chat_id)
+
+    parts = data.split("_", 2)
+    if len(parts) < 3 or parts[0] != "ytfmt" or parts[1] not in ("video", "audio"):
+        return
+    format_type = parts[1]
+    token = parts[2] or None
+
+    user_state = await _load_yt_session(chat_id, token)
+    if not user_state or user_state.get("step") != "waiting_yt_format":
+        await query.edit_message_text(
+            "❌ درخواست شما منقضی شده است. لطفا مجددا لینک را ارسال کنید."
+        )
+        return
+
+    if not await check_user_limit(chat_id):
+        _finish_yt_session(chat_id, token)
+        await query.edit_message_text(
+            "❌ محدودیت دانلود روزانه شما ($ 1 $ ویدیو برای عادی، $ 20 $ ویدیو برای VIP) به پایان رسیده است."
+        )
+        return
+
+    url = user_state.get("yt_url")
+    if is_s3_enabled():
+        _save_yt_session(
+            chat_id,
+            token,
+            "waiting_yt_destination",
+            yt_url=url,
+            format=format_type,
+        )
+        await query.edit_message_text(
+            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
+            reply_markup=build_yt_destination_keyboard(token=token),
+        )
+        return
+
+    if format_type == "video":
+        _save_yt_session(
+            chat_id,
+            token,
+            "waiting_yt_delivery",
+            yt_url=url,
+            format=format_type,
+            destination="telegram",
+        )
+        await query.edit_message_text(
+            DELIVERY_PROMPT_TEXT,
+            reply_markup=get_yt_delivery_keyboard(token=token),
+            parse_mode="Markdown",
+        )
+        return
+
+    _save_yt_session(
+        chat_id,
+        token,
+        "waiting_yt_quality",
+        yt_url=url,
+        format=format_type,
+        destination="telegram",
+        delivery_mode="zip",
+    )
+    await query.edit_message_text(
+        _quality_prompt(format_type),
+        reply_markup=get_yt_quality_telegram_keyboard(token=token),
+    )
+
+
 async def youtube_destination_callback(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
@@ -91,6 +209,12 @@ async def youtube_destination_callback(
     format_type = user_state.get("format")
 
     if dest_choice == "server":
+        if not is_s3_enabled():
+            _finish_yt_session(chat_id, token)
+            await query.edit_message_text(
+                "❌ آپلود در فضای ابری در حال حاضر غیرفعال است."
+            )
+            return
         if not await is_vip(chat_id):
             if token:
                 _yt_link_sessions.pop(token, None)
@@ -114,9 +238,7 @@ async def youtube_destination_callback(
             destination=destination,
         )
         await query.edit_message_text(
-            "📦 نحوه ارسال ویدیو در بله را انتخاب کنید:\n\n"
-            "• **ZIP**: ذخیره در کش سرور و ارسال به صورت فایل فشرده\n"
-            "• **ویدیو (MP4)**: ارسال مستقیم بدون ذخیره در کش",
+            DELIVERY_PROMPT_TEXT,
             reply_markup=get_yt_delivery_keyboard(token=token),
             parse_mode="Markdown",
         )

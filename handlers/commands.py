@@ -62,7 +62,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cleanup_user_image_caches(chat_id)
     await msg.reply_text(
-        "👋 به ربات خوش آمدید!\n\nلطفاً یک گزینه را انتخاب کنید 👇",
+        "👋 به ربات خوش آمدید!\n\n"
+        "🔗 می‌توانید لینک یوتیوب، اینستاگرام، تیک‌تاک، تلگرام، گیت‌هاب، کاگل و... را مستقیم بفرستید "
+        "یا یک گزینه از منو انتخاب کنید 👇",
         reply_markup=get_main_menu_keyboard(),
     )
 

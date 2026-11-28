@@ -259,6 +259,8 @@ async def handle_telegram_state(
     text: str,
     chat_id: str,
     state_data: dict,
+    *,
+    keep_state: bool = True,
 ):
     user_id = str(update.effective_user.id)
 
@@ -275,7 +277,7 @@ async def handle_telegram_state(
             return
 
         if not await check_tg_limit(update, user_id):
-            if step != "waiting_tg_single":
+            if step != "waiting_tg_single" and keep_state:
                 clear_state(chat_id)
             return
 
@@ -292,10 +294,11 @@ async def handle_telegram_state(
         else:
             await update.message.reply_text("⏳ در حال دریافت اطلاعات از تلگرام...")
 
-        if step == "waiting_tg_single":
-            set_state(chat_id, "waiting_tg_single")
-        else:
-            clear_state(chat_id)
+        if keep_state:
+            if step == "waiting_tg_single":
+                set_state(chat_id, "waiting_tg_single")
+            else:
+                clear_state(chat_id)
         _pending_tg_downloads[user_id] = _pending_tg_downloads.get(user_id, 0) + 1
 
         track_task(

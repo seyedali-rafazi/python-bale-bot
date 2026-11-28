@@ -50,6 +50,8 @@ from services.music_identify import (
 )
 from services.youtube import async_download_youtube_audio
 
+from core.constants import is_s3_enabled
+
 try:
     from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3, upload_to_s3_with_key
 except ImportError:
@@ -645,6 +647,9 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # ===================================
     elif data.startswith("dltrack_tel_") or data.startswith("dltrack_cloud_"):
         is_cloud = data.startswith("dltrack_cloud_")
+        if is_cloud and not is_s3_enabled():
+            await query.message.reply_text("❌ آپلود در فضای ابری در حال حاضر غیرفعال است.")
+            return
         track_id = data.split("_", 2)[2]
         destination = "server" if is_cloud else "telegram"
 
@@ -722,7 +727,36 @@ async def handle_music_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # تمیز کردن نام فایل برای جلوگیری از خطای بله
         safe_filename = "".join(
             c for c in button_text if c.isalnum() or c in " -_"
-        ).strip()
+        ).strip() or "track"
+
+        # اگر S3 غیرفعال باشد، بدون پرسیدن مقصد مستقیم به بله دانلود و ارسال شود
+        if not is_s3_enabled():
+            async with user_action_lock(chat_id, "music_dl", timeout_sec=10) as acquired:
+                if not acquired:
+                    await query.message.reply_text("⏳ درخواست شما در حال ثبت است. لطفاً صبر کنید.")
+                    return
+
+                can_download, limit = await _can_download_music(chat_id)
+                if not can_download:
+                    await query.message.reply_text(
+                        f"❌ محدودیت دانلود روزانه شما به پایان رسیده است ($ {limit} $ آهنگ).\nفردا مجدداً تلاش کنید."
+                    )
+                    return
+
+                _pending_music_downloads[str(chat_id)] = _pending_music_downloads.get(str(chat_id), 0) + 1
+                track_task(
+                    background_download_task(
+                        context,
+                        chat_id,
+                        track_id,
+                        title,
+                        performer,
+                        safe_filename,
+                        destination="telegram",
+                    ),
+                    name=f"music_dl_tel_{chat_id}",
+                )
+            return
 
         # ===================================
         # نمایش گزینه‌های مقصد

@@ -179,6 +179,33 @@ async def process_tiktok_trends(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def start_tiktok_link_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    chat_id: str,
+    *,
+    keep_state: bool = True,
+) -> None:
+    user_id_str = str(update.effective_user.id)
+    async with user_action_lock(user_id_str, "tiktok_dl", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
+        if not await check_tt_dl_limit(update, user_id_str):
+            return
+
+        if keep_state:
+            set_state(chat_id, "waiting_tt_link")
+        _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
+        track_task(
+            background_tt_download(
+                context, url, chat_id, user_id_str, "دانلود مستقیم با لینک"
+            ),
+            name=f"tiktok_link_{chat_id}",
+        )
+
+
 async def handle_tiktok_state(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -194,21 +221,7 @@ async def handle_tiktok_state(
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        async with user_action_lock(user_id_str, "tiktok_dl", timeout_sec=10) as acquired:
-            if not acquired:
-                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
-                return
-            if not await check_tt_dl_limit(update, user_id_str):
-                return
-
-            set_state(chat_id, "waiting_tt_link")
-            _pending_tt_downloads[user_id_str] = _pending_tt_downloads.get(user_id_str, 0) + 1
-            track_task(
-                background_tt_download(
-                    context, text, chat_id, user_id_str, "دانلود مستقیم با لینک"
-                ),
-                name=f"tiktok_link_{chat_id}",
-            )
+        await start_tiktok_link_download(update, context, text, chat_id, keep_state=True)
         return
 
     elif step == "waiting_tt_search":

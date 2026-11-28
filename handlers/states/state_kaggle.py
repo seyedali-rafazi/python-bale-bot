@@ -252,6 +252,58 @@ async def process_kaggle_download(
             _pending_kaggle_downloads[uid] = cur - 1
 
 
+async def start_kaggle_dataset_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    chat_id: str,
+    *,
+    keep_state: bool = True,
+) -> None:
+    user_id = str(update.effective_user.id)
+    ref = _parse_kaggle_ref(text)
+    if not ref:
+        await update.message.reply_text(
+            "❌ فرمت نامعتبر. مثال:\n"
+            "• `https://www.kaggle.com/datasets/owner/name`\n"
+            "• `owner/name`",
+            parse_mode="Markdown",
+        )
+        return
+
+    async with user_action_lock(user_id, "kaggle_dl", timeout_sec=10) as acquired:
+        if not acquired:
+            await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
+            return
+        vip, used = await asyncio.gather(
+            is_vip(user_id),
+            get_kaggle_downloads(user_id),
+        )
+        limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
+        pending = _pending_kaggle_downloads.get(user_id, 0)
+
+        if used + pending >= limit:
+            await update.message.reply_text(
+                f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
+                f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
+                f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
+            )
+            return
+
+        _pending_kaggle_downloads[user_id] = pending + 1
+        if keep_state:
+            set_state(chat_id, "waiting_kaggle_dl_link")
+        try:
+            await _enqueue(update, context, chat_id, ref, user_id)
+        except BaseException:
+            cur = _pending_kaggle_downloads.get(user_id, 0)
+            if cur <= 1:
+                _pending_kaggle_downloads.pop(user_id, None)
+            else:
+                _pending_kaggle_downloads[user_id] = cur - 1
+            raise
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # State handler (called from states/__init__.py)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -303,47 +355,7 @@ async def handle_kaggle_state(
         clear_state(chat_id)
 
     elif step == "waiting_kaggle_dl_link":
-        # Parse URL or plain ref
-        ref = _parse_kaggle_ref(text)
-        if not ref:
-            await update.message.reply_text(
-                "❌ فرمت نامعتبر. مثال:\n"
-                "• `https://www.kaggle.com/datasets/owner/name`\n"
-                "• `owner/name`",
-                parse_mode="Markdown",
-            )
-            return
-
-        async with user_action_lock(user_id, "kaggle_dl", timeout_sec=10) as acquired:
-            if not acquired:
-                await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
-                return
-            vip, used = await asyncio.gather(
-                is_vip(user_id),
-                get_kaggle_downloads(user_id),
-            )
-            limit = KAGGLE_LIMIT_VIP if vip else KAGGLE_LIMIT_FREE
-            pending = _pending_kaggle_downloads.get(user_id, 0)
-
-            if used + pending >= limit:
-                await update.message.reply_text(
-                    f"❌ محدودیت دانلود روزانه شما به اتمام رسیده است.\n"
-                    f"کاربر رایگان: {KAGGLE_LIMIT_FREE} دانلود در روز\n"
-                    f"کاربر VIP 🌟: {KAGGLE_LIMIT_VIP} دانلود در روز"
-                )
-                return
-
-            _pending_kaggle_downloads[user_id] = pending + 1
-            set_state(chat_id, "waiting_kaggle_dl_link")
-            try:
-                await _enqueue(update, context, chat_id, ref, user_id)
-            except BaseException:
-                cur = _pending_kaggle_downloads.get(user_id, 0)
-                if cur <= 1:
-                    _pending_kaggle_downloads.pop(user_id, None)
-                else:
-                    _pending_kaggle_downloads[user_id] = cur - 1
-                raise
+        await start_kaggle_dataset_download(update, context, text, chat_id, keep_state=True)
 
 
 def _parse_kaggle_ref(text: str) -> str | None:

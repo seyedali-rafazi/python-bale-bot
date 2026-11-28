@@ -9,8 +9,12 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from core.state_manager import set_state
-from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK
-from core.keyboards import get_yt_format_keyboard
+from core.constants import BTN_YT_VIDEO, BTN_YT_AUDIO, BTN_BACK, is_s3_enabled
+from core.keyboards import (
+    get_yt_format_keyboard,
+    get_yt_delivery_keyboard,
+    get_yt_quality_telegram_keyboard,
+)
 from services.youtube import async_search_yt_videos, get_video_info_cached
 from core.yt_moderation import (
     MSG_BLOCKED_CHANNEL,
@@ -19,8 +23,85 @@ from core.yt_moderation import (
     check_channel_allowed,
     check_video_info_allowed,
 )
-from .callbacks import create_yt_link_session
+from .callbacks import (
+    DELIVERY_PROMPT_TEXT,
+    _quality_prompt,
+    build_yt_destination_keyboard,
+    create_yt_link_session,
+)
 from .helpers import check_user_limit
+
+
+async def _send_yt_post_format_prompt(
+    message,
+    chat_id: str,
+    url: str,
+    format_type: str,
+    *,
+    use_token: bool = False,
+) -> None:
+    if is_s3_enabled():
+        if use_token:
+            token = create_yt_link_session(chat_id, yt_url=url, format_type=format_type)
+            keyboard = build_yt_destination_keyboard(token=token)
+        else:
+            set_state(chat_id, "waiting_yt_destination", yt_url=url, format=format_type)
+            keyboard = build_yt_destination_keyboard()
+        await message.reply_text(
+            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
+            reply_markup=keyboard,
+        )
+        return
+
+    # S3 غیرفعال است: مستقیم برای آپلود به بله ادامه می‌دهیم بدون پرسیدن مقصد
+    if format_type == "video":
+        if use_token:
+            token = create_yt_link_session(
+                chat_id,
+                yt_url=url,
+                format_type=format_type,
+                step="waiting_yt_delivery",
+                destination="telegram",
+            )
+        else:
+            token = None
+            set_state(
+                chat_id,
+                "waiting_yt_delivery",
+                yt_url=url,
+                format=format_type,
+                destination="telegram",
+            )
+        await message.reply_text(
+            DELIVERY_PROMPT_TEXT,
+            reply_markup=get_yt_delivery_keyboard(token=token),
+            parse_mode="Markdown",
+        )
+        return
+
+    if use_token:
+        token = create_yt_link_session(
+            chat_id,
+            yt_url=url,
+            format_type=format_type,
+            step="waiting_yt_quality",
+            destination="telegram",
+            delivery_mode="zip",
+        )
+    else:
+        token = None
+        set_state(
+            chat_id,
+            "waiting_yt_quality",
+            yt_url=url,
+            format=format_type,
+            destination="telegram",
+            delivery_mode="zip",
+        )
+    await message.reply_text(
+        _quality_prompt(format_type),
+        reply_markup=get_yt_quality_telegram_keyboard(token=token),
+    )
 
 
 async def handle_youtube_state(
@@ -238,27 +319,8 @@ async def handle_youtube_state(
             return
 
         set_state(chat_id, "waiting_yt_link", format=dl_format)
-        token = create_yt_link_session(chat_id, yt_url=text, format_type=dl_format)
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "📤 آپلود مستقیم (بله)",
-                        callback_data=f"ytdest_telegram_{token}",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "☁️ آپلود در سرور ابری (ویژه Pro ⭐️)",
-                        callback_data=f"ytdest_server_{token}",
-                    )
-                ],
-            ]
-        )
-
-        await update.message.reply_text(
-            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
-            reply_markup=keyboard,
+        await _send_yt_post_format_prompt(
+            update.message, chat_id, text, dl_format, use_token=True
         )
         return
 
@@ -285,27 +347,7 @@ async def handle_youtube_state(
 
         format_type = "video" if text == BTN_YT_VIDEO else "audio"
 
-        set_state(chat_id, "waiting_yt_destination", yt_url=url, format=format_type)
-
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "📤 آپلود مستقیم (بله)",
-                        callback_data="ytdest_telegram",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "☁️ آپلود در سرور ابری (ویژه Pro ⭐️)",
-                        callback_data="ytdest_server",
-                    )
-                ],
-            ]
-        )
-
-        await update.message.reply_text(
-            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
-            reply_markup=keyboard,
+        await _send_yt_post_format_prompt(
+            update.message, chat_id, url, format_type, use_token=False
         )
         return

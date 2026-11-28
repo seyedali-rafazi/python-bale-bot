@@ -82,7 +82,12 @@ from .menus import (
     btn_software_android_req,
     btn_software_windows_req,
 )
-from .states import process_state_input, process_photo_input, process_media_input
+from .states import (
+    process_state_input,
+    process_photo_input,
+    process_media_input,
+    smart_web_callback,
+)
 from core.admin import (
     cmd_stats,
     cmd_setvip,
@@ -113,6 +118,7 @@ from .payment import (
 )
 from handlers.states.state_pinterest import handle_more_pins_callback
 from handlers.states.youtube import (
+    youtube_format_callback,
     youtube_destination_callback,
     youtube_delivery_callback,
     youtube_quality_callback,
@@ -298,6 +304,9 @@ def register_all_handlers(application):
 
     # کال‌بک‌های یوتیوب و آرشیو
     application.add_handler(
+        CallbackQueryHandler(youtube_format_callback, pattern="^ytfmt_")
+    )
+    application.add_handler(
         CallbackQueryHandler(youtube_destination_callback, pattern="^ytdest_")
     )
     application.add_handler(
@@ -308,6 +317,9 @@ def register_all_handlers(application):
     )
     application.add_handler(
         CallbackQueryHandler(yt_archive_callback, pattern=r"^ytarc_")
+    )
+    application.add_handler(
+        CallbackQueryHandler(smart_web_callback, pattern=r"^smartweb_")
     )
 
     # کال‌بک‌های برنامه‌نویسی، موسیقی، اینستاگرام، پینترست، وب، گیت‌هاب، کاگل، کتاب، نرم‌افزار

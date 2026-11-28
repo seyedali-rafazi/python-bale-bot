@@ -29,6 +29,7 @@ from .state_image_processing import (
 from .state_kaggle import handle_kaggle_state
 from .state_book import handle_book_state
 from .state_software import handle_software_state, software_callback_handler
+from .smart_link import try_handle_smart_link, smart_web_callback
 
 _MENU_HINT_COOLDOWN_SEC = 3.0
 _MAX_MENU_HINT_ENTRIES = 5000
@@ -100,6 +101,8 @@ async def process_state_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not step:
+        if await try_handle_smart_link(update, context, text, chat_id):
+            return
         await _reply_menu_hint(update)
         return
 

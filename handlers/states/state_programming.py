@@ -96,6 +96,8 @@ async def handle_programming_state(
     text: str,
     chat_id: str,
     state_data: dict,
+    *,
+    keep_state: bool = True,
 ):
     user_id = str(update.effective_user.id) if update.effective_user else chat_id
 
@@ -115,7 +117,8 @@ async def handle_programming_state(
                 if not acquired:
                     await update.message.reply_text("⏳ درخواست قبلی شما در حال ثبت است. لطفاً صبر کنید.")
                     return
-                set_state(chat_id, "waiting_prog_chrome")
+                if keep_state:
+                    set_state(chat_id, "waiting_prog_chrome")
                 await update.message.reply_text("⏳ درخواست شما در صف دانلود قرار گرفت...")
                 download_url = (
                     "https://clients2.google.com/service/update2/crx"

@@ -1,5 +1,13 @@
 # core/constants.py
 
+import os
+
+
+def is_s3_enabled() -> bool:
+    """Return True only when S3 cloud upload is explicitly enabled via S3_ENABLED."""
+    return os.getenv("S3_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 BTN_DL_YOUTUBE = "📺 یوتیوب"
 BTN_DL_INSTA = "📸 دانلود از اینستاگرام"
 BTN_WEATHER = "🌤 آب و هوا"

@@ -23,15 +23,65 @@ from core.database import (
     log_upload_failed,
 )
 
+from core.constants import is_s3_enabled
+
 try:
     from services.parspack_s3 import async_upload_to_s3_with_key, upload_to_s3_with_key
 except ImportError:
     async_upload_to_s3_with_key = None
     upload_to_s3_with_key = None
 
+
 MAX_BALE_MEDIA_BYTES = 50 * 1024 * 1024
 
 INSTA_SEMAPHORE = asyncio.Semaphore(5)
+
+
+async def start_insta_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    link: str,
+    chat_id: str,
+    *,
+    keep_state: bool = True,
+) -> None:
+    clean_link = link.strip()
+    if keep_state:
+        set_state(chat_id, "waiting_ig_link")
+
+    if not is_s3_enabled():
+        user = getattr(update, "effective_user", None)
+        user_id = str(user.id) if user else chat_id
+        async with user_action_lock(user_id, "insta_dl", timeout_sec=10) as acquired:
+            if not acquired:
+                await update.message.reply_text(
+                    "⏳ درخواست شما در حال پردازش است. لطفاً صبر کنید."
+                )
+                return
+            track_task(
+                background_download_insta_link(
+                    context, chat_id, clean_link, destination="telegram"
+                ),
+                name=f"insta_tel_{chat_id}",
+            )
+        return
+
+    token = uuid.uuid4().hex[:12]
+    _ig_link_cache[token] = clean_link
+
+    keyboard = [
+        [
+            InlineKeyboardButton("📱 بله", callback_data=f"ig_dl_tel_{token}"),
+            InlineKeyboardButton(
+                "☁️ فضای ابری", callback_data=f"ig_dl_cloud_{token}"
+            ),
+        ]
+    ]
+
+    await update.message.reply_text(
+        "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 async def handle_insta_state(
@@ -43,27 +93,11 @@ async def handle_insta_state(
     state_data: dict,
 ):
     if step == "waiting_ig_link":
-        if "instagram.com" not in text:
+        if "instagram.com" not in text and "instagr.am" not in text:
             await update.message.reply_text("❌ لینک نامعتبر است.")
             return
 
-        token = uuid.uuid4().hex[:12]
-        _ig_link_cache[token] = text.strip()
-        set_state(chat_id, "waiting_ig_link")
-
-        keyboard = [
-            [
-                InlineKeyboardButton("📱 بله", callback_data=f"ig_dl_tel_{token}"),
-                InlineKeyboardButton(
-                    "☁️ فضای ابری", callback_data=f"ig_dl_cloud_{token}"
-                ),
-            ]
-        ]
-
-        await update.message.reply_text(
-            "📍 لطفاً محل آپلود فایل را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        await start_insta_download(update, context, text, chat_id, keep_state=True)
 
 
 async def background_download_insta_link(
@@ -161,9 +195,13 @@ async def background_download_insta_link(
                 file_size_bytes = await get_file_size_async(file_path)
                 if file_size_bytes > MAX_BALE_MEDIA_BYTES:
                     size_mb = round(file_size_bytes / (1024 * 1024), 1)
+                    extra_hint = (
+                        "\nمی‌توانید برای ارسال فایل‌های بزرگ‌تر از گزینه «☁️ فضای ابری» استفاده کنید."
+                        if is_s3_enabled()
+                        else ""
+                    )
                     await processing_msg.edit_text(
-                        f"❌ حجم فایل ({size_mb} مگابایت) از سقف مجاز پیام‌رسان بله (۵۰ مگابایت) بیشتر است.\n"
-                        "می‌توانید برای ارسال فایل‌های بزرگ‌تر از گزینه «☁️ فضای ابری» استفاده کنید."
+                        f"❌ حجم فایل ({size_mb} مگابایت) از سقف مجاز پیام‌رسان بله (۵۰ مگابایت) بیشتر است.{extra_hint}"
                     )
                     await log_upload_failed("instagram", chat_id)
                     return
@@ -243,6 +281,9 @@ async def handle_insta_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
         elif data.startswith("ig_dl_cloud_"):
+            if not is_s3_enabled():
+                await query.message.reply_text("❌ آپلود در فضای ابری در حال حاضر غیرفعال است.")
+                return
             link = _resolve_ig_link(data.split("ig_dl_cloud_", 1)[1])
             if not link:
                 await query.message.reply_text("❌ نشست منقضی شده است. لطفاً لینک را دوباره بفرستید.")

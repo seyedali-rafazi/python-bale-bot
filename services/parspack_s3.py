@@ -12,6 +12,8 @@ from boto3.s3.transfer import TransferConfig
 
 logger = logging.getLogger(__name__)
 
+from core.constants import is_s3_enabled  # noqa: F401
+
 ARVAN_ENDPOINT = os.getenv("ARVAN_ENDPOINT", "https://s3.ir-thr-at1.arvanstorage.ir")
 ARVAN_ACCESS_KEY = os.getenv("ARVAN_ACCESS_KEY", "YOUR_ACCESS_KEY")
 ARVAN_SECRET_KEY = os.getenv("ARVAN_SECRET_KEY", "YOUR_SECRET_KEY")
